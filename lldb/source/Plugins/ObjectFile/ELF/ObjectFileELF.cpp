@@ -568,8 +568,8 @@ static DataExtractor GetSectionHeadersFromELFData(
 
 /// Read the section data bytes for the section from the ELF object file data.
 bool ObjectFileELF::GetSectionContentsFromELFData(
-  const elf::ELFSectionHeader &sh, const DataExtractor &object_data,
-  lldb_private::DataExtractor &section_data) {
+    const elf::ELFSectionHeader &sh, const DataExtractor &object_data,
+    lldb_private::DataExtractor &section_data) {
   if (sh.sh_type == SHT_NOBITS || sh.sh_size == 0) {
     section_data.Clear();
     return false;
@@ -658,8 +658,9 @@ size_t ObjectFileELF::GetModuleSpecifications(
           // Get the section header data from the object file.
           DataExtractor sh_data = GetSectionHeadersFromELFData(header, data);
 
-          auto read_sect_callback = [&](const elf::ELFSectionHeader &sh,
-                                        lldb_private::DataExtractor &sh_data) -> bool {
+          auto read_sect_callback =
+              [&](const elf::ELFSectionHeader &sh,
+                  lldb_private::DataExtractor &sh_data) -> bool {
             return GetSectionContentsFromELFData(sh, data, sh_data);
           };
           GetSectionHeaderInfo(header, sh_data, section_headers,
@@ -1505,6 +1506,13 @@ size_t ObjectFileELF::GetSectionHeaderInfo(const elf::ELFHeader &header,
   }
   if (idx < section_headers.size())
     section_headers.resize(idx);
+  // Sometimes we are able to read the section header memory from an in memory
+  // ELF file, but all section header data has been set to zeroes. Remove any
+  // SHT_NULL sections if we have more than 1. The first entry in the section
+  // headers should always be a SHT_NULL section, but none of the others should
+  // be.
+  if (section_headers.size() > 1 && section_headers[1].sh_type == SHT_NULL)
+    section_headers.erase(section_headers.begin() + 1);
 
   const unsigned strtab_idx = header.e_shstrndx;
   if (strtab_idx && strtab_idx < section_headers.size()) {
@@ -1586,8 +1594,7 @@ size_t ObjectFileELF::GetSectionHeaderInfo(const elf::ELFHeader &header,
         if (arch_spec.GetMachine() == llvm::Triple::arm ||
             arch_spec.GetMachine() == llvm::Triple::thumb) {
           DataExtractor data;
-          if (sheader.sh_type == SHT_ARM_ATTRIBUTES &&
-            read_sect(sheader, data))
+          if (sheader.sh_type == SHT_ARM_ATTRIBUTES && read_sect(sheader, data))
             ParseARMAttributes(data, arch_spec);
         }
 
@@ -1645,6 +1652,9 @@ ObjectFileELF::StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const {
 
 // ParseSectionHeaders
 size_t ObjectFileELF::ParseSectionHeaders() {
+  if (!m_section_headers.empty())
+    return m_section_headers.size();
+
   DataExtractor sh_data = GetSectionHeadersFromELFData(m_header, m_data);
   const size_t sh_size = m_header.GetSectionHeaderByteSize();
   if (sh_data.GetByteSize() != sh_size) {
@@ -1654,7 +1664,8 @@ size_t ObjectFileELF::ParseSectionHeaders() {
       if (ProcessSP process_sp = m_process_wp.lock()) {
         const addr_t addr = m_memory_addr + m_header.e_shoff;
         if (DataBufferSP data_sp = ReadMemory(process_sp, addr, sh_size))
-          sh_data = DataExtractor(data_sp, GetByteOrder(), GetAddressByteSize());
+          sh_data =
+              DataExtractor(data_sp, GetByteOrder(), GetAddressByteSize());
       }
     }
   }
