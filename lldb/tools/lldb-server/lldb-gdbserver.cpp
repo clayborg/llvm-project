@@ -19,6 +19,7 @@
 
 #include "LLDBServerUtilities.h"
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
+#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Host/ConnectionFileDescriptor.h"
@@ -36,7 +37,6 @@
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
-#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 
 #if defined(__linux__)
 #include "Plugins/Process/Linux/NativeProcessLinux.h"
@@ -50,7 +50,11 @@
 
 #if defined(LLDB_ENABLE_AMDGPU_PLUGIN)
 #include "Plugins/AMDGPU/LLDBServerPluginAMDGPU.h"
-#endif  
+#endif
+
+#if defined(LLDB_ENABLE_NVIDIAGPU_PLUGIN)
+#include "Plugins/NVIDIAGPU/LLDBServerPluginNVIDIAGPU.h"
+#endif
 
 #if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
 #include "Plugins/MockGPU/LLDBServerPluginMockGPU.h"
@@ -465,16 +469,24 @@ int main_gdbserver(int argc, char *argv[]) {
 #if defined(LLDB_ENABLE_AMDGPU_PLUGIN)
   {
     // AMD GPU plugin requires to use the same mainloop as the native process.
-    // This is because AMD debug API has to be called from the same thread as the
-    // ptrace() thread.
+    // This is because AMD debug API has to be called from the same thread as
+    // the ptrace() thread.
     gdb_server.InstallPlugin(
-        std::make_unique<lldb_private::lldb_server::LLDBServerPluginAMDGPU>(gdb_server, mainloop));
+        std::make_unique<lldb_private::lldb_server::LLDBServerPluginAMDGPU>(
+            gdb_server, mainloop));
   }
 #endif
 #if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
   MainLoop &gpu_mainloop = mainloop;
   gdb_server.InstallPlugin(
-      std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(gdb_server, gpu_mainloop));
+      std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(
+          gdb_server, gpu_mainloop));
+#endif
+#if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
+  MainLoop gpu_mainloop;
+  gdb_server.InstallPlugin(
+      std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(
+          gdb_server, gpu_mainloop));
 #endif
 
   llvm::StringRef host_and_port;
