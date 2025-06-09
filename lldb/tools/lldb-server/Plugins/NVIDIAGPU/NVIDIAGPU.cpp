@@ -13,10 +13,14 @@
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "cudadebugger.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataBufferLLVM.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/Status.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Base64.h"
+#include "llvm/Support/MemoryBuffer.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -229,14 +233,36 @@ NVIDIAGPU::Manager::Attach(
 
 void NVIDIAGPU::OnElfImageLoaded(
     const CUDBGEvent::cases_st::elfImageLoaded_st &event) {
+  const auto &[dev_id, context_id, module_id, elf_image_size, handle,
+               properties] = event;
+
+  // Note that module_id and handle are the same thing. It is a vestige of the
+  // older debug API.
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::OnElfImageLoaded() size = {0}",
-           event.size);
+  LLDB_LOG(
+      log,
+      "LLDBServerPluginNVIDIAGPU::OnElfImageLoaded() dev_id: {0}, context_id: "
+      "{1}, module_id: {2}, elf_image_size: {3}, handle: {4}, properties: {5}",
+      dev_id, context_id, module_id, elf_image_size, handle, properties);
+
+  // Obtain the elf image
+  auto data_buffer =
+      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(elf_image_size);
+  CUDBGResult res = m_api->getElfImageByHandle(
+      dev_id, handle, CUDBGElfImageType::CUDBG_ELF_IMAGE_TYPE_RELOCATED,
+      data_buffer->getBufferStart(), elf_image_size);
+  assert(res == CUDBG_SUCCESS && "Failed to get elf image");
+
+  // Encode the ELF image data as Base64 for JSON storage
+  llvm::StringRef elf_data_ref(data_buffer->getBufferStart(), elf_image_size);
+  std::shared_ptr<std::string> elf_base64 =
+      std::make_shared<std::string>(llvm::encodeBase64(elf_data_ref));
 
   GPUDynamicLoaderLibraryInfo lib1;
-  lib1.pathname = "/localhome/local-werquinigo/llvm/build-RelWithDebInfo/bin/"
-                  "lldb-argdumper";
-  lib1.load_address = 0x20000;
+  lib1.pathname = "cuda_elf_" + std::to_string(handle) + ".cubin";
+  lib1.load = true;
+  lib1.elf_image_base64_sp = elf_base64;
+
   m_unreported_libraries.push_back(lib1);
   m_all_libraries.push_back(lib1);
 }
