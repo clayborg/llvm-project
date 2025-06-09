@@ -11,6 +11,7 @@
 
 #include "lldb/lldb-types.h"
 #include "llvm/Support/JSON.h"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -267,6 +268,11 @@ struct GPUDynamicLoaderLibraryInfo {
   /// If the library exists inside of a file at an offset, \a file_size will
   /// have a value that indicates the size in bytes of the object file.
   std::optional<uint64_t> file_size;
+  /// Optional Base64-encoded ELF image data. If present, this contains the
+  /// complete ELF file contents that can be used directly by LLDB without
+  /// needing to read from disk or memory. Can be nullptr.
+  /// TODO: Find a more efficient way to do this. DTCLLDB-21
+  std::shared_ptr<std::string> elf_image_base64_sp;
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUDynamicLoaderLibraryInfo &data,

@@ -204,14 +204,26 @@ llvm::json::Value toJSON(const GPUSectionInfo &data) {
 bool fromJSON(const llvm::json::Value &value, GPUDynamicLoaderLibraryInfo &data,
               llvm::json::Path path) {
   ObjectMapper o(value, path);
-  return o && o.map("pathname", data.pathname) &&
-         o.mapOptional("uuid", data.uuid_str) && o.map("load", data.load) &&
+  
+  // Handle elf_image_base64_sp specially since it's a shared_ptr
+  std::optional<std::string> temp_elf_base64;
+  bool result = o && 
+         o.map("pathname", data.pathname) &&
+         o.mapOptional("uuid", data.uuid_str) &&
+         o.map("load", data.load) &&
          o.mapOptional("load_address", data.load_address) &&
          o.mapOptional("native_memory_address", data.native_memory_address) &&
          o.mapOptional("native_memory_size", data.native_memory_size) &&
          o.mapOptional("file_offset", data.file_offset) &&
          o.mapOptional("file_size", data.file_size) &&
+         o.mapOptional("elf_image_base64", temp_elf_base64) &&
          o.map("loaded_sections", data.loaded_sections);
+  
+  // Convert temp string to shared_ptr if it exists
+  if (temp_elf_base64.has_value())
+    data.elf_image_base64_sp = std::make_shared<std::string>(std::move(*temp_elf_base64));
+  
+  return result;
 }
 
 llvm::json::Value toJSON(const GPUDynamicLoaderLibraryInfo &data) {
@@ -224,6 +236,10 @@ llvm::json::Value toJSON(const GPUDynamicLoaderLibraryInfo &data) {
              {"native_memory_size", data.native_memory_size},
              {"file_offset", data.file_offset},
              {"file_size", data.file_size},
+             {"elf_image_base64_sp",
+              data.elf_image_base64_sp
+                  ? std::make_optional(*data.elf_image_base64_sp)
+                  : std::nullopt},
              {"loaded_sections", data.loaded_sections}});
 }
 
