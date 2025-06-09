@@ -34,8 +34,8 @@ LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
   LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU initializing...");
 
   m_process_manager_up.reset(new NVIDIAGPU::Manager(m_main_loop));
-  m_gdb_server.reset(
-      new GDBRemoteCommunicationServerLLGS(m_main_loop, *m_process_manager_up));
+  m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
+      m_main_loop, *m_process_manager_up, "nvidia-gpu.server"));
 
   // During initialization, there might be no cubins loaded, so we don't have
   // anything tangible to use as the identifier or file for the GPU process.
