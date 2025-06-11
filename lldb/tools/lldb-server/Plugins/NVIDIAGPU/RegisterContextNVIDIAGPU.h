@@ -70,7 +70,7 @@ private:
   ThreadNVIDIAGPU &GetGPUThread();
 
   union {
-    int64_t data[sizeof(RegisterContext)]; // Allow for indexed access.
+    int64_t data[sizeof(RegisterContext) / sizeof(int64_t)]; // Allow for indexed access.
     RegisterContext regs;
   } m_regs;
 
