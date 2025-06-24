@@ -45,7 +45,7 @@ void ThreadNVIDIAGPU::SetStoppedBySignal(int signo) {
 }
 
 void ThreadNVIDIAGPU::SetStoppedByDynamicLoader() {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByException()");
+  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByDynamicLoader()");
   SetStopped();
 
   m_stop_info.reason = lldb::eStopReasonTrace;
