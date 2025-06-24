@@ -229,7 +229,7 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
     switch (event.kind) {
     case CUDBG_EVENT_ELF_IMAGE_LOADED: {
       LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_LOADED");
-      // this->m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded);
+      this->m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded);
       break;
     }
     case CUDBG_EVENT_KERNEL_READY: {
@@ -285,10 +285,10 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
                event.cases.allDevicesSuspended.brokenDevicesMask,
                event.cases.allDevicesSuspended.faultedDevicesMask);
       bool was_halted;
+      // Order is important here. We need to suspend the GPU first before the
+      // native process so that the CPU's GPUActions can hit the GPU server.
+      m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
       HaltNativeProcessIfNeeded(was_halted);
-      // TODO: synchronize with the main process and the client
-      this->m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
-      // m_gpu->Halt();
       break;
     }
     case CUDBG_EVENT_INVALID: {
@@ -301,25 +301,7 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
     }
   }
 
-  if (m_gpu->HasUnreportedLibraries()) {
-    LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::OnAPICallback(). Will halt due "
-                  "to dynamic loader");
-
-    m_gpu->HaltDueToDyld();
-    LLDB_LOG(
-        log,
-        "LLDBServerPluginNVIDIAGPU::OnAPICallback(). Will acknowledge events");
-    res = cuda_api->acknowledgeSyncEvents();
-    LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::OnAPICallback(). Will change "
-                  "state to stopped");
-    m_gpu->ChangeStateToStopped();
-    LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::OnAPICallback(). Done");
-
-    bool was_halted;
-    HaltNativeProcessIfNeeded(was_halted);
-  } else {
-    res = cuda_api->acknowledgeSyncEvents();
-  }
-
+  // Handled all pending events. Acknowledge them.
+  res = cuda_api->acknowledgeSyncEvents();
   assert(res == CUDBG_SUCCESS && "Failed to acknowledge events");
 }
