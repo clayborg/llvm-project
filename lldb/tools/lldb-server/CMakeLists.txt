@@ -44,6 +44,7 @@ endif()
 
 option(LLDB_ENABLE_AMDGPU_PLUGIN "Enable support for the AMD GPU plugin" OFF)
 option(LLDB_ENABLE_MOCK_GPU_PLUGIN "Enable support for the Mock GPU plugin" OFF)
+option(LLDB_ENABLE_NVIDIAGPU_PLUGIN "Enable support for NVIDA GPU debugging" OFF)
 
 set(GPU_PLUGINS_ENABLED 0)
 
@@ -63,7 +64,6 @@ if(LLDB_ENABLE_AMDGPU_PLUGIN)
 endif()
 
 if(LLDB_ENABLE_NVIDIAGPU_PLUGIN)
-  add_definitions(-DLLDB_ENABLE_NVIDIAGPU_PLUGIN=1)
   list(APPEND LLDB_PLUGINS lldbServerPluginNVIDIAGPU)
   math(EXPR GPU_PLUGINS_ENABLED "${GPU_PLUGINS_ENABLED} + 1")
 endif()
