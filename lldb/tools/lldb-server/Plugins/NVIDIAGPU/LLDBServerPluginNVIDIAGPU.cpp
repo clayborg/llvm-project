@@ -28,14 +28,14 @@ using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
 LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
-    LLDBServerPlugin::GDBServer &native_process)
-    : LLDBServerPlugin(native_process) {
+    LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop)
+    : LLDBServerPlugin(native_process, main_loop) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU initializing...");
 
-  m_process_manager_up.reset(new NVIDIAGPU::Manager(m_main_loop));
+  m_process_manager_up.reset(new NVIDIAGPU::Manager(main_loop));
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
-      m_main_loop, *m_process_manager_up, "nvidia-gpu.server"));
+      main_loop, *m_process_manager_up, "nvidia-gpu.server"));
 
   // During initialization, there might be no cubins loaded, so we don't have
   // anything tangible to use as the identifier or file for the GPU process.
