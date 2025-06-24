@@ -102,6 +102,7 @@ function(llvm_create_cross_target project_name target_name toolchain buildtype)
         -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_TABLEGEN_FLAGS="${LLVM_TABLEGEN_FLAGS}"
         -DROCM_PATH=${ROCM_PATH}
+        -DLLDB_ENABLE_NVIDIAGPU_PLUGIN=${LLDB_ENABLE_NVIDIAGPU_PLUGIN}
         ${build_type_flags} ${linker_flag} ${external_clang_dir} ${libc_flags}
         ${ARGN}
     WORKING_DIRECTORY ${${project_name}_${target_name}_BUILD}
