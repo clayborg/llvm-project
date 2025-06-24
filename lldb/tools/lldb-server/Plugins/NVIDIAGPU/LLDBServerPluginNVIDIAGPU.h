@@ -30,7 +30,8 @@ class LLDBServerPluginNVIDIAGPU
     : public lldb_private::lldb_server::LLDBServerPlugin {
 public:
   LLDBServerPluginNVIDIAGPU(
-      lldb_private::lldb_server::LLDBServerPlugin::GDBServer &native_process);
+      lldb_private::lldb_server::LLDBServerPlugin::GDBServer &native_process,
+      MainLoop &main_loop);
 
   llvm::StringRef GetPluginName() override;
 
