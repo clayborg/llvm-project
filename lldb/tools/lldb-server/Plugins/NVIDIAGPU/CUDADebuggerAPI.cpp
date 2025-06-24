@@ -169,15 +169,7 @@ static Error
 WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
                             NativeProcessProtocol &linux_process,
                             void *libcuda) {
-  auto write_c_str = [&](const std::string &symbol_name,
-                         const char *value) -> Error {
-    return WriteToHostSymbol(bp_args, linux_process, symbol_name, value);
-  };
-
   if (const auto *path = getenv("CUDBG_INJECTION_PATH")) {
-    if (Error err = write_c_str(Symbols::CUDBG_INJECTION_PATH, path))
-      return err;
-
     char *injection_path = reinterpret_cast<char *>(
         dlsym(libcuda, Symbols::CUDBG_INJECTION_PATH.c_str()));
     if (!injection_path)
