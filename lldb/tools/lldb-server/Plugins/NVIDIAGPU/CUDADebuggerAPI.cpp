@@ -86,21 +86,6 @@ static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
   return Error::success();
 }
 
-static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
-                               NativeProcessProtocol &linux_process,
-                               llvm::StringRef symbol_name, const char *value) {
-  std::optional<uint64_t> symbol_address = bp_args.GetSymbolValue(symbol_name);
-  if (!symbol_address)
-    return createStringErrorFmt("Couldn't find address for symbol {0}",
-                                symbol_name);
-  size_t bytes_written = 0;
-  size_t value_size = strlen(value) + 1;
-  linux_process.WriteMemory(*symbol_address, value, value_size, bytes_written);
-  if (bytes_written != value_size)
-    return createStringErrorFmt("Failed to write symbol {0}", symbol_name);
-  return Error::success();
-}
-
 static Error
 WriteInitializationSymbolsToHost(const GPUPluginBreakpointHitArgs &bp_args,
                                  NativeProcessProtocol &linux_process,
