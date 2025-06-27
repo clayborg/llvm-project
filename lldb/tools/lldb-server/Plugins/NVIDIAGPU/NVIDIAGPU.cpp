@@ -364,6 +364,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
         if (exception != CUDBGException_t::CUDBG_EXCEPTION_NONE) {
           physical_coords =
               ThreadNVIDIAGPU::PhysicalCoords{dev_id, sm_id, wp, ln};
+          LLDB_LOG(log, "Exception: {0}", exception);
           goto found;
         }
       }
