@@ -209,8 +209,19 @@ void RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   }
 
   {
-    m_regs.regs.errorPC = -1;
-    m_regs_value_is_valid[LLDB_ERROR_PC] = false;
+    uint64_t error_pc = -1;
+    bool error_pc_valid = false;
+    CUDBGResult res =
+        api->readErrorPC(physical_coords.dev_id, physical_coords.sm_id,
+                         physical_coords.warp_id, &error_pc, &error_pc_valid);
+    // use valid
+    if (res == CUDBG_SUCCESS) {
+      m_regs.regs.errorPC = error_pc;
+      m_regs_value_is_valid[LLDB_ERROR_PC] = true;
+    } else {
+      m_regs.regs.errorPC = -1;
+      m_regs_value_is_valid[LLDB_ERROR_PC] = false;
+    }
   }
 
   for (size_t reg_num = LLDB_SP; reg_num < kNumRegs; reg_num++) {
