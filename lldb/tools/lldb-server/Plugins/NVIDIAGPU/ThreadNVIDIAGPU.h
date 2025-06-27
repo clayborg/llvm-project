@@ -28,6 +28,10 @@ public:
     int64_t sm_id = -1;
     int64_t warp_id = -1;
     int64_t lane_id = -1;
+
+    bool IsValid() const;
+
+    std::string AsThreadName() const;
   };
 
   ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
@@ -81,6 +85,9 @@ public:
 
   /// Set the thread to stopped state.
   void SetStopped();
+
+  /// Set the thread to stopped state by a threadless state.
+  void SetStoppedByThreadlessState();
 
   /// Set the thread to running state.
   void SetRunning();
