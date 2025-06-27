@@ -19,11 +19,6 @@ if(NOT NVIDIAGPU_DEBUGGER_INCLUDE_DIR)
     set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR 
         "${CUDAToolkit_LIBRARY_ROOT}/extras/Debugger/include" 
         CACHE STRING ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC} FORCE)
-  else()
-    # Default for ubuntu
-    set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR 
-        "/usr/local/cuda/extras/Debugger/include/cudadebugger.h" 
-        CACHE STRING ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC} FORCE)
   endif()
 endif()
 
