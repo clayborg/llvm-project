@@ -26,6 +26,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_ENABLE_ZLIB
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include <climits>
 #include <cstring>
@@ -55,6 +56,11 @@ GDBRemoteCommunication::GDBRemoteCommunication(llvm::StringRef name)
       m_echo_number(0), m_supports_qEcho(eLazyBoolCalculate), m_history(512),
       m_send_acks(true), m_is_platform(false),
       m_compression_type(CompressionType::None), m_listen_url(), m_name(name) {
+
+  if (std::optional<std::string> value = llvm::sys::Process::GetEnv(
+          "GDB_REMOTE_LOG_PACKET_CONTENTS_SIZE_LIMIT")) {
+    m_gdb_remote_log_packet_contents_size_limit = std::stoi(*value);
+  }
 }
 
 // Destructor
@@ -65,7 +71,7 @@ GDBRemoteCommunication::~GDBRemoteCommunication() {
 
 #if HAVE_LIBCOMPRESSION
   if (m_decompression_scratch)
-    free (m_decompression_scratch);
+    free(m_decompression_scratch);
 #endif
 }
 
@@ -143,7 +149,8 @@ GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
     ConnectionStatus status = eConnectionStatusSuccess;
     const char *packet_data = packet.data();
     const size_t packet_length = packet.size();
-    size_t bytes_written = WriteAll(packet_data, packet_length, status, nullptr);
+    size_t bytes_written =
+        WriteAll(packet_data, packet_length, status, nullptr);
     if (log) {
       size_t binary_start_offset = 0;
       if (strncmp(packet_data, "$vFile:pwrite:", strlen("$vFile:pwrite:")) ==
@@ -178,8 +185,11 @@ GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
         strm.Printf("%*s", (int)3, p);
         log->PutString(strm.GetString());
       } else
-        LLDB_LOGF(log, "%s <%4" PRIu64 "> send packet: %.*s", m_name.c_str(),
-                  (uint64_t)bytes_written, (int)packet_length, packet_data);
+        LLDB_LOGF(
+            log, "%s <%4" PRIu64 "> send packet: %.*s", m_name.c_str(),
+            (uint64_t)bytes_written,
+            m_gdb_remote_log_packet_contents_size_limit.value_or(packet_length),
+            packet_data);
     }
 
     m_history.AddPacket(packet.str(), packet_length,
@@ -191,8 +201,10 @@ GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
       else
         return PacketResult::Success;
     } else {
-      LLDB_LOGF(log, "error: failed to send packet: %.*s", (int)packet_length,
-                packet_data);
+      LLDB_LOGF(
+          log, "error: failed to send packet: %.*s",
+          m_gdb_remote_log_packet_contents_size_limit.value_or(packet_length),
+          packet_data);
     }
   }
   return PacketResult::ErrorSendFailed;
@@ -521,21 +533,24 @@ bool GDBRemoteCommunication::DecompressPacket() {
 
     if (m_decompression_scratch_type != m_compression_type) {
       if (m_decompression_scratch) {
-        free (m_decompression_scratch);
+        free(m_decompression_scratch);
         m_decompression_scratch = nullptr;
       }
       size_t scratchbuf_size = 0;
       if (m_compression_type == CompressionType::LZFSE)
-        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZFSE);
+        scratchbuf_size =
+            compression_decode_scratch_buffer_size(COMPRESSION_LZFSE);
       else if (m_compression_type == CompressionType::LZ4)
-        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZ4_RAW);
+        scratchbuf_size =
+            compression_decode_scratch_buffer_size(COMPRESSION_LZ4_RAW);
       else if (m_compression_type == CompressionType::ZlibDeflate)
-        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_ZLIB);
+        scratchbuf_size =
+            compression_decode_scratch_buffer_size(COMPRESSION_ZLIB);
       else if (m_compression_type == CompressionType::LZMA)
         scratchbuf_size =
             compression_decode_scratch_buffer_size(COMPRESSION_LZMA);
       if (scratchbuf_size > 0) {
-        m_decompression_scratch = (void*) malloc (scratchbuf_size);
+        m_decompression_scratch = (void *)malloc(scratchbuf_size);
         m_decompression_scratch_type = m_compression_type;
       }
     }
@@ -765,12 +780,16 @@ GDBRemoteCommunication::CheckForPacket(const uint8_t *src, size_t src_len,
           if (CompressionIsEnabled())
             LLDB_LOGF(log, "%s <%4" PRIu64 ":%" PRIu64 "> read packet: %.*s",
                       m_name.c_str(), (uint64_t)original_packet_size,
-                      (uint64_t)total_length, (int)(total_length),
+                      (uint64_t)total_length,
+                      m_gdb_remote_log_packet_contents_size_limit.value_or(
+                          total_length),
                       m_bytes.c_str());
           else
             LLDB_LOGF(log, "%s <%4" PRIu64 "> read packet: %.*s",
                       m_name.c_str(), (uint64_t)total_length,
-                      (int)(total_length), m_bytes.c_str());
+                      m_gdb_remote_log_packet_contents_size_limit.value_or(
+                          total_length),
+                      m_bytes.c_str());
         }
       }
 
