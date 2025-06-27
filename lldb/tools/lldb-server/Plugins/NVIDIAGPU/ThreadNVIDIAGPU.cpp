@@ -13,12 +13,24 @@ using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
+bool ThreadNVIDIAGPU::PhysicalCoords::IsValid() const {
+  return dev_id != -1 && sm_id != -1 && warp_id != -1 && lane_id != -1;
+}
+
+std::string ThreadNVIDIAGPU::PhysicalCoords::AsThreadName() const {
+  if (IsValid())
+    return llvm::formatv("GPU Thread ({0}, {1}, {2})", sm_id, warp_id, lane_id);
+  return "NVIDIA GPU";
+}
+
 ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
                                  PhysicalCoords physical_coords)
     : NativeThreadProtocol(gpu, tid), m_state(lldb::eStateInvalid),
       m_stop_info(), m_reg_context(*this), m_physical_coords(physical_coords) {}
 
-std::string ThreadNVIDIAGPU::GetName() { return "NVIDIA GPU Thread"; }
+std::string ThreadNVIDIAGPU::GetName() {
+  return m_physical_coords.AsThreadName();
+}
 
 lldb::StateType ThreadNVIDIAGPU::GetState() { return m_state; }
 
@@ -58,6 +70,15 @@ void ThreadNVIDIAGPU::SetStoppedByException() {
 
   m_stop_info.reason = lldb::eStopReasonException;
   m_stop_description = "NVIDIA GPU Thread Stopped by Exception";
+}
+
+void ThreadNVIDIAGPU::SetStoppedByThreadlessState() {
+  LLDB_LOG(GetLog(GDBRLog::Plugin),
+           "ThreadNVIDIAGPU::SetStoppedByThreadlessState()");
+  SetStopped();
+
+  m_stop_info.reason = lldb::eStopReasonException;
+  m_stop_description = "NVIDIA GPU Stopped";
 }
 
 void ThreadNVIDIAGPU::SetStopped() {
