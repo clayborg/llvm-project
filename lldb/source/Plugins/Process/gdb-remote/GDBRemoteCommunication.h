@@ -202,6 +202,13 @@ private:
 
   std::string m_name;
 
+  /// The size limit for packet contents when being dumped to logs.
+  /// This is useful for producing smaller log files when some packets are
+  /// extremely large.
+  /// Some editors like VS Code crash when some lines have more than 100K
+  /// characters. Setting this to 10K works pretty well for that editor.
+  std::optional<int> m_gdb_remote_log_packet_contents_size_limit;
+
 #if defined(HAVE_LIBCOMPRESSION)
   CompressionType m_decompression_scratch_type = CompressionType::None;
   void *m_decompression_scratch = nullptr;
