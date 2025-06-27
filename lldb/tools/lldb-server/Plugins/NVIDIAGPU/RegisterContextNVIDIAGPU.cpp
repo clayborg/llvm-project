@@ -175,6 +175,18 @@ void RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   ThreadNVIDIAGPU::PhysicalCoords physical_coords =
       GetGPUThread().GetPhysicalCoords();
 
+  if (!physical_coords.IsValid()) {
+    m_regs.regs.PC = 0;
+    m_regs_value_is_valid[LLDB_PC] = true;
+    m_regs.regs.errorPC = -1;
+    m_regs_value_is_valid[LLDB_ERROR_PC] = false;
+    for (size_t i = LLDB_SP; i < kNumRegs; i++) {
+      m_regs.data[i] = 0;
+      m_regs_value_is_valid[i] = true;
+    }
+    return;
+  }
+
   if (physical_coords.dev_id == -1 || physical_coords.sm_id == -1 ||
       physical_coords.warp_id == -1 || physical_coords.lane_id == -1) {
     LLDB_LOG(log, "ReadRegs skipped because of invalid physical coords");
