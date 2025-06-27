@@ -172,8 +172,8 @@ size_t NVIDIAGPU::UpdateThreads() {
   if (m_threads.empty()) {
     lldb::tid_t tid = 1;
     auto thread = std::make_unique<ThreadNVIDIAGPU>(
-        *this, 1, ThreadNVIDIAGPU::PhysicalCoords{});
-    thread->SetStoppedBySignal(SIGTRAP);
+        *this, tid, ThreadNVIDIAGPU::PhysicalCoords{});
+    thread->SetStoppedByThreadlessState();
     m_threads.push_back(std::move(thread));
     SetCurrentThreadID(tid);
   }
@@ -378,9 +378,9 @@ found:
            physical_coords.warp_id, physical_coords.lane_id);
 
   // We don't yet handle multiple threads, so we use the only one we have.
+
   ThreadNVIDIAGPU &thread = *GPUThreads().begin();
   thread.SetPhysicalCoords(physical_coords);
-
   thread.SetStoppedByException();
   ChangeStateToStopped();
 }
