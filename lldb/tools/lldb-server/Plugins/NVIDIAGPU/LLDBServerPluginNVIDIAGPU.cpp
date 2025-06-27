@@ -62,7 +62,17 @@ llvm::StringRef LLDBServerPluginNVIDIAGPU::GetPluginName() {
 }
 
 std::optional<GPUActions> LLDBServerPluginNVIDIAGPU::NativeProcessIsStopping() {
-  // TODO: This is a hack to get the libraries loaded.
+  // Currently the mechanism we use to report cubins is the following:
+  // 1. We wait for the GPU process to stop for any non-cubin reason.
+  // 2. We stop the CPU process.
+  // 3. Right before the CPU stop reply packet is sent to the client, we augment
+  //    it with a GPUAction to load libraries
+  //
+  // Once we support breakpoints, we will need to send the cubins before the
+  // non-cubin stop reason happens.
+  if (!m_gpu->HasUnreportedLibraries())
+    return {};
+
   GPUActions actions(GetPluginName());
   actions.load_libraries = true;
   return actions;
