@@ -24,10 +24,12 @@ class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
   // This struct represents the physical coordinates of a HW thread in a GPU.
   struct PhysicalCoords {
-    int64_t dev_id = -1;
-    int64_t sm_id = -1;
-    int64_t warp_id = -1;
-    int64_t lane_id = -1;
+    int64_t dev_id;
+    int64_t sm_id;
+    int64_t warp_id;
+    int64_t lane_id;
+
+    PhysicalCoords();
 
     bool IsValid() const;
 
