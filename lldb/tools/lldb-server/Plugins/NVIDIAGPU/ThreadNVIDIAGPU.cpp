@@ -13,8 +13,25 @@ using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
+namespace {
+enum CoordSpecialIDs : uint32_t {
+  INVALID_ID = std::numeric_limits<uint32_t>::max(),
+  WILDCARD_ID = INVALID_ID - 1,
+  CURRENT_ID = INVALID_ID - 2,
+  IGNORE_ID = INVALID_ID - 3,
+};
+} // namespace
+
+ThreadNVIDIAGPU::PhysicalCoords::PhysicalCoords()
+    : dev_id(CoordSpecialIDs::INVALID_ID), sm_id(CoordSpecialIDs::INVALID_ID),
+      warp_id(CoordSpecialIDs::INVALID_ID),
+      lane_id(CoordSpecialIDs::INVALID_ID) {}
+
 bool ThreadNVIDIAGPU::PhysicalCoords::IsValid() const {
-  return dev_id != -1 && sm_id != -1 && warp_id != -1 && lane_id != -1;
+  return dev_id != CoordSpecialIDs::INVALID_ID &&
+         sm_id != CoordSpecialIDs::INVALID_ID &&
+         warp_id != CoordSpecialIDs::INVALID_ID &&
+         lane_id != CoordSpecialIDs::INVALID_ID;
 }
 
 std::string ThreadNVIDIAGPU::PhysicalCoords::AsThreadName() const {
