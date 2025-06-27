@@ -27,6 +27,11 @@ ThreadNVIDIAGPU::PhysicalCoords::PhysicalCoords()
       warp_id(CoordSpecialIDs::INVALID_ID),
       lane_id(CoordSpecialIDs::INVALID_ID) {}
 
+ThreadNVIDIAGPU::PhysicalCoords::PhysicalCoords(int64_t dev_id, int64_t sm_id,
+                                                int64_t warp_id,
+                                                int64_t lane_id)
+    : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), lane_id(lane_id) {}
+
 bool ThreadNVIDIAGPU::PhysicalCoords::IsValid() const {
   return dev_id != CoordSpecialIDs::INVALID_ID &&
          sm_id != CoordSpecialIDs::INVALID_ID &&
