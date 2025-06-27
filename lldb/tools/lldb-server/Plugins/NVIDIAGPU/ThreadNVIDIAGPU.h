@@ -31,6 +31,9 @@ public:
 
     PhysicalCoords();
 
+    PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
+                   int64_t lane_id);
+
     bool IsValid() const;
 
     std::string AsThreadName() const;
