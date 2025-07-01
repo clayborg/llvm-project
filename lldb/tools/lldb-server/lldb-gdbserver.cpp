@@ -36,6 +36,7 @@
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
+#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 
 #if defined(__linux__)
 #include "Plugins/Process/Linux/NativeProcessLinux.h"

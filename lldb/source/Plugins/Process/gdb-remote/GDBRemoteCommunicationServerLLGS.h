@@ -18,13 +18,17 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/lldb-private-forward.h"
-#include "LLDBServerPlugin.h"
 
 #include "GDBRemoteCommunicationServerCommon.h"
 
 class StringExtractorGDBRemote;
 
 namespace lldb_private {
+
+namespace lldb_server {
+  class LLDBServerPlugin;
+}
+
 namespace process_gdb_remote {
 
 class ProcessGDBRemote;
