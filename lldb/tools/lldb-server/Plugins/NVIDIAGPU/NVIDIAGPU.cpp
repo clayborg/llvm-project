@@ -251,7 +251,12 @@ void NVIDIAGPU::OnElfImageLoaded(
   CUDBGResult res = m_api->getElfImageByHandle(
       dev_id, handle, CUDBGElfImageType::CUDBG_ELF_IMAGE_TYPE_RELOCATED,
       data_buffer->getBufferStart(), elf_image_size);
-  assert(res == CUDBG_SUCCESS && "Failed to get elf image");
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError(
+        "NVIDIAGPU::OnElfImageLoaded(). Failed to get elf image: {0}",
+        cudbgGetErrorString(res));
+    return;
+  }
 
   // Encode the ELF image data as Base64 for JSON storage
   llvm::StringRef elf_data_ref(data_buffer->getBufferStart(), elf_image_size);
