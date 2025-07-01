@@ -1,4 +1,7 @@
-if(DEFINED ROCM_PATH AND EXISTS ${ROCM_PATH})
+if(LLDB_ENABLE_AMDGPU_PLUGIN)
   add_subdirectory(AMDGPU)
 endif()
-add_subdirectory(MockGPU)
+
+if(LLDB_ENABLE_MOCK_GPU_PLUGIN)
+  add_subdirectory(MockGPU)
+endif()

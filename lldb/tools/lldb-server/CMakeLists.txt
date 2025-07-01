@@ -42,10 +42,23 @@ if(APPLE_EMBEDDED)
   endif()
 endif()
 
-if(DEFINED ROCM_PATH)
+option(LLDB_ENABLE_AMDGPU_PLUGIN "Enable support for the AMD GPU plugin" OFF)
+option(LLDB_ENABLE_MOCK_GPU_PLUGIN "Enable support for the Mock GPU plugin" OFF)
+
+if(LLDB_ENABLE_AMDGPU_PLUGIN)
+  if(NOT DEFINED ROCM_PATH)
+    message(FATAL_ERROR "ROCM_PATH is not defined and LLDB_ENABLE_AMDGPU_PLUGIN expects it")
+  endif()
+
+  if(NOT EXISTS ${ROCM_PATH})
+    message(FATAL_ERROR "ROCM_PATH does not exist: ${ROCM_PATH}")
+  endif()
+
   add_definitions(-DLLDB_ENABLE_AMDGPU_PLUGIN=1)
   list(APPEND LLDB_PLUGINS lldbServerPluginAMDGPU)
-else()
+endif()
+
+if(LLDB_ENABLE_MOCK_GPU_PLUGIN)
   add_definitions(-DLLDB_ENABLE_MOCKGPU_PLUGIN=1)
   list(APPEND LLDB_PLUGINS lldbServerPluginMockGPU)
 endif()
@@ -71,7 +84,6 @@ add_lldb_tool(lldb-server
       lldbPluginInstructionMIPS64
       lldbPluginInstructionRISCV
       ${LLDB_SYSTEM_LIBS}
-      lldbServerPluginMockGPU
 )
 
 set_target_properties(lldb-server PROPERTIES ENABLE_EXPORTS 1)
