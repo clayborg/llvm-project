@@ -101,7 +101,7 @@ void LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread(
            "LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread initializing "
            "connection");
   std::unique_ptr<Connection> connection_up(
-      new ConnectionFileDescriptor(socket));
+      new ConnectionFileDescriptor(std::unique_ptr<Socket>(socket)));
   m_gdb_server->InitializeConnection(std::move(connection_up));
   LLDB_LOG(log,
            "LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread running main "
