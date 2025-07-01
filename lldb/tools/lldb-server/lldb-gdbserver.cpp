@@ -49,10 +49,10 @@
 
 #if defined(LLDB_ENABLE_AMDGPU_PLUGIN)
 #include "Plugins/AMDGPU/LLDBServerPluginAMDGPU.h"
-typedef lldb_private::lldb_server::LLDBServerPluginAMDGPU LLDBServerGPUPlugin;
-#elif defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
+#endif  
+
+#if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
 #include "Plugins/MockGPU/LLDBServerPluginMockGPU.h"
-typedef lldb_private::lldb_server::LLDBServerPluginMockGPU LLDBServerGPUPlugin;
 #endif
 
 #ifndef LLGS_PROGRAM_NAME
@@ -461,19 +461,19 @@ int main_gdbserver(int argc, char *argv[]) {
   NativeProcessManager manager(mainloop);
   GDBRemoteCommunicationServerLLGS gdb_server(mainloop, manager, "gdb-server");
 
-#if defined(LLDB_ENABLE_AMDGPU_PLUGIN) || defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
 #if defined(LLDB_ENABLE_AMDGPU_PLUGIN)
-  // AMD GPU plugin requires to use the same mainloop as the native process.
-  // This is because AMD debug API has to be called from the same thread as the
-  // ptrace() thread.
-  MainLoop &gpu_mainloop = mainloop;
-#else
-  // Any GPU plugins can use a separate mainloop.
-  MainLoop gpu_mainloop;
+  {
+    // AMD GPU plugin requires to use the same mainloop as the native process.
+    // This is because AMD debug API has to be called from the same thread as the
+    // ptrace() thread.
+    gdb_server.InstallPlugin(
+        std::make_unique<lldb_private::lldb_server::LLDBServerPluginAMDGPU>(gdb_server, mainloop));
+  }
 #endif
-  // Install GPU plugin.
+#if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
+  MainLoop &gpu_mainloop = mainloop;
   gdb_server.InstallPlugin(
-      std::make_unique<LLDBServerGPUPlugin>(gdb_server, gpu_mainloop));
+      std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(gdb_server, gpu_mainloop));
 #endif
 
   llvm::StringRef host_and_port;
