@@ -91,8 +91,8 @@ public:
   /// Set the thread to stopped state.
   void SetStopped();
 
-  /// Set the thread to stopped state by a threadless state.
-  void SetStoppedByThreadlessState();
+  /// Set the thread to stopped state by initialization.
+  void SetStoppedByInitialization();
 
   /// Set the thread to running state.
   void SetRunning();
