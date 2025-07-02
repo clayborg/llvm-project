@@ -94,13 +94,13 @@ void ThreadNVIDIAGPU::SetStoppedByException() {
   m_stop_description = "NVIDIA GPU Thread Stopped by Exception";
 }
 
-void ThreadNVIDIAGPU::SetStoppedByThreadlessState() {
+void ThreadNVIDIAGPU::SetStoppedByInitialization() {
   LLDB_LOG(GetLog(GDBRLog::Plugin),
-           "ThreadNVIDIAGPU::SetStoppedByThreadlessState()");
+           "ThreadNVIDIAGPU::SetStoppedByInitialization()");
   SetStopped();
 
   m_stop_info.reason = lldb::eStopReasonException;
-  m_stop_description = "NVIDIA GPU Stopped";
+  m_stop_description = "NVIDIA GPU is initializing";
 }
 
 void ThreadNVIDIAGPU::SetStopped() {
