@@ -1,13 +1,3 @@
-
-message(STATUS "ROCM_PATH is set to: '${ROCM_PATH}'")
-if(NOT ROCM_PATH)
-    message(FATAL_ERROR "ROCM_PATH must be specified. Use -DROCM_PATH=/path/to/rocm")
-endif()
-
-if (NOT EXISTS ${ROCM_PATH})
-    message(FATAL_ERROR "ROCM_PATH does not exist: '${ROCM_PATH}'")
-endif()
-
 # Find AMD-dbgapi package using the provided CMake config
 set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
 find_package(amd-dbgapi REQUIRED CONFIG)
