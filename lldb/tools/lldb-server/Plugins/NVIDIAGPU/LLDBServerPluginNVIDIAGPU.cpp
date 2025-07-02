@@ -14,6 +14,7 @@
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Process.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -135,18 +136,31 @@ LLDBServerPluginNVIDIAGPU::CreateConnection() {
         "already listening");
   }
   m_is_listening = true;
-  LLDB_LOG(
-      log,
-      "LLDBServerPluginNVIDIAGPU::CreateConnection trying to listen on port 0");
+  // The following variables help us to establish connections for remote
+  // platforms. It should be possible to automate them, but that requires
+  // exposing the connection information of lldb-platform, which is a
+  // good amount of work. Let's do that only when we really need it.
+  const uint16_t listen_to_port =
+      std::stoi(sys::Process::GetEnv("NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT")
+                    .value_or("0"));
+  std::string listen_to_host =
+      sys::Process::GetEnv("NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST")
+          .value_or("localhost");
+  std::string remote_host =
+      sys::Process::GetEnv("NVIDIAGPU_DEBUGGER_REMOTE_HOST")
+          .value_or("localhost");
+
+  std::string listen_to_host_and_port =
+      llvm::formatv("{0}:{1}", listen_to_host, listen_to_port);
   llvm::Expected<std::unique_ptr<TCPSocket>> sock =
-      Socket::TcpListen("localhost:0", 5);
+      Socket::TcpListen(listen_to_host_and_port, 5);
   if (sock) {
     GPUPluginConnectionInfo connection_info;
     // connection_info.exe_path = "/pretend/path/to/NVIDIAGPU";
     connection_info.triple = "nvptx-nvidia-cuda";
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
     connection_info.connect_url =
-        llvm::formatv("connect://localhost:{}", listen_port);
+        llvm::formatv("connect://{0}:{1}", remote_host, listen_port);
     LLDB_LOG(log,
              "LLDBServerPluginNVIDIAGPU::CreateConnection listening to {0}",
              listen_port);
