@@ -69,7 +69,16 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
   // to the server. The gdb-remote protocol refuses to connect to running
   // targets.
   m_state = eStateStopped;
-  UpdateThreads();
+
+  // As part of connecting the client with the server, we need to set the
+  // initial state to stopped, which requires sending some thread to the client.
+  // Because of that, we create a fake thread with stopped state.
+  lldb::tid_t tid = 1;
+  auto thread = std::make_unique<ThreadNVIDIAGPU>(
+      *this, tid, ThreadNVIDIAGPU::PhysicalCoords{});
+  thread->SetStoppedByInitialization();
+  m_threads.push_back(std::move(thread));
+  SetCurrentThreadID(tid);
 }
 
 Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
@@ -165,18 +174,6 @@ lldb::addr_t NVIDIAGPU::GetSharedLibraryInfoAddress() {
 }
 
 size_t NVIDIAGPU::UpdateThreads() {
-  // As part of connecting the client with the server, we need to set the
-  // initial state to stopped, which requires sending some thread to the client.
-  // Because of that, we create a fake thread with statopped state.
-  // We also use this thread to send dyld events before the kernel even runs.
-  if (m_threads.empty()) {
-    lldb::tid_t tid = 1;
-    auto thread = std::make_unique<ThreadNVIDIAGPU>(
-        *this, tid, ThreadNVIDIAGPU::PhysicalCoords{});
-    thread->SetStoppedByThreadlessState();
-    m_threads.push_back(std::move(thread));
-    SetCurrentThreadID(tid);
-  }
   return m_threads.size();
 }
 
