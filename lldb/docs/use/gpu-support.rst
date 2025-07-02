@@ -42,3 +42,38 @@ plugin won't be able to initialize.
   `CUDBG_API_VERSION_MAJOR` and `CUDBG_API_VERSION_MINOR`.
 - The version of your driver can be obtained via the `DRIVER version` section
   of the `nvidia-smi --version` output.
+
+Remote platforms
+^^^^^^^^^^^^^^^^
+
+You can connect to a remote platform and connect the the GPU lldb-server by
+setting up the following environment variables:
+
+- `NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST`: the host to listen to for remote
+  connections.
+- `NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT`: the port to listen to for remote
+  connections.
+- `NVIDIAGPU_DEBUGGER_REMOTE_HOST`: the host to connect to for remote
+  connections.
+
+Example:
+
+First launch the lldb-server in platform mode on the machine with IP address
+`10.112.215.212` with these variables set:
+
+```
+NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT=0 \
+NVIDIAGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST="*" \
+NVIDIAGPU_DEBUGGER_REMOTE_HOST="10.112.215.212" \
+./bin/lldb-server platform --listen  "*:12346" --server
+```
+
+Then connect remotely to the lldb-server with the following command:
+
+```
+lldb
+> platform select remote-linux
+> platform connect connect://10.112.215.212:12346
+> file /remote/path/to/a/program
+> run
+```
