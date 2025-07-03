@@ -237,6 +237,7 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
   CUDBGEvent event;
   CUDBGResult res;
   CUDADebuggerAPI &cuda_api = *m_cuda_api;
+  bool did_get_events = false;
 
   while (true) {
     res = cuda_api->getNextEvent(
@@ -249,6 +250,8 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
           "Failed to get the next CUDA Debugger API event. {0}",
           cudbgGetErrorString(res));
     }
+
+    did_get_events = true;
 
     switch (event.kind) {
     case CUDBG_EVENT_ELF_IMAGE_LOADED: {
@@ -325,7 +328,12 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
     }
   }
 
+  LLDB_LOG(log, "Done servicing CUDA API events. Get events: {0}",
+           did_get_events);
+
   // Handled all pending events. Acknowledge them.
-  res = cuda_api->acknowledgeSyncEvents();
-  assert(res == CUDBG_SUCCESS && "Failed to acknowledge events");
+  if (did_get_events) {
+    res = cuda_api->acknowledgeSyncEvents();
+    assert(res == CUDBG_SUCCESS && "Failed to acknowledge events");
+  }
 }
