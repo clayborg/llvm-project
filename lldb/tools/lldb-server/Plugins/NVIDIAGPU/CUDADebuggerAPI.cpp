@@ -12,8 +12,10 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "llvm/Support/Error.h"
 
+#include <cstring>
 #include <dlfcn.h>
 #include <string>
+#include <type_traits>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -70,18 +72,38 @@ static Error VerifyDebuggerCapabilities(CUDADebuggerAPI &api) {
   return Error::success();
 }
 
+template <typename T>
 static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
                                NativeProcessProtocol &linux_process,
-                               llvm::StringRef symbol_name,
-                               const uint32_t &value) {
+                               llvm::StringRef symbol_name, const T &value) {
   std::optional<uint64_t> symbol_address = bp_args.GetSymbolValue(symbol_name);
   if (!symbol_address)
     return createStringErrorFmt("Couldn't find address for symbol {0}",
                                 symbol_name);
+
   size_t bytes_written = 0;
-  linux_process.WriteMemory(*symbol_address, &value, sizeof(value),
-                            bytes_written);
-  if (bytes_written != sizeof(value))
+  size_t value_size;
+  const void *data_ptr;
+
+  if constexpr (std::is_same_v<T, const char *> || std::is_same_v<T, char *>) {
+    // For C strings, write the string content including null terminator
+    value_size = strlen(value) + 1;
+    data_ptr = value;
+  } else {
+    // For other types, ensure they are trivially copyable (POD-like)
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "Type must be trivially copyable for safe memory writing");
+    // Write the value directly
+    value_size = sizeof(value);
+    data_ptr = &value;
+  }
+
+  Status status = linux_process.WriteMemory(*symbol_address, data_ptr,
+                                            value_size, bytes_written);
+  if (status.Fail())
+    return createStringErrorFmt("Failed to write symbol {0}: {1}", symbol_name,
+                                status.AsCString());
+  if (bytes_written != value_size)
     return createStringErrorFmt("Failed to write symbol {0}", symbol_name);
   return Error::success();
 }
@@ -154,7 +176,14 @@ static Error
 WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
                             NativeProcessProtocol &linux_process,
                             void *libcuda) {
+  auto write_c_str = [&](const std::string &symbol_name,
+                         const char *value) -> Error {
+    return WriteToHostSymbol(bp_args, linux_process, symbol_name, value);
+  };
+
   if (const auto *path = getenv("CUDBG_INJECTION_PATH")) {
+    if (Error err = write_c_str(Symbols::CUDBG_INJECTION_PATH, path))
+      return err;
     char *injection_path = reinterpret_cast<char *>(
         dlsym(libcuda, Symbols::CUDBG_INJECTION_PATH.c_str()));
     if (!injection_path)
@@ -248,5 +277,6 @@ GPUBreakpointInfo CUDADebuggerAPI::GetInitializationBreakpointInfo() {
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_REVISION);
   bp.symbol_names.push_back(Symbols::CUDBG_SESSION_ID);
   bp.symbol_names.push_back(Symbols::CUDBG_DEBUGGER_CAPABILITIES);
+  bp.symbol_names.push_back(Symbols::CUDBG_INJECTION_PATH);
   return bp;
 }
