@@ -78,17 +78,27 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
     if (info.native_memory_address && info.native_memory_size) {
       LLDB_LOG(log, "Reading \"{0}\" from memory at {1:x}", info.pathname, 
                *info.native_memory_address);
-      data_sp = std::make_shared<DataBufferHeap>(*info.native_memory_size, 0);
-      Status error;
-      // TODO: we are assuming we can read the memory from the GPU process
-      // since the memory is shared with the host process.
-      const size_t bytes_read = m_process->ReadMemory(
-          *info.native_memory_address, data_sp->GetBytes(), 
-          data_sp->GetByteSize(), error);
-      if (bytes_read != *info.native_memory_size) {
-        LLDB_LOG(log, "Failed to read \"{0}\" from memory at {1:x}: {2}", 
-                 info.pathname, *info.native_memory_address, error);
-        data_sp.reset();
+      TargetSP cpu_target_sp = m_process->GetTarget().GetNativeTargetForGPU();
+      if (cpu_target_sp) {
+        ProcessSP cpu_process_sp = cpu_target_sp->GetProcessSP();
+        if (cpu_process_sp) {
+          data_sp = std::make_shared<DataBufferHeap>(*info.native_memory_size, 0);
+          Status error;
+          const size_t bytes_read = cpu_process_sp->ReadMemory(
+              *info.native_memory_address, data_sp->GetBytes(),
+              data_sp->GetByteSize(), error);
+          if (bytes_read != *info.native_memory_size) {
+            LLDB_LOG(log, "Failed to read \"{0}\" from memory at {1:x}: {2}",
+                    info.pathname, *info.native_memory_address, error);
+            data_sp.reset();
+          }
+        } else {
+          LLDB_LOG(log, "Invalid CPU process for \"{0}\" from memory at {1:x}",
+                  info.pathname, *info.native_memory_address);
+        }
+      } else {
+        LLDB_LOG(log, "Invalid CPU target for \"{0}\" from memory at {1:x}",
+                info.pathname, *info.native_memory_address);
       }
     }
     // Extract the UUID if available.
