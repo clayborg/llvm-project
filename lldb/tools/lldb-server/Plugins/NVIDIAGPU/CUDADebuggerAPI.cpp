@@ -89,13 +89,14 @@ static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
     // For C strings, write the string content including null terminator
     value_size = strlen(value) + 1;
     data_ptr = value;
-  } else {
-    // For other types, ensure they are trivially copyable (POD-like)
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "Type must be trivially copyable for safe memory writing");
-    // Write the value directly
+  } else if constexpr (std::is_trivially_copyable_v<T>) {
+    // For other types that are trivially copyable (POD-like)
     value_size = sizeof(value);
     data_ptr = &value;
+  } else {
+    llvm_unreachable("Type must be handled as a special case (e.g. const "
+                     "char*) or trivially copyable for safe "
+                     "memory writing");
   }
 
   Status status = linux_process.WriteMemory(*symbol_address, data_ptr,
