@@ -256,6 +256,9 @@ if is_configured("hipcc_path"):
 if is_configured("dsymutil"):
     dotest_cmd += ["--dsymutil", config.dsymutil]
 
+if is_configured("nvcc_path"):
+    dotest_cmd += ["--nvcc-path", config.nvcc_path]
+
 if is_configured("make"):
     dotest_cmd += ["--make", config.make]
 

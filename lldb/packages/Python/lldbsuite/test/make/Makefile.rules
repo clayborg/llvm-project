@@ -115,6 +115,16 @@ ifneq "$(strip $(HIP_SOURCES))" ""
 endif
 
 #----------------------------------------------------------------------
+# Override CC and CXX when building a CUDA application.
+#----------------------------------------------------------------------
+ifneq "$(strip $(NVCC_SOURCES))" ""
+	override CC := $(NVCC)
+	override CXX := $(NVCC)
+	override CC_TYPE := cuda
+endif
+
+
+#----------------------------------------------------------------------
 # CC defaults to clang.
 #
 # If you change the defaults of CC, be sure to also change it in the file
@@ -327,6 +337,7 @@ CXXFLAGS += -std=c++11 $(CFLAGS) $(ARCH_CXXFLAGS)
 HIPFLAGS ?= $(CFLAGS)
 # Copy common options to the linker flags (dwarf, arch. & etc).
 # Note: we get some 'garbage' options for linker here (such as -I, --isystem & etc).
+NVCCFLAGS ?= $(CFLAGS) -G -g -O0
 LDFLAGS += $(CFLAGS)
 LDFLAGS += $(LD_EXTRAS) $(ARCH_LDFLAGS)
 ifeq (,$(filter $(OS), Windows_NT Android Darwin))
@@ -520,6 +531,13 @@ ifneq "$(strip $(HIP_SOURCES))" ""
 	OBJECTS +=$(strip $(HIP_SOURCES:.hip=.o))
 endif
 
+#----------------------------------------------------------------------
+# Check if we have any NVCC source files
+#----------------------------------------------------------------------
+ifneq "$(strip $(NVCC_SOURCES))" ""
+	OBJECTS +=$(strip $(NVCC_SOURCES:.cu=.o))
+endif
+
 ifeq ($(CC_TYPE), clang)
 	CXXFLAGS += --driver-mode=g++
 endif
@@ -659,6 +677,9 @@ endif
 
 %.o: %.hip %.d
 	$(HIPCC) $(HIPFLAGS) -MT $@ -MD -MP -MF $*.d -c -o $@ $<
+
+%.o: %.cu %.d
+	$(NVCC) $(NVCCFLAGS) -Xcompiler "-MD -MP -MF $*.d" -c -o $@ $<
 
 #----------------------------------------------------------------------
 # Automatic variables based on items already entered. Below we create
