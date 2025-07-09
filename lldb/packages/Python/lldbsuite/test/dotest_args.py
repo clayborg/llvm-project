@@ -73,6 +73,16 @@ def create_parser():
         default="",
         help=textwrap.dedent("""Specify the path to a ROCM hipcc compiler."""),
     )
+    group.add_argument(
+        "--nvcc-path",
+        metavar="path",
+        dest="nvcc_path",
+        default="",
+        help=textwrap.dedent(
+            """Specify the path to the NVCC compiler."""
+        ),
+    )
+
     if sys.platform == "darwin":
         group.add_argument(
             "--apple-sdk",

@@ -459,6 +459,9 @@ def parseOptionsAndInitTestdirs():
     if args.enabled_plugins:
         configuration.enabled_plugins = args.enabled_plugins
 
+    if args.nvcc_path:
+        configuration.nvcc_path = args.nvcc_path
+
     # Gather all the dirs passed on the command line.
     if len(args.args) > 0:
         configuration.testdirs = [
