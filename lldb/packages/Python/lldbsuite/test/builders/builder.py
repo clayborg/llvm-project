@@ -246,6 +246,16 @@ class Builder:
             return ["HIPCC={}".format(configuration.hipcc_path)]
         return []
 
+    def getNvccArgs(self):
+        if "nvidiagpu" in configuration.enabled_plugins:
+            if not configuration.nvcc_path:
+                raise build_exception.BuildError(
+                    "NVCC path is not configured but nvidiagpu plugin is enabled. "
+                    "Please set configuration.nvcc_path to a valid NVCC compiler path."
+                )
+            return ["NVCC={}".format(configuration.nvcc_path)]
+        return []
+
     def getLLDBObjRoot(self):
         return ["LLDB_OBJ_ROOT={}".format(configuration.lldb_obj_root)]
 
@@ -301,6 +311,7 @@ class Builder:
             self.getHipccArgs(),
             self.getLLDBObjRoot(),
             self.getCmdLine(dictionary),
+            self.getNvccArgs(),
         ]
         command = list(itertools.chain(*command_parts))
 

@@ -45,6 +45,7 @@ dsymutil = None
 sdkroot = None
 make_path = None
 hipcc_path = None
+nvcc_path = None
 
 # The overriden dwarf verison.
 # Don't use this to test the current compiler's

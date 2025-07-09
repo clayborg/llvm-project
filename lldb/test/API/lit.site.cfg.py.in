@@ -57,6 +57,11 @@ if lldb_enable_amdgpu_plugin == 'ON' or lldb_enable_amdgpu_plugin == '1':
     config.enabled_plugins.append('lldb-amdgpu')
     config.hipcc_path = os.path.join('@ROCM_PATH@', 'bin', 'hipcc')
 
+lldb_enable_nvidiagpu_plugin = '@LLDB_ENABLE_NVIDIAGPU_PLUGIN@'
+if lldb_enable_nvidiagpu_plugin in ('ON', '1'):
+    config.enabled_plugins.append('nvidiagpu')
+    config.nvcc_path = '@NVIDIAGPU_NVCC_PATH@'
+
 # Additional dotest arguments can be passed to lit by providing a
 # semicolon-separates list: --param dotest-args="arg;arg".
 dotest_lit_args_str = lit_config.params.get('dotest-args', None)
