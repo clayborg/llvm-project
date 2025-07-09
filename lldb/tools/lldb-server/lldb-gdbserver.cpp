@@ -482,10 +482,10 @@ int main_gdbserver(int argc, char *argv[]) {
       std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(
           gdb_server, gpu_mainloop));
 #endif
-#if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
+#if defined(LLDB_ENABLE_NVIDIAGPU_PLUGIN)
   MainLoop gpu_mainloop;
   gdb_server.InstallPlugin(
-      std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(
+      std::make_unique<lldb_private::lldb_server::LLDBServerPluginNVIDIAGPU>(
           gdb_server, gpu_mainloop));
 #endif
 
