@@ -58,6 +58,17 @@ def create_parser():
             """Specify the path to sysroot. This overrides apple_sdk sysroot."""
         ),
     )
+
+    group.add_argument(
+        "--nvcc-path",
+        metavar="path",
+        dest="nvcc_path",
+        default="",
+        help=textwrap.dedent(
+            """Specify the path to the NVCC compiler."""
+        ),
+    )
+
     if sys.platform == "darwin":
         group.add_argument(
             "--apple-sdk",

@@ -51,6 +51,11 @@ lldb_build_intel_pt = '@LLDB_BUILD_INTEL_PT@'
 if lldb_build_intel_pt == '1':
     config.enabled_plugins.append('intel-pt')
 
+lldb_enable_nvidiagpu_plugin = '@LLDB_ENABLE_NVIDIAGPU_PLUGIN@'
+if lldb_enable_nvidiagpu_plugin in ('ON', '1'):
+    config.enabled_plugins.append('nvidiagpu')
+    config.nvcc_path = '@NVIDIAGPU_NVCC_PATH@'
+
 # Additional dotest arguments can be passed to lit by providing a
 # semicolon-separates list: --param dotest-args="arg;arg".
 dotest_lit_args_str = lit_config.params.get('dotest-args', None)
