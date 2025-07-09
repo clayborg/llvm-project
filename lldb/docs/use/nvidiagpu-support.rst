@@ -1,8 +1,5 @@
-GPU Support in LLDB
-====================
-
-NVIDIA
-------
+NVIDIA GPU Support in LLDB
+==========================
 
 System requirements
 ^^^^^^^^^^^^^^^^^^^
