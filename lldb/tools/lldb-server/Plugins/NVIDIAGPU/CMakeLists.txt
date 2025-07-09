@@ -19,6 +19,8 @@ if(NOT NVIDIAGPU_DEBUGGER_INCLUDE_DIR)
     set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR 
         "${CUDAToolkit_LIBRARY_ROOT}/extras/Debugger/include" 
         CACHE STRING ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC} FORCE)
+
+    set(NVIDIAGPU_NVCC_PATH "${CUDAToolkit_NVCC_EXECUTABLE}" CACHE STRING "Path to the NVCC compiler." FORCE)
   endif()
 endif()
 
@@ -30,6 +32,10 @@ if(NOT NVIDIAGPU_DEBUGGER_INCLUDE_DIR)
 elseif(NOT EXISTS "${NVIDIAGPU_DEBUGGER_INCLUDE_DIR}")
   message(FATAL_ERROR 
       "NVIDIAGPU_DEBUGGER_INCLUDE_DIR (${NVIDIAGPU_DEBUGGER_INCLUDE_DIR}) not found. ${TROUBLESHOOTING_MESSAGE}")
+endif()
+
+if(NOT NVIDIAGPU_NVCC_PATH)
+  message(FATAL_ERROR "NVIDIAGPU_NVCC_PATH not set. Please install the CUDA Toolkit or set a valid NVIDIAGPU_NVCC_PATH CMake variable.")
 endif()
 
 target_include_directories(lldbServerPluginNVIDIAGPU PRIVATE
