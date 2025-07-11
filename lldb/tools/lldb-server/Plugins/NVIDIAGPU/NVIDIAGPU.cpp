@@ -86,17 +86,30 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
   LLDB_LOG(log, "NVIDIAGPU::Resume(). Pre-resume state: {0}",
            StateToString(GetState()));
 
-  // According to Andrew, resume device takes ~25 ms.
-  CUDBGResult res = m_api->resumeDevice(/*device_id=*/0);
+  if (m_is_faking_a_stop_for_dyld) {
+    m_is_faking_a_stop_for_dyld = false;
+    // Ack'ing here is fine because the next call to OnDebuggerAPIEvent will
+    // be triggered after the Resume packet has been fully processed.
+    CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
+    if (res != CUDBG_SUCCESS) {
+      logAndReportFatalError(
+          "Failed to acknowledge CUDA Debugger API events. {0}",
+          cudbgGetErrorString(res));
+    }
+  } else {
+    // According to Andrew, resume device takes ~25 ms.
+    CUDBGResult res = GetCudaAPI().resumeDevice(/*device_id=*/0);
 
-  Status status;
-  if (res != CUDBG_SUCCESS) {
-    LLDB_LOG(log, "NVIDIAGPU::Resume(). Failed to resume device: {0}", res);
-    return Status::FromErrorString("Failed to resume device");
+    Status status;
+    if (res != CUDBG_SUCCESS) {
+      LLDB_LOG(log, "NVIDIAGPU::Resume(). Failed to resume device: {0}", res);
+      return Status::FromErrorString("Failed to resume device");
+    }
   }
 
   for (ThreadNVIDIAGPU &thread : GPUThreads())
     thread.SetRunning();
+
   SetState(StateType::eStateRunning, true);
 
   return Status();
@@ -107,7 +120,7 @@ Status NVIDIAGPU::Halt() {
   LLDB_LOG(log, "NVIDIAGPU::Halt(). Pre-halt state: {0}",
            StateToString(GetState()));
   // According to Andrew, halting the devices takes ~0.2ms - ~10 ms.
-  CUDBGResult res = m_api->suspendDevice(/*device_id=*/0);
+  CUDBGResult res = GetCudaAPI().suspendDevice(/*device_id=*/0);
 
   Status status;
   if (res != CUDBG_SUCCESS) {
@@ -117,20 +130,6 @@ Status NVIDIAGPU::Halt() {
     status.FromErrorString(error_string.c_str());
   }
   return status;
-}
-
-Status NVIDIAGPU::HaltDueToDyld() {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::HaltDueToDyld(). Pre-halt state: {0}",
-           StateToString(GetState()));
-
-  Status status = Halt();
-  if (status.Fail())
-    return status;
-
-  ThreadNVIDIAGPU &thread = *GPUThreads().begin();
-  thread.SetStoppedByDynamicLoader();
-  return Status();
 }
 
 void NVIDIAGPU::ChangeStateToStopped() {
@@ -245,7 +244,7 @@ void NVIDIAGPU::OnElfImageLoaded(
   // Obtain the elf image
   auto data_buffer =
       llvm::WritableMemoryBuffer::getNewUninitMemBuffer(elf_image_size);
-  CUDBGResult res = m_api->getElfImageByHandle(
+  CUDBGResult res = GetCudaAPI().getElfImageByHandle(
       dev_id, handle, CUDBGElfImageType::CUDBG_ELF_IMAGE_TYPE_RELOCATED,
       data_buffer->getBufferStart(), elf_image_size);
   if (res != CUDBG_SUCCESS) {
@@ -273,6 +272,16 @@ bool NVIDIAGPU::HasUnreportedLibraries() const {
   return !m_unreported_libraries.empty();
 }
 
+void NVIDIAGPU::ReportDyldStop() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::ReportDyldStop()");
+
+  ThreadNVIDIAGPU &thread = *GPUThreads().begin();
+  thread.SetStoppedByDynamicLoader();
+  m_is_faking_a_stop_for_dyld = true;
+  SetState(StateType::eStateStopped, true);
+}
+
 void NVIDIAGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
   Log *log = GetLog(GDBRLog::Plugin);
@@ -284,7 +293,8 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   ThreadNVIDIAGPU::PhysicalCoords physical_coords;
   const uint32_t dev_id = 0;
   uint32_t num_sms;
-  CUDBGResult res = m_api->getNumSMs(dev_id, &num_sms);
+  const CUDBGAPI_st &api = GetCudaAPI();
+  CUDBGResult res = api.getNumSMs(dev_id, &num_sms);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
         "NVIDIAGPU::OnAllDevicesSuspended(). Failed to get number of SMs: {0}",
@@ -293,7 +303,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   }
 
   std::vector<uint64_t> sm_exceptions(num_sms / 64 + 1, 0);
-  res = m_api->readDeviceExceptionState(dev_id, sm_exceptions.data(),
+  res = api.readDeviceExceptionState(dev_id, sm_exceptions.data(),
                                         sm_exceptions.size());
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
@@ -319,7 +329,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
 
   // Find the first warp with an exception
   uint32_t num_warps;
-  res = m_api->getNumWarps(dev_id, &num_warps);
+  res = api.getNumWarps(dev_id, &num_warps);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError("NVIDIAGPU::OnAllDevicesSuspended(). Failed to get "
                            "number of warps: {0}",
@@ -328,7 +338,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   }
 
   uint64_t valid_warps_mask;
-  res = m_api->readValidWarps(dev_id, sm_id, &valid_warps_mask);
+  res = api.readValidWarps(dev_id, sm_id, &valid_warps_mask);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
         "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read valid warps: {0}",
@@ -341,7 +351,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
       continue;
 
     CUDBGWarpState warp;
-    res = m_api->readWarpState(dev_id, sm_id, wp, &warp);
+    res = api.readWarpState(dev_id, sm_id, wp, &warp);
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
           "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read warp state: {0}",
@@ -355,7 +365,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
     for (uint32_t ln = 0; ln < 32; ++ln) {
       if (warp.validLanes & (1 << ln)) {
         CUDBGException_t exception = CUDBGException_t::CUDBG_EXCEPTION_NONE;
-        res = m_api->readLaneException(dev_id, sm_id, wp, ln, &exception);
+        res = api.readLaneException(dev_id, sm_id, wp, ln, &exception);
         if (res != CUDBG_SUCCESS) {
           logAndReportFatalError(
               "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read lane "
@@ -407,4 +417,12 @@ NVIDIAGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) {
 
 NVIDIAGPU::GPUThreadRange NVIDIAGPU::GPUThreads() {
   return GPUThreadRange(m_threads);
+}
+
+const CUDBGAPI_st &NVIDIAGPU::GetCudaAPI() {
+  if (!m_api) {
+    logAndReportFatalError("NVIDIAGPU::GetCudaAPI(). CUDA Debugger API is "
+                           "not initialized");
+  }
+  return *m_api;
 }
