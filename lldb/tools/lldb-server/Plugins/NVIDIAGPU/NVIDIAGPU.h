@@ -10,6 +10,7 @@
 #define LLDB_TOOLS_LLDB_SERVER_PROCESSNVIDIAGPU_H
 
 #include "CUDADebuggerAPI.h"
+#include "MainLoopEventNotifier.h"
 #include "ThreadNVIDIAGPU.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
@@ -115,8 +116,16 @@ public:
   /// Handle the ElfImageLoaded event.
   void OnElfImageLoaded(const CUDBGEvent::cases_st::elfImageLoaded_st &event);
 
+  /// Report a stop reason for the dynamic loader. This is used to notify the
+  /// client that it should fetch the new libraries. It uses a fake stop
+  /// as described in the comment for m_is_faking_a_stop_for_dyld.
+  void ReportDyldStop();
+
 private:
   friend class Manager;
+
+  /// Accessor for m_api that fails if it's not initialized.
+  const CUDBGAPI_st &GetCudaAPI();
 
   /// Utility for the Manager class to set the launch info for the GPU.
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
@@ -136,6 +145,12 @@ private:
   /// The list of all the cubins loaded by the GPU that haven't been reported to
   /// the client yet.
   std::vector<GPUDynamicLoaderLibraryInfo> m_unreported_libraries;
+
+  /// A flag that indicates that we are faking a stop to the client to report
+  /// dyld events. A fake stop means that we don't actually stop the GPU, but
+  /// we stop processing more APU events until we have resumed after the dyld
+  /// event.
+  bool m_is_faking_a_stop_for_dyld = false;
 };
 
 } // namespace lldb_private::lldb_server

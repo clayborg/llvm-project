@@ -13,6 +13,8 @@
 #include "Utils.h"
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/lldb-enumerations.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Process.h"
 
@@ -63,20 +65,7 @@ llvm::StringRef LLDBServerPluginNVIDIAGPU::GetPluginName() {
 }
 
 std::optional<GPUActions> LLDBServerPluginNVIDIAGPU::NativeProcessIsStopping() {
-  // Currently the mechanism we use to report cubins is the following:
-  // 1. We wait for the GPU process to stop for any non-cubin reason.
-  // 2. We stop the CPU process.
-  // 3. Right before the CPU stop reply packet is sent to the client, we augment
-  //    it with a GPUAction to load libraries
-  //
-  // Once we support breakpoints, we will need to send the cubins before the
-  // non-cubin stop reason happens.
-  if (!m_gpu->HasUnreportedLibraries())
-    return {};
-
-  GPUActions actions(GetPluginName());
-  actions.load_libraries = true;
-  return actions;
+  return {};
 }
 
 void LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread(
@@ -202,7 +191,11 @@ LLDBServerPluginNVIDIAGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   CUDBGResult res = (*m_cuda_api)
                         ->setNotifyNewEventCallback31(
                             [](void *data) {
-                              reinterpret_cast<decltype(this)>(data)
+                              Log *log = GetLog(GDBRLog::Plugin);
+                              LLDB_LOG(
+                                  log,
+                                  "CUDA Debugger API event notifier callback");
+                              static_cast<LLDBServerPluginNVIDIAGPU *>(data)
                                   ->m_main_loop_event_notifier_up->FireEvent();
                             },
                             this);
@@ -231,109 +224,114 @@ GPUActions LLDBServerPluginNVIDIAGPU::GetInitializeActions() {
   return init_actions;
 }
 
-// TODO: refactor this method.
 void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
   Log *log = GetLog(GDBRLog::Plugin);
   CUDBGEvent event;
   CUDBGResult res;
   CUDADebuggerAPI &cuda_api = *m_cuda_api;
-  bool did_get_events = false;
+  LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent");
 
-  while (true) {
-    res = cuda_api->getNextEvent(
-        CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC, &event);
-    if (res == CUDBGResult::CUDBG_ERROR_NO_EVENT_AVAILABLE)
-      break;
-
-    if (res != CUDBG_SUCCESS) {
-      logAndReportFatalError(
-          "Failed to get the next CUDA Debugger API event. {0}",
-          cudbgGetErrorString(res));
-    }
-
-    did_get_events = true;
-
-    switch (event.kind) {
-    case CUDBG_EVENT_ELF_IMAGE_LOADED: {
-      LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_LOADED");
-      this->m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded);
-      break;
-    }
-    case CUDBG_EVENT_KERNEL_READY: {
-      LLDB_LOG(log, "CUDBG_EVENT_KERNEL_READY");
-      break;
-    }
-    case CUDBG_EVENT_KERNEL_FINISHED: {
-      LLDB_LOG(log, "CUDBG_EVENT_KERNEL_FINISHED");
-      break;
-    }
-    case CUDBG_EVENT_INTERNAL_ERROR: {
-      LLDB_LOG(log, "CUDBG_EVENT_INTERNAL_ERROR");
-      break;
-    }
-    case CUDBG_EVENT_CTX_PUSH: {
-      LLDB_LOG(log, "CUDBG_EVENT_CTX_PUSH");
-      break;
-    }
-    case CUDBG_EVENT_CTX_POP: {
-      LLDB_LOG(log, "CUDBG_EVENT_CTX_POP");
-      break;
-    }
-    case CUDBG_EVENT_CTX_CREATE: {
-      LLDB_LOG(log, "CUDBG_EVENT_CTX_CREATE");
-      break;
-    }
-    case CUDBG_EVENT_CTX_DESTROY: {
-      LLDB_LOG(log, "CUDBG_EVENT_CTX_DESTROY");
-      break;
-    }
-    case CUDBG_EVENT_TIMEOUT: {
-      LLDB_LOG(log, "CUDBG_EVENT_TIMEOUT");
-      break;
-    }
-    case CUDBG_EVENT_ATTACH_COMPLETE: {
-      LLDB_LOG(log, "CUDBG_EVENT_ATTACH_COMPLETE");
-      break;
-    }
-    case CUDBG_EVENT_DETACH_COMPLETE: {
-      LLDB_LOG(log, "CUDBG_EVENT_DETACH_COMPLETE");
-      break;
-    }
-    case CUDBG_EVENT_ELF_IMAGE_UNLOADED: {
-      LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_UNLOADED");
-      break;
-    }
-    case CUDBG_EVENT_FUNCTIONS_LOADED: {
-      LLDB_LOG(log, "CUDBG_EVENT_FUNCTIONS_LOADED");
-      break;
-    }
-    case CUDBG_EVENT_ALL_DEVICES_SUSPENDED: {
-      LLDB_LOG(log, "CUDBG_EVENT_ALL_DEVICES_SUSPENDED {0:x} {1:x}",
-               event.cases.allDevicesSuspended.brokenDevicesMask,
-               event.cases.allDevicesSuspended.faultedDevicesMask);
-      bool was_halted;
-      // Order is important here. We need to suspend the GPU first before the
-      // native process so that the CPU's GPUActions can hit the GPU server.
-      m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
-      HaltNativeProcessIfNeeded(was_halted);
-      break;
-    }
-    case CUDBG_EVENT_INVALID: {
-      LLDB_LOG(log, "CUDBG_EVENT_INVALID");
-      break;
-    }
-    default:
-      LLDB_LOG(log, "Unknown event kind: {0}", event.kind);
-      break;
-    }
+  res = cuda_api->getNextEvent(CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC,
+                               &event);
+  if (res == CUDBGResult::CUDBG_ERROR_NO_EVENT_AVAILABLE) {
+    // We shouldn't be getting spurious calls to this function, so all
+    // invocations should have a corresponding event.
+    logAndReportFatalError(
+        "We didnt' get an event from the CUDA Debugger API queue. {0}",
+        cudbgGetErrorString(res));
   }
 
-  LLDB_LOG(log, "Done servicing CUDA API events. Get events: {0}",
-           did_get_events);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError(
+        "Failed to get the next CUDA Debugger API event. {0}",
+        cudbgGetErrorString(res));
+  }
+
+  switch (event.kind) {
+  case CUDBG_EVENT_ELF_IMAGE_LOADED: {
+    LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_LOADED");
+    // When we get an elf file, we report a dyld stop to the client.
+    // We hold ack'ing this event until we have gotten the autoresume from the
+    // client. This will need to be changed once we support multiple contexes.
+    m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded);
+    m_gpu->ReportDyldStop();
+    return;
+  }
+  case CUDBG_EVENT_KERNEL_READY: {
+    LLDB_LOG(log, "CUDBG_EVENT_KERNEL_READY");
+    break;
+  }
+  case CUDBG_EVENT_KERNEL_FINISHED: {
+    LLDB_LOG(log, "CUDBG_EVENT_KERNEL_FINISHED");
+    break;
+  }
+  case CUDBG_EVENT_INTERNAL_ERROR: {
+    LLDB_LOG(log, "CUDBG_EVENT_INTERNAL_ERROR");
+    break;
+  }
+  case CUDBG_EVENT_CTX_PUSH: {
+    LLDB_LOG(log, "CUDBG_EVENT_CTX_PUSH");
+    break;
+  }
+  case CUDBG_EVENT_CTX_POP: {
+    LLDB_LOG(log, "CUDBG_EVENT_CTX_POP");
+    break;
+  }
+  case CUDBG_EVENT_CTX_CREATE: {
+    LLDB_LOG(log, "CUDBG_EVENT_CTX_CREATE");
+    break;
+  }
+  case CUDBG_EVENT_CTX_DESTROY: {
+    LLDB_LOG(log, "CUDBG_EVENT_CTX_DESTROY");
+    break;
+  }
+  case CUDBG_EVENT_TIMEOUT: {
+    LLDB_LOG(log, "CUDBG_EVENT_TIMEOUT");
+    break;
+  }
+  case CUDBG_EVENT_ATTACH_COMPLETE: {
+    LLDB_LOG(log, "CUDBG_EVENT_ATTACH_COMPLETE");
+    break;
+  }
+  case CUDBG_EVENT_DETACH_COMPLETE: {
+    LLDB_LOG(log, "CUDBG_EVENT_DETACH_COMPLETE");
+    break;
+  }
+  case CUDBG_EVENT_ELF_IMAGE_UNLOADED: {
+    LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_UNLOADED");
+    break;
+  }
+  case CUDBG_EVENT_FUNCTIONS_LOADED: {
+    LLDB_LOG(log, "CUDBG_EVENT_FUNCTIONS_LOADED");
+    break;
+  }
+  case CUDBG_EVENT_ALL_DEVICES_SUSPENDED: {
+    LLDB_LOG(log, "CUDBG_EVENT_ALL_DEVICES_SUSPENDED {0:x} {1:x}",
+             event.cases.allDevicesSuspended.brokenDevicesMask,
+             event.cases.allDevicesSuspended.faultedDevicesMask);
+    bool was_halted;
+    // Order is important here. We need to suspend the GPU first before the
+    // native process so that the CPU's GPUActions can hit the GPU server.
+    m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
+    HaltNativeProcessIfNeeded(was_halted);
+    break;
+  }
+  case CUDBG_EVENT_INVALID: {
+    LLDB_LOG(log, "CUDBG_EVENT_INVALID");
+    break;
+  }
+  default:
+    LLDB_LOG(log, "Unknown event kind: {0}", event.kind);
+    break;
+  }
+
+  LLDB_LOG(log, "Done servicing CUDA API events");
 
   // Handled all pending events. Acknowledge them.
-  if (did_get_events) {
-    res = cuda_api->acknowledgeSyncEvents();
-    assert(res == CUDBG_SUCCESS && "Failed to acknowledge events");
+  res = cuda_api->acknowledgeSyncEvents();
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError(
+        "Failed to acknowledge CUDA Debugger API events. {0}",
+        cudbgGetErrorString(res));
   }
 }
