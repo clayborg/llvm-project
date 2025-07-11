@@ -621,7 +621,7 @@ llvm::Expected<FileSpec> DisassemblerSASS::FindNvdisasm() {
     std::call_once(cache.search_once_nvdisasm, [&cache, &nvdisasm_path]() {
       cache.cached_nvdisasm_path = nvdisasm_path;
     });
-    return nvdisasm_path;
+    return *cache.cached_nvdisasm_path;
   };
 
   // First check if nvdisasm is available in PATH
@@ -736,7 +736,7 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
       "lldb_sass", "cubin", temp_fd, temp_file_path);
   if (ec)
     return llvm::createStringError(
-        ec, "Faild to create temporary sass file for nvdisasm");
+        ec, "Failed to create temporary sass file for nvdisasm");
 
   // RAII cleanup for temporary cubin file
   llvm::FileRemover temp_file_remover(temp_file_path);
