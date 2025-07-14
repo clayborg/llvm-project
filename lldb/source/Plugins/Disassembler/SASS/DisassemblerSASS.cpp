@@ -148,7 +148,7 @@ DisassemblerSASSCache::getModuleSM(const std::string &cache_key) {
 
 /// Implementation of ModuleSM::findSM
 llvm::Expected<std::string> ModuleSM::findSM(const Address &base_addr) {
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Check if we already have the cached result
   {
@@ -502,7 +502,7 @@ DisassemblerSASS::DisassemblerSASS(const ArchSpec &arch, const char *flavor,
                                    const char *cpu, const char *features)
     : Disassembler(arch, flavor), m_valid(false) {
 
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Check if this is an NVPTX architecture (which produces SASS when compiled)
   if (arch.GetTriple().getArch() != llvm::Triple::nvptx &&
@@ -550,7 +550,7 @@ size_t DisassemblerSASS::DecodeInstructions(const Address &base_addr,
     m_instruction_list.Clear();
 
   if (!IsValid()) {
-    Log *log = GetLog(LLDBLog::Process);
+    Log *log = GetLog(LLDBLog::Disassembler);
     LLDB_LOG(log, "DisassemblerSASS::DecodeInstructions: Cannot disassemble - "
                   "nvdisasm not available");
 
@@ -561,7 +561,7 @@ size_t DisassemblerSASS::DecodeInstructions(const Address &base_addr,
     return 0;
   }
 
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
   LLDB_LOG(log,
            "DisassemblerSASS::DecodeInstructions: base_addr={0:x}, "
            "data_offset={1}, num_instructions={2}",
@@ -610,7 +610,7 @@ llvm::Expected<FileSpec> DisassemblerSASS::FindNvdisasm() {
   if (cache.cached_nvdisasm_path.has_value())
     return *cache.cached_nvdisasm_path;
 
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Helper lambda to handle successful nvdisasm discovery
   auto handle_nvdisasm_found = [&](const std::string &path,
@@ -677,7 +677,7 @@ llvm::Expected<FileSpec> DisassemblerSASS::FindNvdisasm() {
 
 llvm::Expected<std::string>
 DisassemblerSASS::ExtractSmArchFromModule(const Address &base_addr) {
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Get the module from the address
   lldb::ModuleSP module_sp = base_addr.GetModule();
@@ -709,7 +709,7 @@ llvm::Expected<size_t>
 DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
                                           const Address &base_addr,
                                           size_t max_instructions) {
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   if (!IsValid()) {
     LLDB_LOG(log, "DisassemblerSASS is not valid - nvdisasm not available");
@@ -836,7 +836,7 @@ llvm::Expected<size_t>
 DisassemblerSASS::ParseJsonOutput(const std::string &json_output,
                                   const Address &base_addr,
                                   size_t max_instructions) {
-  Log *log = GetLog(LLDBLog::Process);
+  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Parse JSON output from nvdisasm
   llvm::Expected<llvm::json::Value> json_value = llvm::json::parse(json_output);
