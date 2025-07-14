@@ -45,8 +45,6 @@ endif()
 option(LLDB_ENABLE_AMDGPU_PLUGIN "Enable support for the AMD GPU plugin" OFF)
 option(LLDB_ENABLE_MOCK_GPU_PLUGIN "Enable support for the Mock GPU plugin" OFF)
 
-set(GPU_PLUGINS_ENABLED 0)
-
 if(LLDB_ENABLE_AMDGPU_PLUGIN)
   if(NOT DEFINED ROCM_PATH)
     message(FATAL_ERROR "ROCM_PATH is not defined and LLDB_ENABLE_AMDGPU_PLUGIN expects it. Use -DROCM_PATH=/path/to/rocm")
@@ -59,17 +57,11 @@ if(LLDB_ENABLE_AMDGPU_PLUGIN)
 
   add_definitions(-DLLDB_ENABLE_AMDGPU_PLUGIN=1)
   list(APPEND LLDB_PLUGINS lldbServerPluginAMDGPU)
-  math(EXPR GPU_PLUGINS_ENABLED "${GPU_PLUGINS_ENABLED} + 1")
 endif()
 
 if(LLDB_ENABLE_MOCK_GPU_PLUGIN)
   add_definitions(-DLLDB_ENABLE_MOCKGPU_PLUGIN=1)
   list(APPEND LLDB_PLUGINS lldbServerPluginMockGPU)
-  math(EXPR GPU_PLUGINS_ENABLED "${GPU_PLUGINS_ENABLED} + 1")
-endif()
-
-if(GPU_PLUGINS_ENABLED GREATER 1)
-  message(FATAL_ERROR "Only one GPU plugin can be enabled at a time")
 endif()
 
 add_lldb_tool(lldb-server
