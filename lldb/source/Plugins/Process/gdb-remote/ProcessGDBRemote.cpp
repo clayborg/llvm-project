@@ -978,9 +978,14 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
 
   // We wait for the process to fully stop before we can query or alter it via
   // GPUActions.
-  ProcessSP process_sp = platform_sp->ConnectProcessSynchronous(
-      connection_info.connect_url, GetPluginNameStatic(), debugger,
-      *debugger.GetAsyncOutputStream(), gpu_target_sp.get(), error);
+  ProcessSP process_sp =
+      gpu_action.wait_synchronously_for_gpu_to_initialize
+          ? platform_sp->ConnectProcessSynchronous(
+                connection_info.connect_url, GetPluginNameStatic(), debugger,
+                *debugger.GetAsyncOutputStream(), gpu_target_sp.get(), error)
+          : platform_sp->ConnectProcess(connection_info.connect_url,
+                                        GetPluginNameStatic(), debugger,
+                                        gpu_target_sp.get(), error);
   if (error.Fail())
     return error;
   if (!process_sp)
