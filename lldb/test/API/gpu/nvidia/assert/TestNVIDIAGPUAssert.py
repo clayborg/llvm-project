@@ -26,3 +26,6 @@ class TestNVIDIAGPUAssert(TestBase):
 
         self.assertEqual(gpu.process.state, lldb.eStateStopped)
         self.assertIn("NVIDIA GPU Thread Stopped by Exception", str(gpu.process.thread[0]))
+
+        # Now let's test that the disass can print at least one entry
+        self.expect("disassemble", patterns=[".*cuda_elf.*cubin.* <.*>: .*"])
