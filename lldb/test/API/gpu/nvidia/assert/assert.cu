@@ -30,7 +30,8 @@ __global__ void assert_one(unsigned fail_block, unsigned fail_lane) {
 }
 
 int main(void) {
-  assert_one<<<20, N>>>(8, 21);
+  cudaDeviceReset();
+  assert_one<<<20, N>>>(8, 21); // breakpoint1
   HANDLE_CUDA_ERROR(cudaDeviceSynchronize());
   HANDLE_CUDA_ERROR(cudaGetLastError());
 
