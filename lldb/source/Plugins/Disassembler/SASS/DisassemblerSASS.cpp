@@ -91,6 +91,10 @@ public:
   /// Thread-safe SM architecture extraction for this specific module
   llvm::Expected<std::string> findSM(const Address &base_addr);
 
+  llvm::Expected<std::string> FindSMForELFv7OrLower(lldb::ModuleSP module_sp);
+
+  llvm::Expected<std::string> FindSMForELFv8OrGreater(lldb::ModuleSP module_sp);
+
 private:
   std::string m_cache_key;
   std::optional<std::string> m_cached_sm_arch;
@@ -146,59 +150,29 @@ DisassemblerSASSCache::getModuleSM(const std::string &cache_key) {
   return module_sm;
 }
 
-/// Implementation of ModuleSM::findSM
-llvm::Expected<std::string> ModuleSM::findSM(const Address &base_addr) {
-  Log *log = GetLog(LLDBLog::Disassembler);
-
-  // Check if we already have the cached result
-  {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_cached_sm_arch.has_value()) {
-      LLDB_LOG(log, "ModuleSM::findSM: Using cached SM architecture: {0}",
-               *m_cached_sm_arch);
-      return *m_cached_sm_arch;
-    }
-  }
-
-  // Get the module from the address
-  lldb::ModuleSP module_sp = base_addr.GetModule();
-  if (!module_sp)
-    return llvm::createStringError("No module found for address");
-
-  // Get the object file
+llvm::Expected<std::string> ModuleSM::FindSMForELFv7OrLower(lldb::ModuleSP module_sp) {
   ObjectFile *obj_file = module_sp->GetObjectFile();
   if (!obj_file)
     return llvm::createStringError("No object file found in module");
 
-  // Check ELF header ABI version - the CUDA info layout is only valid for ABI
-  // version 8 We need to verify this is an ELF file with the correct ABI
-  // version
-  if (obj_file->GetPluginName() != "elf")
-    return llvm::createStringError("Object file is not ELF format");
-
-  // For ELF files, we need to check the ABI version in the ELF header
-  // The CUDA note structure layout is specifically for ABI version 8
   DataExtractor header_data;
-  lldb::offset_t hdr_offset = 0;
-  if (obj_file->GetData(0, 64, header_data) < 16)
-    return llvm::createStringError("Failed to read ELF header");
-
-  // Check ELF magic and get ABI version (at offset 8 in e_ident)
-  hdr_offset = 0;
-  if (header_data.GetU32(&hdr_offset) !=
-      0x464C457F) { // ELF magic in little endian
-    return llvm::createStringError("Invalid ELF magic bytes");
-  }
-
-  hdr_offset = 8; // EI_ABIVERSION offset
-  uint8_t abi_version = header_data.GetU8(&hdr_offset);
-  if (abi_version != 8) {
+  if (obj_file->GetData(48, 4, header_data) < 4)
     return llvm::createStringError(
-        "ELF ABI version %d != 8, CUDA note layout requires ABI version 8",
-        abi_version);
-  }
+        "Failed to read the e_flags of the ELF header");
 
-  LLDB_LOG(log, "ModuleSM::findSM: ELF ABI version 8 confirmed");
+  lldb::offset_t hdr_offset = 0;
+  uint32_t e_flags = header_data.GetU32(&hdr_offset);
+  uint32_t sm_ver = e_flags & 0xFF;
+  std::string sm_arch = llvm::formatv("SM{0}", sm_ver).str();
+  return sm_arch;
+}
+
+llvm::Expected<std::string> ModuleSM::FindSMForELFv8OrGreater(lldb::ModuleSP module_sp) {
+  Log *log = GetLog(LLDBLog::Disassembler);
+
+  ObjectFile *obj_file = module_sp->GetObjectFile();
+  if (!obj_file)
+    return llvm::createStringError("No object file found in module");
 
   // Find the .note.nv.cuinfo section
   SectionList *section_list = module_sp->GetSectionList();
@@ -286,6 +260,59 @@ llvm::Expected<std::string> ModuleSM::findSM(const Address &base_addr) {
   }
 
   return llvm::createStringError("Invalid cudaVirtSm value %d", cudaVirtSm);
+}
+
+/// Implementation of ModuleSM::findSM
+llvm::Expected<std::string> ModuleSM::findSM(const Address &base_addr) {
+  Log *log = GetLog(LLDBLog::Disassembler);
+
+  // Check if we already have the cached result
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_cached_sm_arch.has_value()) {
+      LLDB_LOG(log, "ModuleSM::findSM: Using cached SM architecture: {0}",
+               *m_cached_sm_arch);
+      return *m_cached_sm_arch;
+    }
+  }
+
+  // Get the module from the address
+  lldb::ModuleSP module_sp = base_addr.GetModule();
+  if (!module_sp)
+    return llvm::createStringError("No module found for address");
+
+  // Get the object file
+  ObjectFile *obj_file = module_sp->GetObjectFile();
+  if (!obj_file)
+    return llvm::createStringError("No object file found in module");
+
+  // Check ELF header ABI version.
+  if (obj_file->GetPluginName() != ObjectFileELF::GetPluginNameStatic())
+    return llvm::createStringError("Object file is not ELF format");
+
+  // For ELF files, we need to check the ABI version in the ELF header.
+  DataExtractor header_data;
+  lldb::offset_t hdr_offset = 0;
+  if (obj_file->GetData(0, 64, header_data) < 16)
+    return llvm::createStringError("Failed to read ELF header");
+
+  hdr_offset = 8; // EI_ABIVERSION offset
+  uint8_t abi_version = header_data.GetU8(&hdr_offset);
+
+  LLDB_LOG(log, "ModuleSM::findSM() ELF ABI version {0} identified",
+           abi_version);
+
+  llvm::Expected<std::string> sm_ver =
+      abi_version >= 8 ? FindSMForELFv8OrGreater(module_sp) : FindSMForELFv7OrLower(module_sp);
+  if (sm_ver) {
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_cached_sm_arch = *sm_ver;
+    }
+    return *sm_ver;
+  }
+  return llvm::createStringError("Failed to find SM architecture %s",
+                                 llvm::toString(sm_ver.takeError()).c_str());
 }
 
 // SASS Instruction implementation with nvdisasm JSON schema support
