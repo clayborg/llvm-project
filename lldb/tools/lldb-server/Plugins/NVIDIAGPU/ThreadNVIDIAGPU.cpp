@@ -99,7 +99,7 @@ void ThreadNVIDIAGPU::SetStoppedByInitialization() {
            "ThreadNVIDIAGPU::SetStoppedByInitialization()");
   SetStopped();
 
-  m_stop_info.reason = lldb::eStopReasonException;
+  m_stop_info.reason = lldb::eStopReasonDynammicLoader;
   m_stop_description = "NVIDIA GPU is initializing";
 }
 
