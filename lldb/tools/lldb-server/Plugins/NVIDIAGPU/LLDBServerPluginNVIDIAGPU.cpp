@@ -211,7 +211,6 @@ LLDBServerPluginNVIDIAGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     return connection_info.takeError();
 
   response.actions.connect_info = std::move(*connection_info);
-  response.actions.resume_gpu_process = true;
   response.disable_bp = true;
   return response;
 }
