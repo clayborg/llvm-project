@@ -28,7 +28,7 @@ llvm::Error createStringErrorFmt(const char *format, Args &&...args) {
 /// mentioning that the backtrace is only printed if lldb-server is started
 /// manually on a terminal.
 template <typename... Args>
-void logAndReportFatalError(const char *format, Args &&...args) {
+[[noreturn]] void logAndReportFatalError(const char *format, Args &&...args) {
   Log *log = GetLog(process_gdb_remote::GDBRLog::Plugin);
   std::string err_msg = llvm::formatv(format, args...).str();
   LLDB_LOG(log, "{0}", err_msg);
