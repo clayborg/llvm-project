@@ -386,7 +386,7 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                        "launched successfully");
       }
       actions.connect_info = CreateConnection();
-      actions.connect_info.synchronous = true; 
+      actions.connect_info->synchronous = true; 
     }
     return actions;
   } else {
