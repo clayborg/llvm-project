@@ -22,7 +22,7 @@ class NativeProcessLinux;
 /// This class represents a HW thread in a GPU.
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
-  // This struct represents the physical coordinates of a HW thread in a GPU.
+  /// This struct represents the physical coordinates of a HW thread in a GPU.
   struct PhysicalCoords {
     int64_t dev_id;
     int64_t sm_id;
@@ -37,6 +37,12 @@ public:
     bool IsValid() const;
 
     std::string AsThreadName() const;
+  };
+
+  /// This holds the information about an exception and the thread that caused it.
+  struct ExceptionInfo {
+    ThreadNVIDIAGPU::PhysicalCoords physical_coords;
+    CUDBGException_t exception;
   };
 
   ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
@@ -83,7 +89,7 @@ public:
   void SetStoppedByDynamicLoader();
 
   /// Change the state of this thread and update its stop info accordingly.
-  void SetStoppedByException();
+  void SetStoppedByException(ExceptionInfo exception_info);
 
   /// Set the thread to stopped state by a signal.
   void SetStoppedBySignal(int signo);
