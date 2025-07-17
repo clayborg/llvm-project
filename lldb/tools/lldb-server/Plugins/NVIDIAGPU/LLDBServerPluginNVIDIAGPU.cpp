@@ -36,6 +36,9 @@ LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU initializing...");
 
+  // We set this variable to avoid JITing, which simplifies module loading.
+  setenv("CUDA_MODULE_LOADING", "EAGER", /*replace=*/0);
+
   m_process_manager_up.reset(new NVIDIAGPU::Manager(main_loop));
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
       main_loop, *m_process_manager_up, "nvidia-gpu.server"));
