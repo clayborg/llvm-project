@@ -86,12 +86,13 @@ void ThreadNVIDIAGPU::SetStoppedByDynamicLoader() {
   m_stop_description = "NVIDIA GPU Thread Stopped by Dynamic Loader";
 }
 
-void ThreadNVIDIAGPU::SetStoppedByException() {
+void ThreadNVIDIAGPU::SetStoppedByException(ExceptionInfo exception_info) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByException()");
   SetStopped();
 
   m_stop_info.reason = lldb::eStopReasonException;
-  m_stop_description = "NVIDIA GPU Thread Stopped by Exception";
+  m_stop_description =
+      llvm::formatv("CUDA Exception {0}", exception_info.exception);
 }
 
 void ThreadNVIDIAGPU::SetStoppedByInitialization() {

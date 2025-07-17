@@ -25,7 +25,7 @@ class TestNVIDIAGPUAssert(TestBase):
         lldbutil.expect_state_changes(self, listener, gpu.process, [lldb.eStateRunning, lldb.eStateStopped])
 
         self.assertEqual(gpu.process.state, lldb.eStateStopped)
-        self.assertIn("NVIDIA GPU Thread Stopped by Exception", str(gpu.process.thread[0]))
+        self.assertIn("CUDA Exception 12", str(gpu.process.thread[0]))
 
         # Now let's test that the disass can print at least one entry
         self.expect("disassemble", patterns=[".*cuda_elf.*cubin.* <.*>: .*"])
