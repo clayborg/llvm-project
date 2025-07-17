@@ -282,14 +282,9 @@ void NVIDIAGPU::ReportDyldStop() {
   SetState(StateType::eStateStopped, true);
 }
 
-void NVIDIAGPU::OnAllDevicesSuspended(
-    const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
-  // The following code path assumes that the stop event is triggered by an
-  // exception. At some point we'll need to generalize this.
-
+std::optional<ThreadNVIDIAGPU::ExceptionInfo> NVIDIAGPU::FindExceptionInfo() {
   // Find the thread that caused the exception.
+  Log *log = GetLog(GDBRLog::Plugin);
   ThreadNVIDIAGPU::PhysicalCoords physical_coords;
   const uint32_t dev_id = 0;
   uint32_t num_sms;
@@ -297,20 +292,16 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   CUDBGResult res = api.getNumSMs(dev_id, &num_sms);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
-        "NVIDIAGPU::OnAllDevicesSuspended(). Failed to get number of SMs: {0}",
+        "NVIDIAGPU::FindExceptionInfo(). Failed to get number of SMs: {0}",
         cudbgGetErrorString(res));
-    return;
   }
 
   std::vector<uint64_t> sm_exceptions(num_sms / 64 + 1, 0);
   res = api.readDeviceExceptionState(dev_id, sm_exceptions.data(),
-                                        sm_exceptions.size());
+                                     sm_exceptions.size());
   if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError(
-        "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read device "
-        "exception state: {0}",
-        cudbgGetErrorString(res));
-    return;
+    LLDB_LOG(log, "NVIDIAGPU::FindExceptionInfo(). No exception found.");
+    return std::nullopt;
   }
 
   // Find the first SM with an exception
@@ -323,27 +314,24 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   }
   if (sm_id == UINT32_MAX) {
     logAndReportFatalError(
-        "NVIDIAGPU::OnAllDevicesSuspended(). No SMs with exceptions found");
-    return;
+        "NVIDIAGPU::FindExceptionInfo(). No SMs with exceptions found");
   }
 
   // Find the first warp with an exception
   uint32_t num_warps;
   res = api.getNumWarps(dev_id, &num_warps);
   if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("NVIDIAGPU::OnAllDevicesSuspended(). Failed to get "
+    logAndReportFatalError("NVIDIAGPU::FindExceptionInfo(). Failed to get "
                            "number of warps: {0}",
                            cudbgGetErrorString(res));
-    return;
   }
 
   uint64_t valid_warps_mask;
   res = api.readValidWarps(dev_id, sm_id, &valid_warps_mask);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
-        "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read valid warps: {0}",
+        "NVIDIAGPU::FindExceptionInfo(). Failed to read valid warps: {0}",
         cudbgGetErrorString(res));
-    return;
   }
 
   for (uint32_t wp = 0; wp < num_warps; ++wp) {
@@ -354,9 +342,8 @@ void NVIDIAGPU::OnAllDevicesSuspended(
     res = api.readWarpState(dev_id, sm_id, wp, &warp);
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
-          "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read warp state: {0}",
+          "NVIDIAGPU::FindExceptionInfo(). Failed to read warp state: {0}",
           cudbgGetErrorString(res));
-      return;
     }
 
     if (!warp.validLanes)
@@ -366,35 +353,46 @@ void NVIDIAGPU::OnAllDevicesSuspended(
       if (warp.validLanes & (1 << ln)) {
         CUDBGException_t exception = CUDBGException_t::CUDBG_EXCEPTION_NONE;
         res = api.readLaneException(dev_id, sm_id, wp, ln, &exception);
-        if (res != CUDBG_SUCCESS) {
+        if (res != CUDBG_SUCCESS)
           logAndReportFatalError(
-              "NVIDIAGPU::OnAllDevicesSuspended(). Failed to read lane "
+              "NVIDIAGPU::FindExceptionInfo(). Failed to read lane "
               "exception: {0}",
               cudbgGetErrorString(res));
-          continue;
-        }
+
         if (exception != CUDBGException_t::CUDBG_EXCEPTION_NONE) {
           physical_coords =
               ThreadNVIDIAGPU::PhysicalCoords(dev_id, sm_id, wp, ln);
-          LLDB_LOG(log, "Exception: {0}", exception);
-          goto found;
+          LLDB_LOG(log, "Exception {0} found at dev_id: {1}, sm_id: {2}, wp: "
+                        "{3}, ln: {4}",
+                        exception, physical_coords.dev_id,
+                        physical_coords.sm_id, physical_coords.warp_id,
+                        physical_coords.lane_id);
+          return ThreadNVIDIAGPU::ExceptionInfo{physical_coords, exception};
         }
       }
     }
   }
-  logAndReportFatalError(
-      "NVIDIAGPU::OnAllDevicesSuspended(). No lanes with exceptions found");
+  logAndReportFatalError("NVIDIAGPU::FindExceptionInfo(). Couldn't find "
+                         "concrete exception info.");
+}
 
-found:
-  LLDB_LOG(log, "Exception found at dev_id: {0}, sm_id: {1}, wp: {2}, ln: {3}",
-           physical_coords.dev_id, physical_coords.sm_id,
-           physical_coords.warp_id, physical_coords.lane_id);
+void NVIDIAGPU::OnAllDevicesSuspended(
+    const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
+  // The following code path assumes that the stop event is triggered by an
+  // exception. At some point we'll need to generalize this.
+  std::optional<ThreadNVIDIAGPU::ExceptionInfo> exception_info =
+      FindExceptionInfo();
+  if (!exception_info) 
+    logAndReportFatalError(
+        "NVIDIAGPU::OnAllDevicesSuspended(). Non-exception stop unsupported");
+  
 
   // We don't yet handle multiple threads, so we use the only one we have.
-
   ThreadNVIDIAGPU &thread = *GPUThreads().begin();
-  thread.SetPhysicalCoords(physical_coords);
-  thread.SetStoppedByException();
+  thread.SetPhysicalCoords(exception_info->physical_coords);
+  thread.SetStoppedByException(*exception_info);
   ChangeStateToStopped();
 }
 
