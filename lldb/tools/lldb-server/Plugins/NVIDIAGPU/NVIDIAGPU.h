@@ -124,6 +124,8 @@ public:
 private:
   friend class Manager;
 
+  std::optional<ThreadNVIDIAGPU::ExceptionInfo> FindExceptionInfo();
+
   /// Accessor for m_api that fails if it's not initialized.
   const CUDBGAPI_st &GetCudaAPI();
 
