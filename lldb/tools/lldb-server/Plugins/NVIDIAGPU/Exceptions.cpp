@@ -106,4 +106,69 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
                          "concrete exception info.");
 }
 
+llvm::StringRef CudaExceptionToString(CUDBGException_t exception) {
+  switch (exception) {
+  case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTRUCTION:
+    return "Warp - Illegal instruction";
+  case CUDBG_EXCEPTION_WARP_OUT_OF_RANGE_ADDRESS:
+    return "Warp - Out of range address";
+  case CUDBG_EXCEPTION_WARP_MISALIGNED_ADDRESS:
+    return "Warp - Misaligned address";
+  case CUDBG_EXCEPTION_WARP_INVALID_ADDRESS_SPACE:
+    return "Warp - Invalid address space";
+  case CUDBG_EXCEPTION_WARP_INVALID_PC:
+    return "Warp - invalid PC";
+  case CUDBG_EXCEPTION_WARP_HARDWARE_STACK_OVERFLOW:
+    return "Warp - Hardware stack overflow";
+  case CUDBG_EXCEPTION_DEVICE_ILLEGAL_ADDRESS:
+    return "Device - Illegal address";
+  case CUDBG_EXCEPTION_WARP_ASSERT:
+    return "Warp - Assert";
+  case CUDBG_EXCEPTION_WARP_ILLEGAL_ADDRESS:
+    return "Warp - Illegal address";
+  case CUDBG_EXCEPTION_CLUSTER_BLOCK_NOT_PRESENT:
+    return "Cluster - Block not present";
+  case CUDBG_EXCEPTION_CLUSTER_OUT_OF_RANGE_ADDRESS:
+    return "Cluster - Out of range address";
+  case CUDBG_EXCEPTION_WARP_STACK_CANARY:
+    return "Warp - Stack canary";
+#if CUDBG_API_VERSION_MAJOR >= 13
+  case CUDBG_EXCEPTION_WARP_TMEM_ACCESS_CHECK:
+    return "Warp - TMEM access check";
+  case CUDBG_EXCEPTION_WARP_TMEM_LEAK:
+    return "Warp - TMEM leak";
+  case CUDBG_EXCEPTION_WARP_CALL_REQUIRES_NEWER_DRIVER:
+    return "Warp - Call requires newer driver";
+  case CUDBG_EXCEPTION_WARP_MISALIGNED_PC:
+    return "Warp - Misaligned PC";
+  case CUDBG_EXCEPTION_WARP_PC_OVERFLOW:
+    return "Warp - PC overflow";
+  case CUDBG_EXCEPTION_WARP_MISALIGNED_REG:
+    return "Warp - Misaligned register";
+  case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTR_ENCODING:
+    return "Warp - Illegal instruction encoding";
+  case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTR_PARAM:
+    return "Warp - Illegal instruction parameter";
+  case CUDBG_EXCEPTION_WARP_OUT_OF_RANGE_REGISTER:
+    return "Warp - Out of range register";
+  case CUDBG_EXCEPTION_WARP_INVALID_CONST_ADDR_LDC:
+    return "Warp - Invalid constant address LDC";
+  case CUDBG_EXCEPTION_WARP_MMU_FAULT:
+    return "Warp - MMU fault";
+  case CUDBG_EXCEPTION_WARP_ARRIVE:
+    return "Warp - Arrive";
+  case CUDBG_EXCEPTION_CLUSTER_POISON:
+    return "Cluster - Poison";
+  case CUDBG_EXCEPTION_WARP_API_STACK_ERROR:
+    return "Warp - API stack error";
+  case CUDBG_EXCEPTION_WARP_BLOCK_NOT_PRESENT:
+    return "Warp - Block not present";
+  case CUDBG_EXCEPTION_WARP_USER_STACK_OVERFLOW:
+    return "Warp - User stack overflow";
+#endif
+  default:
+    return "Device Unknown Exception";
+  }
+}
+
 } // namespace lldb_private::lldb_server
