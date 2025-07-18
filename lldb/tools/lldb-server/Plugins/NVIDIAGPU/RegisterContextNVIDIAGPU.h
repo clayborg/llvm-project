@@ -55,6 +55,8 @@ public:
   std::vector<uint32_t>
   GetExpeditedRegisters(ExpeditedRegs expType) const override;
 
+  std::optional<uint64_t> ReadErrorPC();
+
   /// Invalidate all registers. Future accessess will cause reads from the
   /// device.
   void InvalidateAllRegisters();
