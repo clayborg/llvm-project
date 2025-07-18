@@ -99,7 +99,7 @@ class TestNVIDIAGPUAssert(TestBase):
         self.assertGreater(total_executable_sections, 0, "No executable text sections found in any cubin modules")
 
         # Log information about modules without executable sections (if any)
-        if self.traceOn and modules_without_executable_sections:
+        if self.TraceOn and modules_without_executable_sections:
             print(f"Modules without executable text sections: {modules_without_executable_sections}")
 
         # Verify that we have at least some executable text sections with non-zero load addresses
