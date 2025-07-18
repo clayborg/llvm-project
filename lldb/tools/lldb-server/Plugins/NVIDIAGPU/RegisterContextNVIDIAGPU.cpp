@@ -208,13 +208,13 @@ void RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   }
 
   {
-    uint64_t error_pc = -1;
+    uint64_t error_pc = 0;
     bool error_pc_valid = false;
     CUDBGResult res =
         api->readErrorPC(physical_coords.dev_id, physical_coords.sm_id,
                          physical_coords.warp_id, &error_pc, &error_pc_valid);
     // use valid
-    if (res == CUDBG_SUCCESS) {
+    if (res == CUDBG_SUCCESS && error_pc_valid) {
       m_regs.regs.errorPC = error_pc;
       m_regs_value_is_valid[LLDB_ERROR_PC] = true;
     } else {
@@ -265,8 +265,11 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
                                               RegisterValue &reg_value) {
   ReadAllRegsFromDevice();
   const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
-  reg_value.SetUInt64(m_regs.data[lldb_reg_num]);
 
+  if (!m_regs_value_is_valid[lldb_reg_num])
+    return Status("Couldn't read register");
+
+  reg_value.SetUInt64(m_regs.data[lldb_reg_num]);
   return Status();
 }
 
