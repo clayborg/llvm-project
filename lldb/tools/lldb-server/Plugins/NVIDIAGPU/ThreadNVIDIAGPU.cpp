@@ -13,38 +13,6 @@ using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
-namespace {
-enum CoordSpecialIDs : uint32_t {
-  INVALID_ID = std::numeric_limits<uint32_t>::max(),
-  WILDCARD_ID = INVALID_ID - 1,
-  CURRENT_ID = INVALID_ID - 2,
-  IGNORE_ID = INVALID_ID - 3,
-};
-} // namespace
-
-ThreadNVIDIAGPU::PhysicalCoords::PhysicalCoords()
-    : dev_id(CoordSpecialIDs::INVALID_ID), sm_id(CoordSpecialIDs::INVALID_ID),
-      warp_id(CoordSpecialIDs::INVALID_ID),
-      lane_id(CoordSpecialIDs::INVALID_ID) {}
-
-ThreadNVIDIAGPU::PhysicalCoords::PhysicalCoords(int64_t dev_id, int64_t sm_id,
-                                                int64_t warp_id,
-                                                int64_t lane_id)
-    : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), lane_id(lane_id) {}
-
-bool ThreadNVIDIAGPU::PhysicalCoords::IsValid() const {
-  return dev_id != CoordSpecialIDs::INVALID_ID &&
-         sm_id != CoordSpecialIDs::INVALID_ID &&
-         warp_id != CoordSpecialIDs::INVALID_ID &&
-         lane_id != CoordSpecialIDs::INVALID_ID;
-}
-
-std::string ThreadNVIDIAGPU::PhysicalCoords::AsThreadName() const {
-  if (IsValid())
-    return llvm::formatv("GPU Thread ({0}, {1}, {2})", sm_id, warp_id, lane_id);
-  return "NVIDIA GPU";
-}
-
 ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
                                  PhysicalCoords physical_coords)
     : NativeThreadProtocol(gpu, tid), m_state(lldb::eStateInvalid),
