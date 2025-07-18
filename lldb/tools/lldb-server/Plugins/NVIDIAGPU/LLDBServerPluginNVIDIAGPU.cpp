@@ -45,8 +45,8 @@ using namespace llvm;
 ///     Log instance for debug output.
 static void SetEnvVar(const char *env_var_name, const char *value, Log *log) {
   if (!sys::Process::GetEnv(env_var_name)) {
-    setenv(env_var_name, cmake_value, 1);
-    LLDB_LOG(log, "Set {0}={1}", env_var_name, cmake_value);
+    setenv(env_var_name, value, 1);
+    LLDB_LOG(log, "Set {0}={1}", env_var_name, value);
   } else {
     LLDB_LOG(log, "Using existing {0} from environment", env_var_name);
   }
