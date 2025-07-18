@@ -50,5 +50,23 @@ target_include_directories(lldbServerPluginNVIDIAGPU PUBLIC
   ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR}
 )
 
+# Pass CUDA environment variables as preprocessor definitions
+if(NVIDIAGPU_CUDBG_INJECTION_PATH)
+  target_compile_definitions(lldbServerPluginNVIDIAGPU PRIVATE 
+    CMAKE_NVIDIAGPU_CUDBG_INJECTION_PATH="${NVIDIAGPU_CUDBG_INJECTION_PATH}")
+endif()
+if(NVIDIAGPU_CUDA_VISIBLE_DEVICES)
+  target_compile_definitions(lldbServerPluginNVIDIAGPU PRIVATE 
+    CMAKE_NVIDIAGPU_CUDA_VISIBLE_DEVICES="${NVIDIAGPU_CUDA_VISIBLE_DEVICES}")
+endif()
+if(NVIDIAGPU_CUDA_DEVICE_ORDER)
+  target_compile_definitions(lldbServerPluginNVIDIAGPU PRIVATE 
+    CMAKE_NVIDIAGPU_CUDA_DEVICE_ORDER="${NVIDIAGPU_CUDA_DEVICE_ORDER}")
+endif()
+if(NVIDIAGPU_CUDA_LAUNCH_BLOCKING)
+  target_compile_definitions(lldbServerPluginNVIDIAGPU PRIVATE 
+    CMAKE_NVIDIAGPU_CUDA_LAUNCH_BLOCKING="${NVIDIAGPU_CUDA_LAUNCH_BLOCKING}")
+endif()
+
 # Link against CUDA libraries if needed
 target_link_libraries(lldbServerPluginNVIDIAGPU PRIVATE ${CUDA_LIBRARIES})
