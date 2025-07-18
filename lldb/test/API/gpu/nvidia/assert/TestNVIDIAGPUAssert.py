@@ -30,6 +30,11 @@ class TestNVIDIAGPUAssert(TestBase):
         # Now let's test that the disass can print at least one entry
         self.expect("disassemble", patterns=[".*cuda_elf.*\\.cubin`.*:.*"])
 
+        # We don't expect to see an errorpc set
+        self.assertNotIn("CUDA Exception(12): Warp - Assert at 0x", str(gpu.process.thread[0]))
+        errorpc = gpu.process.thread[0].frame[0].FindRegister("errorpc").GetValueAsAddress()
+        self.assertEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
+
     def test_cubin_sections_have_load_addresses(self):
         """Test that all executable text sections of all cubins have a load address."""
         self.build()
