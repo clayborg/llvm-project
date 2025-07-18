@@ -172,8 +172,7 @@ void RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
 
   Log *log = GetLog(GDBRLog::Plugin);
 
-  ThreadNVIDIAGPU::PhysicalCoords physical_coords =
-      GetGPUThread().GetPhysicalCoords();
+  PhysicalCoords physical_coords = GetGPUThread().GetPhysicalCoords();
 
   if (!physical_coords.IsValid()) {
     m_regs.regs.PC = 0;
