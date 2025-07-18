@@ -29,6 +29,43 @@ CMake variables
 - `NVIDIAGPU_NVCC_PATH`: path to the NVCC compiler to use in tests. If the CUDA
   Toolkit is installed in a standard location, this variable will be deduced
   automatically.
+- `NVIDIAGPU_CUDBG_INJECTION_PATH`: path to the CUDA debugger injection library. Can also
+  be set at runtime. See Environment variables section for more details.
+- `NVIDIAGPU_CUDA_VISIBLE_DEVICES`: controls which CUDA devices are visible to the
+  application being debugged. Can also be set at runtime. See Environment 
+  variables section for more details.
+- `NVIDIAGPU_CUDA_DEVICE_ORDER`: controls the ordering of CUDA devices. Can also be set
+  at runtime. See Environment variables section for more details.
+- `NVIDIAGPU_CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches to be
+  synchronous. Can also be set at runtime. See Environment variables section
+  for more details.
+
+Environment variables
+^^^^^^^^^^^^^^^^^^^^^
+
+The following environment variables can be set to control CUDA debugging 
+behavior when lldb-server starts:
+
+- `CUDBG_INJECTION_PATH`: path to the CUDA debugger injection library. This
+  specifies which debugger library should be injected into CUDA applications
+  for debugging support. When set, this will be automatically applied when 
+  the NVIDIA GPU plugin initializes.
+
+- `CUDA_VISIBLE_DEVICES`: controls which CUDA devices are visible to the
+  application being debugged. This can be used to restrict debugging to
+  specific GPUs. For example, setting this to "0" will make only GPU 0
+  visible to the debugged application.
+
+- `CUDA_DEVICE_ORDER`: controls the ordering of CUDA devices. Common values
+  are "FASTEST_FIRST" to prioritize faster devices, or "PCI_BUS_ID" to use
+  PCI bus ordering. This affects which device gets which device ID.
+
+- `CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches to be
+  synchronous, which can be helpful for debugging by making kernel execution
+  more predictable and easier to trace.
+
+These environment variables can be set in the shell environment before 
+starting lldb-server.
 
 Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^
