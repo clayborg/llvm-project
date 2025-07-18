@@ -9,6 +9,8 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 
+#include "Coords.h"
+#include "Exceptions.h"
 #include "RegisterContextNVIDIAGPU.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-private-forward.h"
@@ -22,29 +24,6 @@ class NativeProcessLinux;
 /// This class represents a HW thread in a GPU.
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
-  /// This struct represents the physical coordinates of a HW thread in a GPU.
-  struct PhysicalCoords {
-    int64_t dev_id;
-    int64_t sm_id;
-    int64_t warp_id;
-    int64_t lane_id;
-
-    PhysicalCoords();
-
-    PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
-                   int64_t lane_id);
-
-    bool IsValid() const;
-
-    std::string AsThreadName() const;
-  };
-
-  /// This holds the information about an exception and the thread that caused it.
-  struct ExceptionInfo {
-    ThreadNVIDIAGPU::PhysicalCoords physical_coords;
-    CUDBGException_t exception;
-  };
-
   ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
                   PhysicalCoords physical_coords);
 
