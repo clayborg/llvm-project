@@ -330,3 +330,10 @@ RegisterContextNVIDIAGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
   }
   return g_expedited_regs;
 }
+
+std::optional<uint64_t> RegisterContextNVIDIAGPU::ReadErrorPC() {
+  ReadAllRegsFromDevice();
+  if (m_regs_value_is_valid[LLDB_ERROR_PC])
+    return m_regs.regs.errorPC;
+  return std::nullopt;
+}
