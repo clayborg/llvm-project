@@ -60,7 +60,8 @@ void ThreadNVIDIAGPU::SetStoppedByException(ExceptionInfo exception_info) {
 
   m_stop_info.reason = lldb::eStopReasonException;
   m_stop_description =
-      llvm::formatv("CUDA Exception {0}", exception_info.exception);
+      llvm::formatv("CUDA Exception({0}): {1}", exception_info.exception,
+                    CudaExceptionToString(exception_info.exception));
 }
 
 void ThreadNVIDIAGPU::SetStoppedByInitialization() {
