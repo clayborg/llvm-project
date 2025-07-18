@@ -15,6 +15,7 @@
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "llvm/Support/Error.h"
 
+#include <amd-dbgapi/amd-dbgapi.h>
 #include <cinttypes>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
@@ -60,14 +61,15 @@ static amd_dbgapi_status_t amd_dbgapi_insert_breakpoint_callback(
             "insert_breakpoint callback at address: 0x%" PRIx64, address);
   LLDBServerPluginAMDGPU *debugger =
       reinterpret_cast<LLDBServerPluginAMDGPU *>(client_process_id);
-  debugger->GetNativeProcess()->Halt();
-  LLDB_LOGF(GetLog(GDBRLog::Plugin), "insert_breakpoint callback success");
   LLDBServerPluginAMDGPU::GPUInternalBreakpoinInfo bp_info;
   bp_info.addr = address;
   bp_info.breakpoind_id = breakpoint_id;
   debugger->m_gpu_internal_bp.emplace(std::move(bp_info));
-  debugger->m_wait_for_gpu_internal_bp_stop = true;
-  return AMD_DBGAPI_STATUS_SUCCESS;
+  if (debugger->GetGPUProcess()->SetCpuBreakpoint("GPU loader breakpoint", address)) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "insert_breakpoint callback success");
+    return AMD_DBGAPI_STATUS_SUCCESS;
+  }
+  return AMD_DBGAPI_STATUS_ERROR_CLIENT_CALLBACK;
 }
 
 /* remove_breakpoint callback.  */
@@ -572,10 +574,7 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     assert(success);
     if (has_new_libraries) {
       response.actions.wait_for_gpu_process_to_resume = true;
-      auto process = m_gdb_server->GetCurrentProcess();
-      ThreadAMDGPU *thread = (ThreadAMDGPU *)process->GetCurrentThread();
-      thread->SetStopReason(lldb::eStopReasonDynamicLoader);
-      process->Halt();
+      GetGPUProcess()->RequestDynamicLoaderStop();
     }
   }
   return response;

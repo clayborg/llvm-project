@@ -12,6 +12,8 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include <amd-dbgapi/amd-dbgapi.h>
+#include <condition_variable>
+#include <mutex>
 
 namespace lldb_private {
 namespace lldb_server {
@@ -82,14 +84,16 @@ public:
   // Custom accessors
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
+
+  std::optional<GPUActions> GetGPUActions() override;
 
   bool handleWaveStop(amd_dbgapi_event_id_t eventId);
 
   bool handleDebugEvent(amd_dbgapi_event_id_t eventId,
     amd_dbgapi_event_kind_t eventKind);
-  
+
   struct GPUModule {
     std::string path;
     uint64_t base_address;
@@ -103,7 +107,19 @@ public:
 
   GPUModule parseCodeObjectUrl(const std::string &url, uint64_t load_address);
   void AddThread(amd_dbgapi_wave_id_t wave_id);
-  
+
+  // Set a breakpoint with the given name and address. This will cause the
+  // gpu process to enter a fake stopped state and request the breakpoint
+  // to be set through the GPUActions object. The calling thread will block
+  // until the gpu process is resumed and the breakpoint is set.
+  //
+  // Return true if the breakpoint was set successfully, false otherwise.
+  bool SetCpuBreakpoint(llvm::StringRef name, lldb::addr_t addr);
+
+  void RequestStop(lldb::StopReason reason);
+  void RequestDynamicLoaderStop();
+  void RequestFakeStop();
+
   LLDBServerPluginAMDGPU* m_debugger = nullptr;
   std::unordered_map<uintptr_t, GPUModule> m_gpu_modules;
 
@@ -115,6 +131,13 @@ public:
   };
   State m_gpu_state = State::Initializing;
   std::vector<amd_dbgapi_wave_id_t> m_wave_ids;
+  std::optional<GPUBreakpointInfo> m_request_cpu_breakpoint;
+  std::mutex m_gpu_actions_mutex; // Used to wait for GPU actions to complete.
+  std::condition_variable m_gpu_actions_cv;
+  GPUActions m_gpu_actions;
+  int m_gpu_actions_pending = 0;
+  int m_gpu_actions_sent = 0;
+  int m_gpu_actions_handled = 0;
 };
 
 class ProcessManagerAMDGPU : public NativeProcessProtocol::Manager {
@@ -133,7 +156,7 @@ public:
   llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
   Attach(lldb::pid_t pid,
          NativeProcessProtocol::NativeDelegate &native_delegate) override;
-  
+
   LLDBServerPluginAMDGPU* m_debugger = nullptr;
 };
 
