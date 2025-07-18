@@ -182,7 +182,7 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
     return WriteToHostSymbol(bp_args, linux_process, symbol_name, value);
   };
 
-  if (const auto *path = getenv("CUDBG_INJECTION_PATH")) {
+  if (const char *path = getenv("CUDBG_INJECTION_PATH")) {
     if (Error err = write_c_str(Symbols::CUDBG_INJECTION_PATH, path))
       return err;
     char *injection_path = reinterpret_cast<char *>(
@@ -199,7 +199,7 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
 static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda) {
   using CudbgGetAPIFn =
       CUDBGResult (*)(uint32_t, uint32_t, uint32_t, CUDBGAPI *);
-  const auto cudbgGetAPI = reinterpret_cast<CudbgGetAPIFn>(
+  const CudbgGetAPIFn cudbgGetAPI = reinterpret_cast<CudbgGetAPIFn>(
       dlsym(libcuda, Symbols::CUDBG_GET_API.c_str()));
   if (!cudbgGetAPI)
     return createStringErrorFmt("Failed to find symbol {0} in {1}",
