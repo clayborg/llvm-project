@@ -18,8 +18,10 @@
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/Status.h"
-#include "llvm/Support/Error.h"
+#include "llvm/Object/ELF.h"
+#include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Base64.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 using namespace lldb;
@@ -32,30 +34,63 @@ using namespace lldb_private::process_gdb_remote;
 /// ThreadNVIDIAGPU&.
 class NVIDIAGPU::GPUThreadRange {
 public:
+  /// Iterator class that automatically casts to ThreadNVIDIAGPU&.
   class iterator {
   public:
+    /// Constructor for the iterator.
+    ///
+    /// \param[in] it
+    ///     Iterator to the underlying thread container.
     iterator(std::vector<std::unique_ptr<NativeThreadProtocol>>::iterator it)
         : m_it(it) {}
 
+    /// Dereference operator with automatic casting to ThreadNVIDIAGPU&.
+    ///
+    /// \return
+    ///     Reference to ThreadNVIDIAGPU object.
     ThreadNVIDIAGPU &operator*() const {
       return static_cast<ThreadNVIDIAGPU &>(**m_it);
     }
 
+    /// Pre-increment operator.
+    ///
+    /// \return
+    ///     Reference to incremented iterator.
     iterator &operator++() {
       ++m_it;
       return *this;
     }
 
+    /// Equality comparison operator.
+    ///
+    /// \param[in] other
+    ///     Iterator to compare against.
+    ///
+    /// \return
+    ///     True if iterators are equal, false otherwise.
     bool operator!=(const iterator &other) const { return m_it != other.m_it; }
 
   private:
     std::vector<std::unique_ptr<NativeThreadProtocol>>::iterator m_it;
   };
 
+  /// Constructor for the range object.
+  ///
+  /// \param[in] threads
+  ///     Reference to the thread container.
   GPUThreadRange(std::vector<std::unique_ptr<NativeThreadProtocol>> &threads)
       : m_threads(threads) {}
 
+  /// Get iterator to the beginning of the range.
+  ///
+  /// \return
+  ///     Iterator pointing to the first element.
   iterator begin() { return iterator(m_threads.begin()); }
+
+  /// Get iterator to the end of the range.
+  ///
+  /// \return
+  ///     Iterator pointing past the last element.
   iterator end() { return iterator(m_threads.end()); }
 
 private:
@@ -178,7 +213,6 @@ size_t NVIDIAGPU::UpdateThreads() {
 
 const ArchSpec &NVIDIAGPU::GetArchitecture() const { return m_arch; }
 
-// Breakpoint functions
 Status NVIDIAGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                 bool hardware) {
   return Status::FromErrorString("unimplemented");
@@ -227,6 +261,64 @@ NVIDIAGPU::Manager::Attach(
   return llvm::createStringError("Unimplemented function");
 }
 
+/// Parse ELF sections from a cubin and extract load address information.
+///
+/// Analyzes the ELF structure of a CUDA binary (cubin) to extract information
+/// about loaded sections, including their virtual addresses and names. Only
+/// sections with non-zero addresses are included in the result.
+///
+/// \param[in] elf_buffer_ref
+///     Memory buffer reference containing the ELF data to parse.
+///
+/// \return
+///     Vector of GPUSectionInfo structures containing section details.
+static std::vector<GPUSectionInfo>
+GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  std::vector<GPUSectionInfo> loaded_sections;
+
+  llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
+      llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
+  if (!elf_or_err) {
+    logAndReportFatalError(
+        "GetLoadSectionsForCubin(). Failed to parse ELF: {0}",
+        llvm::toString(elf_or_err.takeError()));
+  }
+
+  const llvm::object::ELF64LEFile &elf_file = elf_or_err->getELFFile();
+  llvm::Expected<llvm::object::ELF64LEFile::Elf_Shdr_Range> sections_or_err =
+      elf_file.sections();
+  if (!sections_or_err) {
+    logAndReportFatalError(
+        "GetLoadSectionsForCubin(). Failed to get sections: {0}",
+        llvm::toString(sections_or_err.takeError()));
+  }
+
+  LLDB_LOG(log, "GetLoadSectionsForCubin(). Iterating through ELF sections");
+
+  for (const llvm::object::ELF64LEFile::Elf_Shdr &section : *sections_or_err) {
+    llvm::Expected<llvm::StringRef> name_or_err =
+        elf_file.getSectionName(section);
+
+    // Skip sections that are loaded at address 0 or lack a name
+    if (section.sh_addr == 0 || !name_or_err)
+      continue;
+
+    // For NVIDIA cubin images, section virtual addresses are encoded as
+    // absolute addresses
+    LLDB_LOG(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
+             *name_or_err, section.sh_addr, section.sh_size);
+
+    // Add the section to the loaded sections list
+    GPUSectionInfo section_info;
+    section_info.names.push_back(name_or_err->str());
+    section_info.load_address = section.sh_addr;
+    loaded_sections.push_back(section_info);
+  }
+
+  return loaded_sections;
+}
+
 void NVIDIAGPU::OnElfImageLoaded(
     const CUDBGEvent::cases_st::elfImageLoaded_st &event) {
   const auto &[dev_id, context_id, module_id, elf_image_size, handle,
@@ -242,7 +334,7 @@ void NVIDIAGPU::OnElfImageLoaded(
       dev_id, context_id, module_id, elf_image_size, handle, properties);
 
   // Obtain the elf image
-  auto data_buffer =
+  std::unique_ptr<llvm::WritableMemoryBuffer> data_buffer =
       llvm::WritableMemoryBuffer::getNewUninitMemBuffer(elf_image_size);
   CUDBGResult res = GetCudaAPI().getElfImageByHandle(
       dev_id, handle, CUDBGElfImageType::CUDBG_ELF_IMAGE_TYPE_RELOCATED,
@@ -254,15 +346,16 @@ void NVIDIAGPU::OnElfImageLoaded(
     return;
   }
 
-  // Encode the ELF image data as Base64 for JSON storage
-  llvm::StringRef elf_data_ref(data_buffer->getBufferStart(), elf_image_size);
-  std::shared_ptr<std::string> elf_base64 =
-      std::make_shared<std::string>(llvm::encodeBase64(elf_data_ref));
+  // Create a MemoryBufferRef from the data buffer
+  llvm::MemoryBufferRef elf_buffer_ref(*data_buffer);
 
   GPUDynamicLoaderLibraryInfo lib1;
   lib1.pathname = "cuda_elf_" + std::to_string(handle) + ".cubin";
   lib1.load = true;
-  lib1.elf_image_base64_sp = elf_base64;
+  lib1.elf_image_base64_sp = std::make_shared<std::string>(
+      llvm::encodeBase64(elf_buffer_ref.getBuffer()));
+  // Parse ELF sections to extract load addresses
+  lib1.loaded_sections = GetLoadSectionsForCubin(elf_buffer_ref);
 
   m_unreported_libraries.push_back(lib1);
   m_all_libraries.push_back(lib1);

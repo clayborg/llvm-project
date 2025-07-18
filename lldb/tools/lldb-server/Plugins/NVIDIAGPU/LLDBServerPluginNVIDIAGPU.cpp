@@ -30,6 +30,28 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
+/// Helper function to set environment variables with logging.
+///
+/// Checks if the environment variable already exists and either uses the
+/// existing value or sets it to the specified value.
+///
+/// \param[in] env_var_name
+///     Name of the environment variable to set.
+///
+/// \param[in] cmake_value
+///     Value to use as default.
+///
+/// \param[in] log
+///     Log instance for debug output.
+static void SetEnvVar(const char *env_var_name, const char *value, Log *log) {
+  if (!sys::Process::GetEnv(env_var_name)) {
+    setenv(env_var_name, cmake_value, 1);
+    LLDB_LOG(log, "Set {0}={1}", env_var_name, cmake_value);
+  } else {
+    LLDB_LOG(log, "Using existing {0} from environment", env_var_name);
+  }
+}
+
 LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
     LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop)
     : LLDBServerPlugin(native_process, main_loop) {
@@ -37,7 +59,20 @@ LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
   LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU initializing...");
 
   // We set this variable to avoid JITing, which simplifies module loading.
-  setenv("CUDA_MODULE_LOADING", "EAGER", /*replace=*/0);
+  SetEnvVar("CUDA_MODULE_LOADING", "EAGER", log);
+  // Set environment variables from CMake configuration if they were defined
+#ifdef CMAKE_NVIDIAGPU_CUDBG_INJECTION_PATH
+  SetEnvVar("CUDBG_INJECTION_PATH", CMAKE_NVIDIAGPU_CUDBG_INJECTION_PATH, log);
+#endif
+#ifdef CMAKE_NVIDIAGPU_CUDA_VISIBLE_DEVICES
+  SetEnvVar("CUDA_VISIBLE_DEVICES", CMAKE_NVIDIAGPU_CUDA_VISIBLE_DEVICES, log);
+#endif
+#ifdef CMAKE_NVIDIAGPU_CUDA_DEVICE_ORDER
+  SetEnvVar("CUDA_DEVICE_ORDER", CMAKE_NVIDIAGPU_CUDA_DEVICE_ORDER, log);
+#endif
+#ifdef CMAKE_NVIDIAGPU_CUDA_LAUNCH_BLOCKING
+  SetEnvVar("CUDA_LAUNCH_BLOCKING", CMAKE_NVIDIAGPU_CUDA_LAUNCH_BLOCKING, log);
+#endif
 
   m_process_manager_up.reset(new NVIDIAGPU::Manager(main_loop));
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
