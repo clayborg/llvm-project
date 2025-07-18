@@ -1,5 +1,7 @@
 add_lldb_library(lldbServerPluginNVIDIAGPU
+  Coords.cpp
   CUDADebuggerAPI.cpp
+  Exceptions.cpp
   LLDBServerPluginNVIDIAGPU.cpp
   MainLoopEventNotifier.cpp
   NVIDIAGPU.cpp
