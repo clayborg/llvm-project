@@ -827,8 +827,13 @@ StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
   StreamString response;
   struct ThreadStopInfo tid_stop_info;
   std::string description;
-  if (!thread.GetStopReason(tid_stop_info, description))
-    return response;
+  if (m_fake_stop_reason.has_value()) {
+    tid_stop_info = *m_fake_stop_reason;
+    m_fake_stop_reason = std::nullopt;
+  } else {
+    if (!thread.GetStopReason(tid_stop_info, description))
+      return response;
+  }
 
   // FIXME implement register handling for exec'd inferiors.
   // if (tid_stop_info.reason == eStopReasonExec) {

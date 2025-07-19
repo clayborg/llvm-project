@@ -112,6 +112,8 @@ public:
     return m_current_process;
   }
 
+  std::optional<ThreadStopInfo> m_fake_stop_reason;
+
 protected:
   MainLoop &m_mainloop;
   MainLoop::ReadHandleUP m_network_handle_up;

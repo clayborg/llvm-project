@@ -60,7 +60,10 @@ static amd_dbgapi_status_t amd_dbgapi_insert_breakpoint_callback(
             "insert_breakpoint callback at address: 0x%" PRIx64, address);
   LLDBServerPluginAMDGPU *debugger =
       reinterpret_cast<LLDBServerPluginAMDGPU *>(client_process_id);
-  debugger->GetNativeProcess()->Halt();
+  bool was_halted = false;
+  ThreadStopInfo stop_info;
+  stop_info.reason = eStopReasonDynamicLoader;
+  debugger->HaltNativeProcessIfNeeded(was_halted, 5, stop_info);
   LLDB_LOGF(GetLog(GDBRLog::Plugin), "insert_breakpoint callback success");
   LLDBServerPluginAMDGPU::GPUInternalBreakpoinInfo bp_info;
   bp_info.addr = address;

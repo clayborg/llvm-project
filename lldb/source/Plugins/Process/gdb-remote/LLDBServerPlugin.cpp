@@ -21,15 +21,17 @@ LLDBServerPlugin::LLDBServerPlugin(GDBServer &native_process, MainLoop &main_loo
 LLDBServerPlugin::~LLDBServerPlugin() {}
 
 
-lldb::StateType 
-LLDBServerPlugin::HaltNativeProcessIfNeeded(bool &was_halted, 
-                                            uint32_t timeout_sec) {
+lldb::StateType
+LLDBServerPlugin::HaltNativeProcessIfNeeded(bool &was_halted,
+                                            uint32_t timeout_sec,
+                                            std::optional<ThreadStopInfo> stop_info) {
   using namespace std::chrono;
   NativeProcessProtocol *process = m_native_process.GetCurrentProcess();
   if (process->IsRunning()) {
     was_halted = true;
     process->Halt();
- 
+    m_native_process.m_fake_stop_reason = stop_info;
+
     auto end_time = steady_clock::now() + seconds(timeout_sec);
     while (std::chrono::steady_clock::now() < end_time) {
       std::this_thread::sleep_for(milliseconds(250));

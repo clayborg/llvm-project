@@ -67,7 +67,8 @@ public:
   /// \return The actual state of the process in case the process was not able
   /// to be stopped within the specified timeout.
   lldb::StateType HaltNativeProcessIfNeeded(bool &was_halted,
-                                            uint32_t timeout_sec = 5);
+                                            uint32_t timeout_sec = 5,
+                                            std::optional<ThreadStopInfo> stop_reason = std::nullopt);
 
   /// Get notified when the process is stopping.
   ///
