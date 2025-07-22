@@ -298,8 +298,15 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
     llvm::Expected<llvm::StringRef> name_or_err =
         elf_file.getSectionName(section);
 
-    // Skip sections that are loaded at address 0 or lack a name
-    if (section.sh_addr == 0 || !name_or_err)
+    if (!name_or_err) {
+      LLDB_LOG(log,
+               "GetLoadSectionsForCubin(). Failed to get section name: {0}",
+               llvm::toString(name_or_err.takeError()));
+      continue;
+    }
+
+    // Sections with 0 as load address shouldn't be "loaded".
+    if (section.sh_addr == 0)
       continue;
 
     // For NVIDIA cubin images, section virtual addresses are encoded as
