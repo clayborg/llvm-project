@@ -93,10 +93,9 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
         if (exception != CUDBGException_t::CUDBG_EXCEPTION_NONE) {
           physical_coords = PhysicalCoords(dev_id, sm_id, wp, ln);
           LLDB_LOG(log,
-                   "Exception {0} found at dev_id: {1}, sm_id: {2}, wp: "
-                   "{3}, ln: {4}",
-                   exception, physical_coords.dev_id, physical_coords.sm_id,
-                   physical_coords.warp_id, physical_coords.lane_id);
+                   "Exception {0} found at {1}", exception,
+                   physical_coords.Dump());
+
           return ExceptionInfo{physical_coords, exception};
         }
       }
