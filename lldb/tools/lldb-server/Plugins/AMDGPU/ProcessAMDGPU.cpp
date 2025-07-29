@@ -97,7 +97,7 @@ size_t ProcessAMDGPU::UpdateThreads() {
 }
 
 const ArchSpec &ProcessAMDGPU::GetArchitecture() const {
-  m_arch = ArchSpec("amdgpu");
+  m_arch = ArchSpec("amdgcn-amd-amdhsa");
   return m_arch;
 }
 

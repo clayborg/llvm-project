@@ -63,6 +63,8 @@ DisassemblerSP Disassembler::FindPlugin(const ArchSpec &arch,
                      arch.GetArchitectureName(), plugin_name);
 
   DisassemblerCreateInstance create_callback = nullptr;
+  if (arch.GetTriple().getArch() == llvm::Triple::amdgcn)
+    cpu = "gfx942";
 
   if (plugin_name) {
     create_callback =
@@ -94,6 +96,8 @@ DisassemblerSP Disassembler::FindPluginForTarget(
         arch.GetTriple().getArch() == llvm::Triple::x86_64)
       flavor = target.GetDisassemblyFlavor();
   }
+  if (arch.GetTriple().getArch() == llvm::Triple::amdgcn)
+    cpu = "gfx942";
   if (!cpu)
     cpu = target.GetDisassemblyCPU();
   if (!features)
