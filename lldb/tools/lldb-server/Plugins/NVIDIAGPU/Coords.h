@@ -33,6 +33,10 @@ struct PhysicalCoords {
   //    A string representation of the coordinates that can be used to name a
   //    thread.
   std::string AsThreadName() const;
+
+  /// \return
+  //    A string representation of the coordinates used for logging.
+  std::string Dump() const;
 };
 } // namespace lldb_private::lldb_server
 
