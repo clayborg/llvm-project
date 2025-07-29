@@ -41,6 +41,7 @@ using namespace llvm;
 enum LLDBRegNum : uint32_t {
   LLDB_PC = 0,
   LLDB_ERROR_PC,
+  LLDB_RA,
   EXPAND_R_REGISTERS(LLDB),
   kNumRegs,
 };
@@ -53,6 +54,7 @@ enum LLDBRegNum : uint32_t {
 enum DWARFRegNum : uint32_t {
   DWARF_PC = 128,
   DWARF_ERROR_PC,
+  DWARF_RA,
   EXPAND_R_REGISTERS(DWARF),
 };
 
@@ -65,11 +67,12 @@ enum DWARFRegNum : uint32_t {
 enum CompilerRegNum : uint32_t {
   EH_FRAME_PC = 1000,
   EH_FRAME_ERROR_PC,
+  EH_FRAME_RA,
   EXPAND_R_REGISTERS(EH_FRAME),
 };
 
-static uint32_t g_gpr_regnums[] = {
-    LLDB_PC,  LLDB_ERROR_PC, EXPAND_R_REGISTERS(LLDB)};
+static uint32_t g_gpr_regnums[] = {LLDB_PC, LLDB_ERROR_PC, LLDB_RA,
+                                   EXPAND_R_REGISTERS(LLDB)};
 
 static const RegisterSet g_reg_sets[] = {
     {"General Purpose Registers", "gpr",
@@ -163,7 +166,27 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
-    // The number of elements in this list must match kNumRRegs.
+    {
+        "RA",             // RegisterInfo::alt_name
+        "R20-21",         // RegisterInfo::name
+        8,                // RegisterInfo::byte_size
+        R_REG_OFFSET(20), // RegisterInfo::byte_offset
+        eEncodingUint,    // RegisterInfo::encoding
+        eFormatHex,       // RegisterInfo::format
+        {
+            // RegisterInfo::kinds[]
+            EH_FRAME_RA,            // RegisterInfo::kinds[eRegisterKindEHFrame]
+            DWARF_RA,               // RegisterInfo::kinds[eRegisterKindDWARF]
+            LLDB_REGNUM_GENERIC_RA, // RegisterInfo::kinds[eRegisterKindGeneric]
+            LLDB_RA, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
+            LLDB_RA  // RegisterInfo::kinds[eRegisterKindLLDB]
+        },
+        nullptr, // RegisterInfo::value_regs
+        nullptr, // RegisterInfo::invalidate_regs
+        nullptr, // RegisterInfo::flags_type
+    },
+    // The number of elements in this list must match
+    // kNumRRegs.
     GENERATE_R_REGISTER_INFO(2),
     GENERATE_R_REGISTER_INFO(3),
     GENERATE_R_REGISTER_INFO(4),
@@ -274,6 +297,9 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   for (size_t i = 0; i < num_regs; ++i)
     regs.is_valid.R[i] = true;
 
+  if (regs.is_valid.R[20] && regs.is_valid.R[21])
+    regs.is_valid.RA = true;
+
   return regs;
 }
 
@@ -311,6 +337,9 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
   } else if (reg_num == LLDB_ERROR_PC) {
     if (!regs.is_valid.errorPC)
       return Status("errorPC register is invalid");
+  } else if (reg_num == LLDB_RA) {
+    if (!regs.is_valid.RA)
+      return Status("RA register is invalid");
   } else {
     int r_index = reg_num - LLDB_R0;
 
@@ -351,6 +380,7 @@ RegisterContextNVIDIAGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
   if (g_expedited_regs.empty()) {
     g_expedited_regs.push_back(LLDB_PC);
     g_expedited_regs.push_back(LLDB_ERROR_PC);
+    g_expedited_regs.push_back(LLDB_RA);
     g_expedited_regs.insert(g_expedited_regs.end(), {EXPAND_R_REGISTERS(LLDB)});
   }
   return g_expedited_regs;
