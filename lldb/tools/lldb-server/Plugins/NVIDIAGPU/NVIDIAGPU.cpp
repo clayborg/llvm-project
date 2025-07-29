@@ -311,7 +311,7 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
 
     // For NVIDIA cubin images, section virtual addresses are encoded as
     // absolute addresses
-    LLDB_LOG(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
+    LLDB_LOGV(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
              *name_or_err, section.sh_addr, section.sh_size);
 
     // Add the section to the loaded sections list
