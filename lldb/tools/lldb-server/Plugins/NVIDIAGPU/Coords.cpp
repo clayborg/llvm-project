@@ -42,3 +42,8 @@ std::string PhysicalCoords::AsThreadName() const {
     return llvm::formatv("GPU Thread ({0}, {1}, {2})", sm_id, warp_id, lane_id);
   return "NVIDIA GPU";
 }
+
+std::string PhysicalCoords::Dump() const {
+  return llvm::formatv("dev_id = {0} sm_id = {1} warp_id = {2} lane_id = {3}",
+                       dev_id, sm_id, warp_id, lane_id);
+}
