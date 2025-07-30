@@ -10,22 +10,23 @@
 #define LLDB_TOOLS_LLDB_SERVER_PROCESSNVIDIAGPU_H
 
 #include "CUDADebuggerAPI.h"
-#include "MainLoopEventNotifier.h"
+#include "DeviceInformation.h"
 #include "ThreadNVIDIAGPU.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/ProcessInfo.h"
 
 #include "cudadebugger.h"
+#include <unordered_map>
 
 namespace lldb_private::lldb_server {
 
 /// Manages GPU process debugging and thread execution state.
 ///
 /// This class manages all the threads in the GPU, its memory, and its overall
-/// state. It extends NativeProcessProtocol, which was meant for CPU processes,
-/// but fortunately it provides most of the abstractions we need to manage
-/// the GPU.
+/// state. It extends NativeProcessProtocol, which was meant for CPU
+/// processes, but fortunately it provides most of the abstractions we need to
+/// manage the GPU.
 class NVIDIAGPU : public NativeProcessProtocol {
 public:
   /// Forward declaration of helper class for thread iteration.
@@ -64,8 +65,8 @@ public:
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
-  /// Resume the GPU, change its state and the state of each thread, then report
-  /// the state change to the delegate, which will notify the client.
+  /// Resume the GPU, change its state and the state of each thread, then
+  /// report the state change to the delegate, which will notify the client.
   ///
   /// \param[in] resume_actions
   ///     List of resume actions to apply to threads.
@@ -158,8 +159,8 @@ public:
   /// Get the address of shared library information structure.
   ///
   /// \return
-  ///     Address of the shared library info structure, or LLDB_INVALID_ADDRESS
-  ///     if not available.
+  ///     Address of the shared library info structure, or
+  ///     LLDB_INVALID_ADDRESS if not available.
   lldb::addr_t GetSharedLibraryInfoAddress() override;
 
   /// Create or update the list of ThreadNVIDIAGPU objects of the GPU.
@@ -258,7 +259,8 @@ public:
   /// requested.
   ///
   /// Check whether new CUDA binary files (cubins) have been loaded since
-  /// the last query, indicating that dynamic libraries may need to be reported.
+  /// the last query, indicating that dynamic libraries may need to be
+  /// reported.
   ///
   /// \return
   ///     True if unreported libraries exist, false otherwise.
@@ -290,6 +292,9 @@ public:
   /// This creates a temporary stop state to allow the client to process
   /// dynamic library changes without actually halting GPU execution.
   void ReportDyldStop();
+
+  /// \return the DeviceInformation object for the given device id.
+  DeviceInformation &GetDeviceInformation(int device_id);
 
 private:
   friend class Manager;
@@ -324,8 +329,8 @@ private:
 
   /// The list of all the cubins loaded by the GPU.
   std::vector<GPUDynamicLoaderLibraryInfo> m_all_libraries;
-  /// The list of all the cubins loaded by the GPU that haven't been reported to
-  /// the client yet.
+  /// The list of all the cubins loaded by the GPU that haven't been reported
+  /// to the client yet.
   std::vector<GPUDynamicLoaderLibraryInfo> m_unreported_libraries;
 
   /// A flag that indicates that we are faking a stop to the client to report
@@ -333,6 +338,9 @@ private:
   /// we stop processing more APU events until we have resumed after the dyld
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
+
+  /// A map of device id to DeviceInformation object.
+  std::unordered_map<int, DeviceInformation> m_device_information;
 };
 
 } // namespace lldb_private::lldb_server
