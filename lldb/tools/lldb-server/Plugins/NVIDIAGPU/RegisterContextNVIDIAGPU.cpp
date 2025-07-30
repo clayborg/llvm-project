@@ -275,16 +275,12 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
     }
   }
 
-  uint32_t num_regs = 0;
-  CUDBGResult res = api->getNumRegisters(physical_coords.dev_id, &num_regs);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
-                           "getNumRegisters failed: {0}",
-                           cudbgGetErrorString(res));
-  }
-  num_regs = std::min((int)num_regs, (int)kNumRRegs);
+  DeviceInformation &device_info =
+      GetGPUThread().GetGPU().GetDeviceInformation(physical_coords.dev_id);
+  size_t num_regs = device_info.GetNumRRegisters();
+  num_regs = std::min(num_regs, kNumRRegs);
 
-  res = api->readRegisterRange(physical_coords.dev_id, physical_coords.sm_id,
+  CUDBGResult res = api->readRegisterRange(physical_coords.dev_id, physical_coords.sm_id,
                                physical_coords.warp_id, physical_coords.lane_id,
                                0, num_regs, regs.val.R);
 

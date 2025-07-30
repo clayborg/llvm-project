@@ -205,9 +205,7 @@ lldb::addr_t NVIDIAGPU::GetSharedLibraryInfoAddress() {
   return LLDB_INVALID_ADDRESS;
 }
 
-size_t NVIDIAGPU::UpdateThreads() {
-  return m_threads.size();
-}
+size_t NVIDIAGPU::UpdateThreads() { return m_threads.size(); }
 
 const ArchSpec &NVIDIAGPU::GetArchitecture() const { return m_arch; }
 
@@ -312,7 +310,7 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
     // For NVIDIA cubin images, section virtual addresses are encoded as
     // absolute addresses
     LLDB_LOGV(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
-             *name_or_err, section.sh_addr, section.sh_size);
+              *name_or_err, section.sh_addr, section.sh_size);
 
     // Add the section to the loaded sections list
     GPUSectionInfo section_info;
@@ -386,11 +384,11 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
   // The following code path assumes that the stop event is triggered by an
   // exception. At some point we'll need to generalize this.
-  std::optional<ExceptionInfo> exception_info = FindExceptionInfo(this->GetCudaAPI());
-  if (!exception_info) 
+  std::optional<ExceptionInfo> exception_info =
+      FindExceptionInfo(this->GetCudaAPI());
+  if (!exception_info)
     logAndReportFatalError(
         "NVIDIAGPU::OnAllDevicesSuspended(). Non-exception stop unsupported");
-  
 
   // We don't yet handle multiple threads, so we use the only one we have.
   ThreadNVIDIAGPU &thread = *GPUThreads().begin();
@@ -426,4 +424,10 @@ const CUDBGAPI_st &NVIDIAGPU::GetCudaAPI() {
                            "not initialized");
   }
   return *m_api;
+}
+
+DeviceInformation &NVIDIAGPU::GetDeviceInformation(int device_id) {
+  auto [it, inserted] =
+      m_device_information.try_emplace(device_id, GetCudaAPI(), device_id);
+  return it->second;
 }
