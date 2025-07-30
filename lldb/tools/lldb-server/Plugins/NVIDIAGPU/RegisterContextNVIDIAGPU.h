@@ -13,23 +13,35 @@
 #include "lldb/Host/common/NativeRegisterContext.h"
 #include "lldb/lldb-forward.h"
 
-#include <bitset>
-
 namespace lldb_private::lldb_server {
 
 class ThreadNVIDIAGPU;
 
+static constexpr size_t kNumRRegs = 32;
+
+/// Store all the registers for a single thread.
+struct ThreadRegistersValues {
+  uint64_t PC;
+  uint64_t errorPC;
+  uint32_t R[kNumRRegs];
+};
+
+/// Store the validity of the registers.
+struct ThreadRegisterValidity {
+  bool PC;
+  bool errorPC;
+  bool R[kNumRRegs];
+
+  ThreadRegisterValidity();
+};
+
+struct ThreadRegistersWithValidity {
+  ThreadRegisterValidity is_valid;
+  ThreadRegistersValues val;
+};
+
 class RegisterContextNVIDIAGPU : public NativeRegisterContext {
 public:
-  /// Only PC and errorPC are 64-bit, all the R registers are 32-bit, but we
-  /// store them in a 64-bit array for simplicity.
-  struct RegisterContext {
-    int64_t PC;
-    int64_t errorPC;
-    int64_t SP; // r1
-    int64_t FP; // r2
-  };
-
   RegisterContextNVIDIAGPU(ThreadNVIDIAGPU &thread);
 
   uint32_t GetRegisterCount() const override;
@@ -65,19 +77,13 @@ private:
   /// Read the registers from the device. The results are cached. Any failures
   /// to read individual registers are signaled in invalid states of the
   /// registers.
-  void ReadAllRegsFromDevice();
+  const ThreadRegistersWithValidity &ReadAllRegsFromDevice();
 
   CUDBGAPI GetDebuggerAPI();
 
   ThreadNVIDIAGPU &GetGPUThread();
 
-  union {
-    int64_t data[sizeof(RegisterContext) / sizeof(int64_t)]; // Allow for indexed access.
-    RegisterContext regs;
-  } m_regs;
-
-  std::bitset<sizeof(RegisterContext) / sizeof(int64_t)> m_regs_value_is_valid;
-  bool m_did_read_already;
+  std::optional<ThreadRegistersWithValidity> m_regs;
 };
 
 } // namespace lldb_private::lldb_server
