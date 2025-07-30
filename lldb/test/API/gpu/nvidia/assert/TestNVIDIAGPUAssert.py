@@ -35,6 +35,10 @@ class TestNVIDIAGPUAssert(TestBase):
         errorpc = gpu.process.thread[0].frame[0].FindRegister("errorpc").GetValueAsAddress()
         self.assertEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
 
+        # We check we can read up to register R31.
+        self.assertTrue(gpu.process.thread[0].frame[0].FindRegister("R31").IsValid())
+        self.assertFalse(gpu.process.thread[0].frame[0].FindRegister("R32").IsValid())
+
     def test_cubin_sections_have_load_addresses(self):
         """Test that all executable text sections of all cubins have a load address."""
         self.build()
