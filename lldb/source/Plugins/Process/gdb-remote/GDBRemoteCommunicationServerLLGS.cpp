@@ -43,8 +43,8 @@
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "lldb/Utility/UriParser.h"
-#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/TargetParser/Triple.h"
@@ -105,12 +105,12 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType__m,
                                 &GDBRemoteCommunicationServerLLGS::Handle__m);
   RegisterMemberFunctionHandler(
-    StringExtractorGDBRemote::eServerPacketType_qMemRead,
-    &GDBRemoteCommunicationServerLLGS::Handle_qMemRead);
+      StringExtractorGDBRemote::eServerPacketType_qMemRead,
+      &GDBRemoteCommunicationServerLLGS::Handle_qMemRead);
   RegisterMemberFunctionHandler(
-    StringExtractorGDBRemote::eServerPacketType_jAddressSpacesInfo,
-    &GDBRemoteCommunicationServerLLGS::Handle_jAddressSpacesInfo);
-                                
+      StringExtractorGDBRemote::eServerPacketType_jAddressSpacesInfo,
+      &GDBRemoteCommunicationServerLLGS::Handle_jAddressSpacesInfo);
+
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType_p,
                                 &GDBRemoteCommunicationServerLLGS::Handle_p);
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType_P,
@@ -4096,9 +4096,9 @@ GDBRemoteCommunicationServerLLGS::Handle_jAddressSpacesInfo(
         log,
         "GDBRemoteCommunicationServerLLGS::%s failed, no process available",
         __FUNCTION__);
-    return SendErrorResponse(Status::FromErrorString("invalid process"));        
+    return SendErrorResponse(Status::FromErrorString("invalid process"));
   }
-  std::vector<AddressSpaceInfo> address_spaces = 
+  std::vector<AddressSpaceInfo> address_spaces =
       m_current_process->GetAddressSpaces();
   if (address_spaces.empty())
     return SendUnimplementedResponse(packet.GetStringRef().data());
@@ -4119,7 +4119,7 @@ GDBRemoteCommunicationServerLLGS::Handle_qMemRead(
         log,
         "GDBRemoteCommunicationServerLLGS::%s failed, no process available",
         __FUNCTION__);
-    return SendErrorResponse(Status::FromErrorString("invalid process"));        
+    return SendErrorResponse(Status::FromErrorString("invalid process"));
   }
 
   // We are expecting
@@ -4155,8 +4155,7 @@ GDBRemoteCommunicationServerLLGS::Handle_qMemRead(
         return SendIllFormedResponse(packet, "invalid tid value");
       thread = m_current_process->GetThreadByID(uval64);
       if (!thread)
-        return SendErrorResponse(
-            Status::FromErrorString("Invalid thread ID"));
+        return SendErrorResponse(Status::FromErrorString("Invalid thread ID"));
     }
   }
 
@@ -4171,10 +4170,8 @@ GDBRemoteCommunicationServerLLGS::Handle_qMemRead(
   size_t bytes_read = 0;
   std::string buf(*length, '\0');
 
-  Status error = m_current_process->ReadMemoryWithSpace(*addr, 
-                                                        space.value_or(0), 
-                                                        thread, buf.data(), 
-                                                        *length, bytes_read);
+  Status error = m_current_process->ReadMemoryWithSpace(
+      *addr, space.value_or(0), thread, buf.data(), *length, bytes_read);
   if (error.Fail())
     return SendErrorResponse(error);
 
