@@ -5079,6 +5079,7 @@ bool ParseRegisters(
                       .Case("vector-float32", eFormatVectorOfFloat32)
                       .Case("vector-uint64", eFormatVectorOfUInt64)
                       .Case("vector-uint128", eFormatVectorOfUInt128)
+                      .Case("address-info", eFormatAddressInfo)
                       .Default(eFormatInvalid);
           } else if (name == "group_id") {
             uint32_t set_id = UINT32_MAX;

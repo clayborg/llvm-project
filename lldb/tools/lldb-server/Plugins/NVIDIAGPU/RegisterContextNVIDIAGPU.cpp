@@ -99,12 +99,12 @@ static const RegisterSet g_reg_sets[] = {
 /// are accessed by the LLDB register numbers, which are defined above.
 static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
     {
-        "PC",           // RegisterInfo::name
-        nullptr,        // RegisterInfo::alt_name
-        8,              // RegisterInfo::byte_size
-        REG_OFFSET(PC), // RegisterInfo::byte_offset
-        eEncodingUint,  // RegisterInfo::encoding
-        eFormatHex,     // RegisterInfo::format
+        "PC",               // RegisterInfo::name
+        nullptr,            // RegisterInfo::alt_name
+        8,                  // RegisterInfo::byte_size
+        REG_OFFSET(PC),     // RegisterInfo::byte_offset
+        eEncodingUint,      // RegisterInfo::encoding
+        eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
             EH_FRAME_PC,            // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -123,7 +123,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         8,                   // RegisterInfo::byte_size
         REG_OFFSET(errorPC), // RegisterInfo::byte_offset
         eEncodingUint,       // RegisterInfo::encoding
-        eFormatHex,          // RegisterInfo::format
+        eFormatAddressInfo,  // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
             EH_FRAME_ERROR_PC,   // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -137,12 +137,12 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     {
-        "RA",             // RegisterInfo::alt_name
-        "R[20-21]",       // RegisterInfo::name
-        8,                // RegisterInfo::byte_size
-        R_REG_OFFSET(20), // RegisterInfo::byte_offset
-        eEncodingUint,    // RegisterInfo::encoding
-        eFormatHex,       // RegisterInfo::format
+        "RA",               // RegisterInfo::alt_name
+        "R[20-21]",         // RegisterInfo::name
+        8,                  // RegisterInfo::byte_size
+        R_REG_OFFSET(20),   // RegisterInfo::byte_offset
+        eEncodingUint,      // RegisterInfo::encoding
+        eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
             EH_FRAME_RA,            // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -156,12 +156,12 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     {
-        "SP",            // RegisterInfo::name
-        "R[0]",          // RegisterInfo::alt_name
-        4,               // RegisterInfo::byte_size
-        R_REG_OFFSET(0), // RegisterInfo::byte_offset
-        eEncodingUint,   // RegisterInfo::encoding
-        eFormatHex,      // RegisterInfo::format
+        "SP",               // RegisterInfo::name
+        "R[0]",             // RegisterInfo::alt_name
+        4,                  // RegisterInfo::byte_size
+        R_REG_OFFSET(0),    // RegisterInfo::byte_offset
+        eEncodingUint,      // RegisterInfo::encoding
+        eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
             EH_FRAME_SP,            // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -175,12 +175,12 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     {
-        "FP",            // RegisterInfo::name
-        "R[1]",          // RegisterInfo::alt_name
-        4,               // RegisterInfo::byte_size
-        R_REG_OFFSET(1), // RegisterInfo::byte_offset
-        eEncodingUint,   // RegisterInfo::encoding
-        eFormatHex,      // RegisterInfo::format
+        "FP",               // RegisterInfo::name
+        "R[1]",             // RegisterInfo::alt_name
+        4,                  // RegisterInfo::byte_size
+        R_REG_OFFSET(1),    // RegisterInfo::byte_offset
+        eEncodingUint,      // RegisterInfo::encoding
+        eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
             EH_FRAME_FP,            // RegisterInfo::kinds[eRegisterKindEHFrame]
