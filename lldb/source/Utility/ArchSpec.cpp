@@ -250,7 +250,7 @@ static const CoreDefinition g_core_definitions[] = {
      "wasm32"},
     {eByteOrderLittle, 4, 4, 4, llvm::Triple::r600, 
       ArchSpec::eCore_amd_gpu_r600,"r600"},
-    {eByteOrderLittle, 8, 4, 4, llvm::Triple::amdgcn, 
+    {eByteOrderLittle, 8, 4, 24, llvm::Triple::amdgcn,
       ArchSpec::eCore_amd_gpu_gcn, "amdgcn"},
     {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx, 
       ArchSpec::eCore_nvidia_nvptx,"nvptx"},
