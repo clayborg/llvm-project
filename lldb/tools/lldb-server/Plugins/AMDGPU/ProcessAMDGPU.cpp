@@ -16,6 +16,7 @@
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "llvm/Support/Error.h"
+#include "llvm/BinaryFormat/ELF.h"
 
 #include <cinttypes>
 #include <iostream>
@@ -97,7 +98,10 @@ size_t ProcessAMDGPU::UpdateThreads() {
 }
 
 const ArchSpec &ProcessAMDGPU::GetArchitecture() const {
-  m_arch = ArchSpec("amdgpu");
+  // TODO: Read this from the dbgapi: amd_dbgapi_architecture_get_info(AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE)
+  uint32_t cpu_subtype = llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX942;
+  m_arch = ArchSpec(eArchTypeELF, llvm::ELF::EM_AMDGPU, cpu_subtype);
+  m_arch.MergeFrom(ArchSpec("amdgcn-amd-amdhsa"));
   return m_arch;
 }
 

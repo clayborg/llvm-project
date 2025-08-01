@@ -236,8 +236,8 @@ public:
 
     eCore_wasm32,
 
-    eCore_amd_gpu_r600,
-    eCore_amd_gpu_gcn,
+    // TODO: Add remaining entries from Elf.h (e.g. EF_AMDGPU_MACH_AMDGCN_GFX600)
+    eCore_amdgcn_gfx942,
 
     eCore_nvidia_nvptx,
     eCore_nvidia_nvptx64,
@@ -450,6 +450,10 @@ public:
   uint32_t GetMachOCPUType() const;
 
   uint32_t GetMachOCPUSubType() const;
+
+  uint32_t GetAMDGPUCPUType() const;
+
+  uint32_t GetAMDGPUCPUSubType() const;
 
   /// Architecture data byte width accessor
   ///
