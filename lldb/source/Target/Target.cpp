@@ -4551,7 +4551,17 @@ const char *TargetProperties::GetDisassemblyCPU() const {
   const uint32_t idx = ePropertyDisassemblyCPU;
   llvm::StringRef str = GetPropertyAtIndexAs<llvm::StringRef>(
       idx, g_target_properties[idx].default_cstr_value);
-  return str.empty() ? nullptr : str.data();
+
+  // If the user has an explict setting, then use that.
+  if (!str.empty())
+    return str.data();
+
+  // Next, check if the architecture has a default CPU setting.
+  std::string cpu = m_target->GetArchitecture().GetClangTargetCPU();
+  if (!cpu.empty())
+    return ConstString(cpu).GetCString();
+
+  return nullptr;
 }
 
 const char *TargetProperties::GetDisassemblyFeatures() const {

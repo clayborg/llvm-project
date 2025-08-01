@@ -686,6 +686,9 @@ std::string ArchSpec::GetClangTargetCPU() const {
 
   if (GetTriple().isARM())
     cpu = llvm::ARM::getARMCPUForArch(GetTriple(), "").str();
+
+  if (GetTriple().isAMDGCN())
+    cpu = "gfx942";
   return cpu;
 }
 
