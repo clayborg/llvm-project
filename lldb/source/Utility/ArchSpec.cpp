@@ -248,11 +248,9 @@ static const CoreDefinition g_core_definitions[] = {
 
     {eByteOrderLittle, 4, 1, 4, llvm::Triple::wasm32, ArchSpec::eCore_wasm32,
      "wasm32"},
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::r600, 
-      ArchSpec::eCore_amd_gpu_r600,"r600"},
     {eByteOrderLittle, 8, 4, 24, llvm::Triple::amdgcn,
-      ArchSpec::eCore_amd_gpu_gcn, "amdgcn"},
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx, 
+      ArchSpec::eCore_amdgcn_gfx942, "gfx942"},
+    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx,
       ArchSpec::eCore_nvidia_nvptx,"nvptx"},
     {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64, 
       ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
@@ -446,7 +444,7 @@ static const ArchDefinitionEntry g_elf_arch_entries[] = {
     // structures so we can tell r600 from gcn
     // {ArchSpec::eCore_amd_gpu_r600, llvm::ELF::EM_AMDGPU, LLDB_INVALID_CPUTYPE,
     //  0xFFFFFFFFu, 0xFFFFFFFFu},
-    {ArchSpec::eCore_amd_gpu_gcn, llvm::ELF::EM_AMDGPU, LLDB_INVALID_CPUTYPE,
+    {ArchSpec::eCore_amdgcn_gfx942, llvm::ELF::EM_AMDGPU, llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX942,
      0xFFFFFFFFu, 0xFFFFFFFFu},
     {ArchSpec::eCore_nvidia_nvptx, llvm::ELF::EM_CUDA, LLDB_INVALID_CPUTYPE,
      0xFFFFFFFFu, 0xFFFFFFFFu},
@@ -687,8 +685,15 @@ std::string ArchSpec::GetClangTargetCPU() const {
   if (GetTriple().isARM())
     cpu = llvm::ARM::getARMCPUForArch(GetTriple(), "").str();
 
-  if (GetTriple().isAMDGCN())
-    cpu = "gfx942";
+  if (GetTriple().isAMDGPU()) {
+    switch (m_core) {
+      case ArchSpec::eCore_amdgcn_gfx942:
+        cpu = "gfx942";
+        break;
+      default:
+        break;
+    }
+  }
   return cpu;
 }
 
@@ -709,6 +714,30 @@ uint32_t ArchSpec::GetMachOCPUSubType() const {
   if (core_def) {
     const ArchDefinitionEntry *arch_def =
         FindArchDefinitionEntry(&g_macho_arch_def, core_def->core);
+    if (arch_def) {
+      return arch_def->sub;
+    }
+  }
+  return LLDB_INVALID_CPUTYPE;
+}
+
+uint32_t ArchSpec::GetAMDGPUCPUType() const {
+  const CoreDefinition *core_def = FindCoreDefinition(m_core);
+  if (core_def) {
+    const ArchDefinitionEntry *arch_def =
+        FindArchDefinitionEntry(&g_elf_arch_def, core_def->core);
+    if (arch_def) {
+      return arch_def->cpu;
+    }
+  }
+  return LLDB_INVALID_CPUTYPE;
+}
+
+uint32_t ArchSpec::GetAMDGPUCPUSubType() const {
+  const CoreDefinition *core_def = FindCoreDefinition(m_core);
+  if (core_def) {
+    const ArchDefinitionEntry *arch_def =
+        FindArchDefinitionEntry(&g_elf_arch_def, core_def->core);
     if (arch_def) {
       return arch_def->sub;
     }
