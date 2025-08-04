@@ -50,7 +50,7 @@ void ThreadNVIDIAGPU::SetStoppedByDynamicLoader() {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByDynamicLoader()");
   SetStopped();
 
-  m_stop_info.reason = lldb::eStopReasonDynammicLoader;
+  m_stop_info.reason = lldb::eStopReasonDynamicLoader;
   m_stop_description = "NVIDIA GPU Thread Stopped by Dynamic Loader";
 }
 
@@ -71,7 +71,7 @@ void ThreadNVIDIAGPU::SetStoppedByInitialization() {
            "ThreadNVIDIAGPU::SetStoppedByInitialization()");
   SetStopped();
 
-  m_stop_info.reason = lldb::eStopReasonDynammicLoader;
+  m_stop_info.reason = lldb::eStopReasonDynamicLoader;
   m_stop_description = "NVIDIA GPU is initializing";
 }
 
