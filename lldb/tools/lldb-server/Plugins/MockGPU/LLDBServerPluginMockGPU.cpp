@@ -18,7 +18,6 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
-#include <thread>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -95,41 +94,6 @@ bool LLDBServerPluginMockGPU::HandleEventFileDescriptorEvent(int fd) {
   return false;
 }
 
-void LLDBServerPluginMockGPU::AcceptAndMainLoopThread(
-    std::unique_ptr<TCPSocket> listen_socket_up) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGF(log, "%s spawned", __PRETTY_FUNCTION__);
-  Socket *socket = nullptr;
-  Status error = listen_socket_up->Accept(std::chrono::seconds(30), socket);
-  // Scope for lock guard.
-  {
-    // Protect access to m_is_listening and m_is_connected.
-    std::lock_guard<std::mutex> guard(m_connect_mutex);
-    m_is_listening = false;
-    if (error.Fail()) {
-      LLDB_LOGF(log, "%s error returned from Accept(): %s", __PRETTY_FUNCTION__, 
-                error.AsCString());  
-      return;
-    }
-    m_is_connected = true;
-  }
-
-  LLDB_LOGF(log, "%s initializing connection", __PRETTY_FUNCTION__);
-  std::unique_ptr<Connection> connection_up(
-      new ConnectionFileDescriptor(std::unique_ptr<Socket>(socket)));
-  m_gdb_server->InitializeConnection(std::move(connection_up));
-  LLDB_LOGF(log, "%s running main loop", __PRETTY_FUNCTION__);
-  m_main_loop_status = m_main_loop.Run();
-  LLDB_LOGF(log, "%s main loop exited!", __PRETTY_FUNCTION__);
-  if (m_main_loop_status.Fail()) {
-    LLDB_LOGF(log, "%s main loop exited with an error: %s", __PRETTY_FUNCTION__,
-              m_main_loop_status.AsCString());
-
-  }
-  // Protect access to m_is_connected.
-  std::lock_guard<std::mutex> guard(m_connect_mutex);
-  m_is_connected = false;
-}
 
 std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection() {
   std::lock_guard<std::mutex> guard(m_connect_mutex);
@@ -153,9 +117,20 @@ std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection
     connection_info.connect_url = llvm::formatv("connect://localhost:{}", 
                                                 listen_port);
     LLDB_LOGF(log, "%s listening to %u", __PRETTY_FUNCTION__, listen_port);
-    std::thread t(&LLDBServerPluginMockGPU::AcceptAndMainLoopThread, this, 
-                  std::move(*sock));
-    t.detach();
+    
+    m_listen_socket = std::move(*sock);
+    m_is_connected = false;
+    auto res = m_listen_socket->Accept(m_main_loop, [this](std::unique_ptr<Socket> socket) {
+      std::unique_ptr<Connection> connection_up(new ConnectionFileDescriptor(std::move(socket)));
+      this->m_gdb_server->InitializeConnection(std::move(connection_up));
+      m_is_connected = true;
+    });
+    if (res) {
+      m_read_handles = std::move(*res);
+    } else {
+      LLDB_LOGF(log, "MockGPU failed to accept: %s", llvm::toString(res.takeError()).c_str());
+    }
+    
     return connection_info;
   } else {
     std::string error = llvm::toString(sock.takeError());
