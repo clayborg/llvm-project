@@ -30,7 +30,6 @@ struct ThreadRegistersValues {
 struct ThreadRegisterValidity {
   bool PC;
   bool errorPC;
-  bool RA;
   bool R[kNumRRegs];
 
   ThreadRegisterValidity();
