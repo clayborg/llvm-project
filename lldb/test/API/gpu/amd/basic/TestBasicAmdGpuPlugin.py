@@ -22,11 +22,11 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = lldbutil.run_to_source_breakpoint(
             self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
         )
-        self.assertEqual(self.get_cpu_target(), cpu_target)
+        self.assertEqual(self.cpu_target, cpu_target)
 
         # Make sure the GPU target was created and has the default thread.
         self.assertEqual(self.dbg.GetNumTargets(), 2, "There are two targets")
-        gpu_thread = self.get_gpu_process().GetThreadAtIndex(0)
+        gpu_thread = self.gpu_process.GetThreadAtIndex(0)
         self.assertEqual(gpu_thread.GetName(), "AMD Native Shadow Thread", "GPU thread has the right name")
 
     def test_gpu_breakpoint_hit(self):
