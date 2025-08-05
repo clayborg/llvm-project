@@ -71,6 +71,12 @@ public:
 
   void SetOpcode(const void *opcode_data, size_t opcode_data_len);
 
+  /// \return
+  ///     The byte size of a SASS instruction.  SM versions >= 70 have 16 byte
+  ///     instructions, while older versions have 8.  We don't support the older
+  ///     versions.
+  static size_t GetInstructionByteSize() { return 16; }
+
 private:
   std::string m_predicate;
   std::string m_extra;
