@@ -356,10 +356,10 @@ public:
     kCore_mips64el_last = eCore_mips64r6el,
 
     kCore_mips_first = eCore_mips32,
-    kCore_mips_last = eCore_mips64r6el
+    kCore_mips_last = eCore_mips64r6el,
 
     kCore_amd_gpu_first = eCore_amd_gpu_r600_R600,
-    kCore_amd_gpu_last = eCore_amd_gpu_gcn_unknown
+    kCore_amd_gpu_last = eCore_amd_gpu_gcn_unknown,
 
     kCore_nvidia_gpu_first = eCore_nvidia_nvptx,
     kCore_nvidia_gpu_last = eCore_nvidia_nvptx64
