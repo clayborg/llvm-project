@@ -1,5 +1,7 @@
 add_lldb_library(lldbPluginDisassemblerSASS PLUGIN
   DisassemblerSASS.cpp
+  DisassemblerSASSCache.cpp
+  InstructionSASS.cpp
 
   LINK_LIBS
     lldbCore
