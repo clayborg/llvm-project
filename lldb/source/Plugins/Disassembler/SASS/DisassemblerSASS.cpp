@@ -311,6 +311,7 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
                                           const Address &base_addr,
                                           size_t max_instructions) {
   Log *log = GetLog(LLDBLog::Disassembler);
+  const size_t instruction_size = InstructionSASS::GetInstructionByteSize();
 
   llvm::Expected<json::Value> json_value = json::parse(json_output);
   if (!json_value) {
@@ -385,12 +386,15 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
 
     size_t instruction_offset = 0;
     for (const json::Value &inst_value : *sass_instructions) {
-      if (max_instructions != 0 && instructions_parsed >= max_instructions)
+      if (instructions_parsed >= max_instructions)
         break;
 
       const json::Object *inst_obj = inst_value.getAsObject();
-      if (!inst_obj)
-        continue;
+      if (!inst_obj) {
+        LLDB_LOG(log, "Gotten an Instruction entry from nvdisasm that is not "
+                      "an object. Stopping disassembly.");
+        break;
+      }
 
       std::optional<llvm::StringRef> opcode_val = inst_obj->getString("opcode");
       std::optional<llvm::StringRef> operands_val =
@@ -399,15 +403,18 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
           inst_obj->getString("predicate");
       std::optional<llvm::StringRef> extra_val = inst_obj->getString("extra");
 
-      if (!opcode_val)
-        continue;
+      if (!opcode_val) {
+        LLDB_LOG(log,
+                 "Missing opcode entry from nvdisasm. Stopping disassembly.");
+        break;
+      }
 
       // Create address for this instruction
       // nvdisasm 'start' field represents offset within the disassembled
-      // region, so: final_address = base_addr + start_offset +
-      // instruction_index * 8
+      // region.
       Address inst_addr(base_addr);
-      addr_t calculated_offset = *start_addr + instruction_offset * 8;
+      addr_t calculated_offset =
+          *start_addr + instruction_offset * instruction_size;
 
       LLDB_LOG(log,
                "Address calculation: base_addr={0:x}, start_addr={1:x}, "
@@ -467,10 +474,15 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
                other_attributes.size(), other_flags.size(),
                inst_addr.GetFileAddress());
     }
-
-    if (max_instructions != 0 && instructions_parsed >= max_instructions)
-      break;
   }
 
-  return instructions_parsed;
+  if (instructions_parsed > 0) {
+    InstructionSP last_inst = m_instruction_list.GetInstructionAtIndex(
+        m_instruction_list.GetSize() - 1);
+
+    return last_inst->GetAddress().GetFileAddress() -
+           base_addr.GetFileAddress() + instruction_size;
+  }
+
+  return 0;
 }
