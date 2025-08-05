@@ -334,6 +334,29 @@ static uint32_t loongarchVariantFromElfFlags(const elf::ELFHeader &header) {
   }
 }
 
+static uint32_t AMDGPUVariantFromElfFlags(const elf::ELFHeader &header) {
+  // The flags contain the exact GPU model for HSA only. The sub type is set to
+  // a valid EF_AMDGPU_MACH_ define from the ELF.h file in llvm.
+  if (header.e_ident[EI_OSABI] == ELFOSABI_AMDGPU_HSA) {
+    switch (header.e_ident[EI_ABIVERSION]) {
+      case ELFABIVERSION_AMDGPU_HSA_V2:
+        // Flags bits not parsed for this include:
+        //  EF_AMDGPU_FEATURE_XNACK_V2
+        //  EF_AMDGPU_FEATURE_TRAP_HANDLER_V2
+        break; // No CPU model is defined in HSA V2
+
+      case ELFABIVERSION_AMDGPU_HSA_V3:
+      case ELFABIVERSION_AMDGPU_HSA_V4:
+      case ELFABIVERSION_AMDGPU_HSA_V5:
+      case ELFABIVERSION_AMDGPU_HSA_V6:
+        // The sub type is the bottom byte of the e_flags which defines
+        // EF_AMDGPU_MACH value which identifies the actual CPU model.
+        return header.e_flags & EF_AMDGPU_MACH;
+    }
+  }
+  return LLDB_INVALID_CPUTYPE; // No subtype.
+}
+
 static uint32_t subTypeFromElfHeader(const elf::ELFHeader &header) {
   if (header.e_machine == llvm::ELF::EM_MIPS)
     return mipsVariantFromElfFlags(header);
@@ -343,6 +366,8 @@ static uint32_t subTypeFromElfHeader(const elf::ELFHeader &header) {
     return riscvVariantFromElfFlags(header);
   else if (header.e_machine == llvm::ELF::EM_LOONGARCH)
     return loongarchVariantFromElfFlags(header);
+  else if (header.e_machine == llvm::ELF::EM_AMDGPU)
+    return AMDGPUVariantFromElfFlags(header);
 
   return LLDB_INVALID_CPUTYPE;
 }
@@ -587,7 +612,6 @@ size_t ObjectFileELF::GetModuleSpecifications(
 
         if (spec.GetArchitecture().IsValid()) {
           llvm::Triple::OSType ostype;
-          llvm::Triple::VendorType vendor;
           llvm::Triple::OSType spec_ostype =
               spec.GetArchitecture().GetTriple().getOS();
 
@@ -595,12 +619,6 @@ size_t ObjectFileELF::GetModuleSpecifications(
                     __FUNCTION__, file.GetPath().c_str(),
                     OSABIAsCString(header.e_ident[EI_OSABI]));
 
-          // SetArchitecture should have set the vendor to unknown
-          vendor = spec.GetArchitecture().GetTriple().getVendor();
-          assert(vendor == llvm::Triple::UnknownVendor);
-          UNUSED_IF_ASSERT_DISABLED(vendor);
-
-          //
           // Validate it is ok to remove GetOsFromOSABI
           GetOsFromOSABI(header.e_ident[EI_OSABI], ostype);
           if (ostype != llvm::Triple::OSType::UnknownOS && 
