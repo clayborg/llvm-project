@@ -1,9 +1,10 @@
 import lldb
 from lldbsuite.test import lldbutil
-from lldbsuite.test.lldbtest import TestBase, line_number
+from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.gpu.nvidiagpu_testcase import NvidiaGpuTestCaseBase
 
 
-class TestNVIDIAGPUErrorPC(TestBase):
+class TestNVIDIAGPUErrorPC(NvidiaGpuTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     def test_gpu_showing_error_pc(self):
@@ -16,18 +17,11 @@ class TestNVIDIAGPUErrorPC(TestBase):
 
         self.assertEqual(self.dbg.GetNumTargets(), 2)
 
-        cpu = self.dbg.GetTargetAtIndex(0)
-        gpu = self.dbg.GetTargetAtIndex(1)
+        self.continue_cpu_and_wait_for_gpu_to_stop()
 
-        # We switch to async mode to wait for state changes in the GPU target while the CPU resumes.
-        self.setAsync(True)
-        listener = self.dbg.GetListener()
-        cpu.process.Continue()
-        lldbutil.expect_state_changes(self, listener, gpu.process, [lldb.eStateRunning, lldb.eStateStopped])
+        self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+        self.assertIn("CUDA Exception(6): Warp - Misaligned address at 0x", str(self.gpu_process.thread[0]))
 
-        self.assertEqual(gpu.process.state, lldb.eStateStopped)
-        self.assertIn("CUDA Exception(6): Warp - Misaligned address at 0x", str(gpu.process.thread[0]))
-
-        errorpc = gpu.process.thread[0].frame[0].FindRegister("errorpc").GetValueAsAddress()
+        errorpc = self.gpu_process.thread[0].frame[0].FindRegister("errorpc").GetValueAsAddress()
         self.assertNotEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
         self.assertNotEqual(errorpc, 0)
