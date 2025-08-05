@@ -9,16 +9,12 @@
 #ifndef LLDB_SOURCE_PLUGINS_DISASSEMBLER_SASS_DISASSEMBLERSASS_H
 #define LLDB_SOURCE_PLUGINS_DISASSEMBLER_SASS_DISASSEMBLERSASS_H
 
-#include <memory>
 #include <string>
 
 #include "lldb/Core/Address.h"
 #include "lldb/Core/Disassembler.h"
-#include "lldb/Core/PluginManager.h"
 #include "lldb/Utility/FileSpec.h"
 #include "llvm/Support/Error.h"
-
-class InstructionSASS;
 
 class DisassemblerSASS : public lldb_private::Disassembler {
 public:
@@ -53,22 +49,16 @@ public:
                             bool append, bool data_from_file) override;
 
 protected:
-  // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
-protected:
   friend class InstructionSASS;
 
   bool FlavorValidForArchSpec(const lldb_private::ArchSpec &arch,
                               const char *flavor) override;
 
-  bool IsValid() const;
+  bool IsValid() const { return m_valid; }
 
 private:
-  /// Find the nvdisasm executable (cached after first call)
-  /// \return FileSpec for nvdisasm executable, or error if not found
-  llvm::Expected<lldb_private::FileSpec> FindNvdisasm();
-
   /// Run nvdisasm on the provided binary data and parse the output
   /// \param[in] data The binary data to disassemble
   /// \param[in] base_addr The base address for the instructions
@@ -84,9 +74,10 @@ private:
   /// \param[in] base_addr Base address for calculating instruction addresses
   /// \param[in] max_instructions Maximum number of instructions to parse
   /// \return Number of instructions successfully parsed, or error
-  llvm::Expected<size_t> ParseJsonOutput(const std::string &json_output,
-                                         const lldb_private::Address &base_addr,
-                                         size_t max_instructions);
+  llvm::Expected<size_t>
+  ParseNvdisasmJsonOutput(const std::string &json_output,
+                          const lldb_private::Address &base_addr,
+                          size_t max_instructions);
 
   /// Extract CUDA SM architecture from the module's .note.nv.cuinfo section
   /// \param[in] base_addr Address to get the module from
