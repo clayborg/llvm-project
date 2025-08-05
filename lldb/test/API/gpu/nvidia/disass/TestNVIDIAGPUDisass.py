@@ -1,7 +1,7 @@
-from lldbsuite.test.lldbtest import TestBase
+from lldbsuite.test.tools.gpu.nvidiagpu_testcase import NvidiaGpuTestCaseBase
 
 
-class TestNVIDIAGPUDisass(TestBase):
+class TestNVIDIAGPUDisass(NvidiaGpuTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     def test_disass_elf_v7(self):
