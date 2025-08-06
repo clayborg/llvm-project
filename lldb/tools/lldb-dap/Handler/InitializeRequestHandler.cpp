@@ -23,8 +23,15 @@ llvm::Expected<InitializeResponse> InitializeRequestHandler::Run(
     const InitializeRequestArguments &arguments) const {
   dap.clientFeatures = arguments.supportedFeatures;
 
-  // Do not source init files until in/out/err are configured.
-  dap.debugger = lldb::SBDebugger::Create(false);
+  // Check if we already have a shared debugger (eg. for GPU processes), otherwise create individual debugger
+  auto shared_debugger = DAPSessionManager::GetInstance().GetSharedDebugger();
+  if (shared_debugger.has_value()) {
+    dap.debugger = shared_debugger.value();
+  } else {
+    // Create individual debugger for this DAP instance
+    dap.debugger = lldb::SBDebugger::Create(false);
+  }
+  
   dap.debugger.SetInputFile(dap.in);
   dap.target = dap.debugger.GetDummyTarget();
 
