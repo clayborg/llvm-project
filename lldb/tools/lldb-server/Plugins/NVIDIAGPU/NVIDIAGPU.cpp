@@ -193,7 +193,15 @@ Status NVIDIAGPU::Kill() { return Status(); }
 
 Status NVIDIAGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                              size_t &bytes_read) {
-  return Status::FromErrorString("unimplemented");
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::ReadMemory(). addr: {0}, size: {1}", addr, size);
+
+  CUDBGResult res = GetCudaAPI().readGlobalMemory(addr, buf, size);
+  if (res != CUDBG_SUCCESS)
+    return Status::FromErrorString(cudbgGetErrorString(res));
+
+  bytes_read = size;
+  return Status();
 }
 
 Status NVIDIAGPU::WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
