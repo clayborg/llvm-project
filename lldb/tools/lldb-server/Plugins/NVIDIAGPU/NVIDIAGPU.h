@@ -10,14 +10,13 @@
 #define LLDB_TOOLS_LLDB_SERVER_PROCESSNVIDIAGPU_H
 
 #include "CUDADebuggerAPI.h"
-#include "DeviceInformation.h"
+#include "DeviceState.h"
 #include "ThreadNVIDIAGPU.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/ProcessInfo.h"
 
 #include "cudadebugger.h"
-#include <unordered_map>
 
 namespace lldb_private::lldb_server {
 
@@ -61,7 +60,7 @@ public:
   ///     Delegate for handling process events and notifications.
   NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate);
 
-  void SetDebuggerAPI(CUDADebuggerAPI &api) { m_api = api.GetRawAPI(); }
+  void SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
@@ -293,8 +292,8 @@ public:
   /// dynamic library changes without actually halting GPU execution.
   void ReportDyldStop();
 
-  /// \return the DeviceInformation object for the given device id.
-  DeviceInformation &GetDeviceInformation(int device_id);
+  /// \return the registry of all devices.
+  DeviceStateRegistry &GetAllDevices() { return m_devices; }
 
   std::vector<AddressSpaceInfo> GetAddressSpaces() override;
 
@@ -345,8 +344,8 @@ private:
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
 
-  /// A map of device id to DeviceInformation object.
-  std::unordered_map<int, DeviceInformation> m_device_information;
+  /// Snapshot of the information of all devices. It's updated upon every stop.
+  DeviceStateRegistry m_devices;
 };
 
 } // namespace lldb_private::lldb_server
