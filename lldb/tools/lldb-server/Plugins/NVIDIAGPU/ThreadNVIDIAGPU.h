@@ -9,8 +9,7 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 
-#include "Coords.h"
-#include "Exceptions.h"
+#include "DeviceState.h"
 #include "RegisterContextNVIDIAGPU.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-private-forward.h"
@@ -25,7 +24,7 @@ class NativeProcessLinux;
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
   ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
-                  PhysicalCoords physical_coords);
+                  PhysicalCoords physical_coords, const CuDim3 &thread_idx);
 
   std::string GetName() override;
 
@@ -68,7 +67,7 @@ public:
   void SetStoppedByDynamicLoader();
 
   /// Change the state of this thread and update its stop info accordingly.
-  void SetStoppedByException(ExceptionInfo exception_info);
+  void SetStoppedByException(const ExceptionInfo &exception_info);
 
   /// Set the thread to stopped state by a signal.
   void SetStoppedBySignal(int signo);
@@ -85,18 +84,30 @@ public:
 private:
   friend class NVIDIAGPU;
 
-  /// Set the physical coordinates of this thread.
-  ///
-  /// \param physical_coords the physical coordinates of this thread.
-  void SetPhysicalCoords(const PhysicalCoords &physical_coords) {
+  /// Set the physical coordinates and thread index of the thread within its block.
+  void SetCoords(const PhysicalCoords &physical_coords,
+                 const CuDim3 &thread_idx) {
+    m_thread_idx = thread_idx;
     m_physical_coords = physical_coords;
   }
 
+  /// The current state of the thread.
   lldb::StateType m_state;
+
+  /// The stop info of the thread.
   ThreadStopInfo m_stop_info;
-  RegisterContextNVIDIAGPU m_reg_context;
+
+  /// The textual description of the thread's stop reason.
   std::string m_stop_description;
+
+  /// The register context of the thread.
+  RegisterContextNVIDIAGPU m_reg_context;
+
+  /// The physical coordinates of the thread.
   PhysicalCoords m_physical_coords;
+
+  /// The thread index of the thread within its block.
+  CuDim3 m_thread_idx;
 };
 } // namespace lldb_private::lldb_server
 
