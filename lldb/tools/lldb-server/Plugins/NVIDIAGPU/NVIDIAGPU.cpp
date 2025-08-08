@@ -108,7 +108,8 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
   // initial state to stopped, which requires sending some thread to the client.
   // Because of that, we create a fake thread with stopped state.
   lldb::tid_t tid = 1;
-  auto thread = std::make_unique<ThreadNVIDIAGPU>(*this, tid, PhysicalCoords{});
+  auto thread = std::make_unique<ThreadNVIDIAGPU>(*this, tid, PhysicalCoords{},
+                                                  CuDim3{0, 0, 0});
   thread->SetStoppedByInitialization();
   m_threads.push_back(std::move(thread));
   SetCurrentThreadID(tid);
@@ -146,6 +147,11 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
   SetState(StateType::eStateRunning, true);
 
   return Status();
+}
+
+void NVIDIAGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
+  m_api = api.GetRawAPI();
+  m_devices = DeviceStateRegistry(*m_api);
 }
 
 Status NVIDIAGPU::Halt() {
@@ -375,19 +381,23 @@ void NVIDIAGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
-  // The following code path assumes that the stop event is triggered by an
-  // exception. At some point we'll need to generalize this.
-  std::optional<ExceptionInfo> exception_info =
-      FindExceptionInfo(this->GetCudaAPI());
-  if (!exception_info)
-    logAndReportFatalError(
-        "NVIDIAGPU::OnAllDevicesSuspended(). Non-exception stop unsupported");
 
-  // We don't yet handle multiple threads, so we use the only one we have.
-  ThreadNVIDIAGPU &thread = *GPUThreads().begin();
-  thread.SetPhysicalCoords(exception_info->physical_coords);
-  thread.SetStoppedByException(*exception_info);
-  ChangeStateToStopped();
+  m_devices.BatchUpdate();
+  LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
+
+  const ThreadState *thread_info = m_devices.FindSomeThreadWithException();
+  if (thread_info) {
+    // We don't yet handle multiple threads, so we use the only one we have.
+    ThreadNVIDIAGPU &thread = *GPUThreads().begin();
+    thread.SetCoords(thread_info->GetPhysicalCoords(),
+                     thread_info->GetThreadIdx());
+    thread.SetStoppedByException(*thread_info->GetException());
+    ChangeStateToStopped();
+    return;
+  }
+
+  logAndReportFatalError(
+      "NVIDIAGPU::OnAllDevicesSuspended(). Non-exception stop unsupported");
 }
 
 NVIDIAGPU::Extension NVIDIAGPU::Manager::GetSupportedExtensions() const {
@@ -417,12 +427,6 @@ const CUDBGAPI_st &NVIDIAGPU::GetCudaAPI() {
                            "not initialized");
   }
   return *m_api;
-}
-
-DeviceInformation &NVIDIAGPU::GetDeviceInformation(int device_id) {
-  auto [it, inserted] =
-      m_device_information.try_emplace(device_id, GetCudaAPI(), device_id);
-  return it->second;
 }
 
 std::vector<AddressSpaceInfo> NVIDIAGPU::GetAddressSpaces() {
@@ -467,7 +471,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   case AddressSpace::LocalStorage: {
     PhysicalCoords coords = GetPhysicalCoords();
     res = GetCudaAPI().readLocalMemory(coords.dev_id, coords.sm_id,
-                                       coords.warp_id, coords.lane_id, addr,
+                                       coords.warp_id, coords.thread_id, addr,
                                        buf, size);
     break;
   }
@@ -486,7 +490,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   case AddressSpace::GenericStorage: {
     PhysicalCoords coords = GetPhysicalCoords();
     res = GetCudaAPI().readGenericMemory(coords.dev_id, coords.sm_id,
-                                         coords.warp_id, coords.lane_id, addr,
+                                         coords.warp_id, coords.thread_id, addr,
                                          buf, size);
     break;
   }

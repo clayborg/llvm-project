@@ -355,7 +355,7 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
     uint64_t pc = 0;
     CUDBGResult res = api->readVirtualPC(
         physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-        physical_coords.lane_id, &pc);
+        physical_coords.thread_id, &pc);
     if (res == CUDBG_SUCCESS) {
       regs.val.PC = pc;
       regs.is_valid.PC = true;
@@ -374,14 +374,14 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
     }
   }
 
-  DeviceInformation &device_info =
-      GetGPUThread().GetGPU().GetDeviceInformation(physical_coords.dev_id);
+  DeviceState &device_info =
+      GetGPUThread().GetGPU().GetAllDevices()[physical_coords.dev_id];
   size_t num_regs = device_info.GetNumRRegisters();
   num_regs = std::min(num_regs, kNumRRegs);
 
-  CUDBGResult res = api->readRegisterRange(physical_coords.dev_id, physical_coords.sm_id,
-                               physical_coords.warp_id, physical_coords.lane_id,
-                               0, num_regs, regs.val.R);
+  CUDBGResult res = api->readRegisterRange(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
+      physical_coords.thread_id, 0, num_regs, regs.val.R);
 
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "

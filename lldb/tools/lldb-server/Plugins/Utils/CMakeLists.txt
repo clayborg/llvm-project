@@ -1,5 +1,6 @@
 
 add_lldb_library(lldbServerPluginUtils
+  Bitset.cpp
   Utils.cpp
 )
 
