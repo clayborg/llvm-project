@@ -29,6 +29,12 @@ namespace lldb_dap {
 /// Since attaching is debugger/runtime specific, the arguments for this request
 /// are not part of this specification.
 Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
+  // Initialize DAP debugger and related components if not sharing previously launched debugger.
+  bool use_shared_debugger = args.targetIdx != UINT32_MAX;
+  if (Error err = dap.InitializeDebugger(use_shared_debugger)) {
+    return err;
+  }
+
   // Validate that we have a well formed attach request.
   if (args.attachCommands.empty() && args.coreFile.empty() &&
       args.configuration.program.empty() &&
@@ -64,10 +70,18 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   dap.ConfigureSourceMaps();
 
   lldb::SBError error;
-  lldb::SBTarget target = dap.CreateTarget(error);
+  lldb::SBTarget target;
+  if (use_shared_debugger) {
+    lldb::SBTarget target = dap.debugger.GetTargetAtIndex(args.targetIdx);
+    if (!target.IsValid()) {
+      error.SetErrorStringWithFormat("invalid target_idx %u in attach config",
+                                     args.targetIdx);
+    }
+  } else {
+    target = dap.CreateTarget(error);
+  }
   if (error.Fail())
     return ToError(error);
-
   dap.SetTarget(target);
 
   // Run any pre run LLDB commands the user specified in the launch.json
