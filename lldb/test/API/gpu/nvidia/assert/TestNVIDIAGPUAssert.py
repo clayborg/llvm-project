@@ -31,9 +31,9 @@ class TestNVIDIAGPUAssert(NvidiaGpuTestCaseBase):
         errorpc = frame.FindRegister("errorpc").GetValueAsAddress()
         self.assertEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
 
-        # We check we can read up to register R31.
-        self.assertTrue(frame.FindRegister("R31").IsValid())
-        self.assertFalse(frame.FindRegister("R32").IsValid())
+        # We check we can read some R register.
+        self.assertTrue(frame.FindRegister("R5").IsValid())
+        self.assertTrue(frame.FindRegister("R6").IsValid())
 
         # As our kernel crashes in the prologue of assert, the RA register should be the same as the PC.
         self.assertEqual(

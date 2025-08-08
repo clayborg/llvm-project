@@ -14,12 +14,15 @@ using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
 ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
-                                 PhysicalCoords physical_coords)
+                                 PhysicalCoords physical_coords,
+                                 const CuDim3 &thread_idx)
     : NativeThreadProtocol(gpu, tid), m_state(lldb::eStateInvalid),
-      m_stop_info(), m_reg_context(*this), m_physical_coords(physical_coords) {}
+      m_stop_info(), m_reg_context(*this), m_physical_coords(physical_coords),
+      m_thread_idx(thread_idx) {}
 
 std::string ThreadNVIDIAGPU::GetName() {
-  return m_physical_coords.AsThreadName();
+  return llvm::formatv("threadIdx(x={} y={} z={})", m_thread_idx.x,
+                       m_thread_idx.y, m_thread_idx.z);
 }
 
 lldb::StateType ThreadNVIDIAGPU::GetState() { return m_state; }
@@ -54,16 +57,15 @@ void ThreadNVIDIAGPU::SetStoppedByDynamicLoader() {
   m_stop_description = "NVIDIA GPU Thread Stopped by Dynamic Loader";
 }
 
-void ThreadNVIDIAGPU::SetStoppedByException(ExceptionInfo exception_info) {
+void ThreadNVIDIAGPU::SetStoppedByException(
+    const ExceptionInfo &exception_info) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByException()");
   SetStopped();
 
   m_stop_info.reason = lldb::eStopReasonException;
   m_stop_description =
       llvm::formatv("CUDA Exception({}): {}", exception_info.exception,
-                    CudaExceptionToString(exception_info.exception));
-  if (std::optional<int64_t> error_pc = m_reg_context.ReadErrorPC())
-    m_stop_description += llvm::formatv(" at {0:x}", *error_pc);
+                    exception_info.ToString());
 }
 
 void ThreadNVIDIAGPU::SetStoppedByInitialization() {
