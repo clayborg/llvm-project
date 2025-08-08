@@ -10,7 +10,9 @@
 #define LLDB_TOOLS_LLDB_SERVER_LLDBSERVERPLUGINMOCKGPU_H
 
 #include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
+#include "lldb/Host/MainLoopBase.h"
 #include "lldb/Utility/Status.h"
+#include <mutex>
 
 // This is a mock GPU plugin that is used for testing the LLDBServerPlugin. It
 // should be run with the following code as the main binary:
@@ -61,7 +63,8 @@ namespace lldb_server {
 
 class LLDBServerPluginMockGPU : public LLDBServerPlugin {
 public:
-  LLDBServerPluginMockGPU(LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop);
+  LLDBServerPluginMockGPU(LLDBServerPlugin::GDBServer &native_process,
+                          MainLoop &main_loop);
   ~LLDBServerPluginMockGPU() override;
   llvm::StringRef GetPluginName() override;
   int GetEventFileDescriptorAtIndex(size_t idx) override;
@@ -74,11 +77,14 @@ public:
 private:
   std::optional<GPUPluginConnectionInfo> CreateConnection();
   void CloseFDs();
-  void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
 
   // Used with a socketpair to get events on the native ptrace event queue.
   int m_fds[2] = {-1, -1};
   Status m_main_loop_status;
+
+  // Connection state tracking
+  std::unique_ptr<TCPSocket> m_listen_socket;
+  std::vector<MainLoopBase::ReadHandleUP> m_read_handles;
 };
 
 } // namespace lldb_server
