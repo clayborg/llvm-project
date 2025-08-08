@@ -213,6 +213,10 @@ struct DAP {
   /// The set of features supported by the connected client.
   llvm::DenseSet<ClientFeature> clientFeatures;
 
+  /// Used by the test suite to prevent sourcing `.lldbinit` and changing its
+  /// behavior.
+  bool sourceInitFile = true;
+
   /// The initial thread list upon attaching.
   std::vector<protocol::Thread> initial_thread_list;
 
@@ -463,6 +467,17 @@ struct DAP {
 
   void StartEventThread();
   void StartProgressEventThread();
+
+  /// DAP debugger initialization functions
+  /// @{
+
+  /// Perform complete DAP initialization in one call
+  llvm::Error InitializeDebugger(bool use_shared_debugger);
+
+  /// Start event handling threads based on client capabilities
+  llvm::Error StartEventThreads();
+
+  /// @}
 
   /// Sets the given protocol `breakpoints` in the given `source`, while
   /// removing any existing breakpoints in the given source if they are not in
