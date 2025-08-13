@@ -7,29 +7,38 @@ import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test.lldbtest import *
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 
+CPU_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - BEFORE LAUNCH"
+GPU_BREAKPOINT_COMMENT = "// MOCK GPU BREAKPOINT"
+SOURCE_FILE = "hello_world.cpp"
+
 
 class BasicMockGpuTestCase(GpuTestCaseBase):
-    def test_mock_gpu_two_targets(self):
-        """
-        Test that there are two targets:
-        one for the native process and one for the mock GPU process.
-        """
+    def setUp(self):
+        """Build the test program and run to the CPU breakpoint."""
+        super().setUp()
         self.build()
-
-        # There should be no targets before running the program.
-        self.assertEqual(self.dbg.GetNumTargets(), 0, "There are no targets")
-
-        # Set a breakpoint in the CPU source and run to it.
-        source_spec = lldb.SBFileSpec("hello_world.cpp", False)
+        self.source_spec = lldb.SBFileSpec(SOURCE_FILE, False)
         (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
             lldbutil.run_to_source_breakpoint(
-                self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
+                self, CPU_BREAKPOINT_COMMENT, self.source_spec
             )
         )
-        self.assertEqual(self.cpu_target, cpu_target)
 
-        # GPU target is created, has the default thread, and has the correct name.
+    def test_mock_gpu_two_targets(self):
+        """
+        Verify that two targets exist: one CPU and one mock GPU.
+        Ensures the GPU thread is correctly named.
+        """
+        # Check that there are two targets.
         self.assertEqual(self.dbg.GetNumTargets(), 2, "There are two targets")
+
+        # Check the CPU target.
+        self.assertIsNotNone(self.cpu_target, "CPU target should exist")
+        self.assertTrue(self.cpu_target.GetProcess().IsValid(), "CPU process is valid")
+
+        # Check the GPU target.
+        self.assertIsNotNone(self.gpu_target, "GPU target should exist")
+        self.assertTrue(self.gpu_process.IsValid(), "GPU process is valid")
         gpu_thread = self.gpu_process.GetThreadAtIndex(0)
         self.assertEqual(
             gpu_thread.GetName(),
@@ -42,17 +51,6 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Test that we can read registers from the mock GPU target
         and the "fake" register values are correct.
         """
-
-        self.build()
-
-        # Set a breakpoint in the CPU source and run to it.
-        source_spec = lldb.SBFileSpec("hello_world.cpp", False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(
-                self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
-            )
-        )
-
         # Switch to the GPU target and read the registers.
         self.select_gpu()
         gpu_thread = self.gpu_process.GetThreadAtIndex(0)
@@ -74,7 +72,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             "Flags": 0xB,
         }
         for reg_name, expected_value in expected_registers.items():
-            # Find the register by name in the gpu_registers list
+            # Find the register by name in the gpu_registers list.
             reg = next((r for r in gpu_registers if r.GetName() == reg_name), None)
             self.assertIsNotNone(reg, f"Register {reg_name} not found")
             self.assertEqual(
@@ -85,24 +83,13 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
     def test_mock_gpu_breakpoint_hit(self):
         """Test that we can hit a breakpoint on the gpu target."""
-
-        self.build()
-
-        # Set a breakpoint in the CPU source and run to it.
-        source_spec = lldb.SBFileSpec("hello_world.cpp", False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(
-                self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
-            )
-        )
-
         # Switch to the GPU target and set a breakpoint.
         self.select_gpu()
         (gpu_target, gpu_process, gpu_thread, gpu_bkpt) = (
             lldbutil.run_to_source_breakpoint(
                 self,
-                "// MOCK GPU BREAKPOINT",
-                source_spec,
+                GPU_BREAKPOINT_COMMENT,
+                self.source_spec,
             )
         )
 
