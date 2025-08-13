@@ -22,5 +22,5 @@ int main(int argc, const char **argv) {
   gpu_third_stop();
   gpu_shlib_load();
   gpu_kernel();
-  return 0; // Set breakpoint here.
+  return 0;
 }
