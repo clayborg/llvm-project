@@ -1507,10 +1507,10 @@ void DAP::EventThread() {
         } else if (event_mask & lldb::SBTarget::eBroadcastBitNewTargetSpawned) {
           auto target = lldb::SBTarget::GetTargetFromEvent(event);
           auto target_index = debugger.GetIndexOfTarget(target);
-          
+
           // Set the shared debugger for GPU processes
           DAPSessionManager::GetInstance().SetSharedDebugger(debugger);
-          
+
           llvm::json::Object attach_config;
           llvm::json::Array attach_commands;
 
@@ -1525,6 +1525,7 @@ void DAP::EventThread() {
           attach_config.try_emplace("name", "GPU Session");
           attach_config.try_emplace("attachCommands",
                                     std::move(attach_commands));
+          attach_config.try_emplace("targetIdx", target_index);
 
           // 2. Construct the main 'startDebugging' request arguments.
           llvm::json::Object start_debugging_args;
