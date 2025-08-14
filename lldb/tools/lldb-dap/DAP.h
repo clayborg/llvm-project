@@ -112,18 +112,18 @@ private:
   DAPSessionManager(DAPSessionManager &&) = delete;
   DAPSessionManager &operator=(DAPSessionManager &&) = delete;
 
-  std::mutex sessions_mutex_;
-  std::condition_variable sessions_condition_;
-  std::map<lldb::IOObjectSP, DAP *> active_sessions_;
+  std::mutex m_sessions_mutex;
+  std::condition_variable m_sessions_condition;
+  std::map<lldb::IOObjectSP, DAP *> m_active_sessions;
 
   /// Optional shared debugger instance set when the native process
   /// spawns a new GPU target
-  std::optional<lldb::SBDebugger> shared_debugger_;
+  std::optional<lldb::SBDebugger> m_shared_debugger;
 
   /// Map from debugger ID to its event thread used for when
   /// multiple DAP sessions are using the same debugger instance.
   std::map<lldb::user_id_t, std::shared_ptr<std::thread>>
-      debugger_event_threads_;
+      m_debugger_event_threads;
 };
 
 enum class OutputType { Console, Important, Stdout, Stderr, Telemetry };
