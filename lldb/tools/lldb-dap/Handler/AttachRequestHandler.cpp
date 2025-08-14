@@ -29,6 +29,12 @@ namespace lldb_dap {
 /// Since attaching is debugger/runtime specific, the arguments for this request
 /// are not part of this specification.
 Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
+  // Initialize DAP debugger and related components if not sharing previously launched debugger.
+  bool use_shared_debugger = args.targetIdx != UINT32_MAX;
+  if (Error err = dap.InitializeDebugger(use_shared_debugger)) {
+    return err;
+  }
+
   // Validate that we have a well formed attach request.
   if (args.attachCommands.empty() && args.coreFile.empty() &&
       args.configuration.program.empty() &&
