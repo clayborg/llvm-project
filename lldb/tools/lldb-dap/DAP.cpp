@@ -96,26 +96,26 @@ DAPSessionManager &DAPSessionManager::GetInstance() {
 }
 
 void DAPSessionManager::RegisterSession(lldb::IOObjectSP io, DAP *dap) {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
-  active_sessions_[io] = dap;
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  m_active_sessions[io] = dap;
 }
 
 void DAPSessionManager::UnregisterSession(lldb::IOObjectSP io) {
-  std::unique_lock<std::mutex> lock(sessions_mutex_);
-  active_sessions_.erase(io);
+  std::unique_lock<std::mutex> lock(m_sessions_mutex);
+  m_active_sessions.erase(io);
 
   // Clean up shared resources when the last session exits
-  if (active_sessions_.empty()) {
+  if (m_active_sessions.empty()) {
     CleanupSharedResources();
   }
 
-  std::notify_all_at_thread_exit(sessions_condition_, std::move(lock));
+  std::notify_all_at_thread_exit(m_sessions_condition, std::move(lock));
 }
 
 std::vector<DAP *> DAPSessionManager::GetActiveSessions() {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
   std::vector<DAP *> sessions;
-  for (const auto &[io, dap] : active_sessions_) {
+  for (const auto &[io, dap] : m_active_sessions) {
     if (dap) {
       sessions.push_back(dap);
     }
@@ -124,8 +124,8 @@ std::vector<DAP *> DAPSessionManager::GetActiveSessions() {
 }
 
 void DAPSessionManager::DisconnectAllSessions() {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
-  for (const auto &[io, dap] : active_sessions_) {
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  for (const auto &[io, dap] : m_active_sessions) {
     if (dap) {
       if (llvm::Error error = dap->Disconnect()) {
         llvm::errs() << "DAP client " << dap->transport.GetClientName()
@@ -137,8 +137,8 @@ void DAPSessionManager::DisconnectAllSessions() {
 }
 
 void DAPSessionManager::WaitForAllSessionsToDisconnect() {
-  std::unique_lock<std::mutex> lock(sessions_mutex_);
-  sessions_condition_.wait(lock, [this] { return active_sessions_.empty(); });
+  std::unique_lock<std::mutex> lock(m_sessions_mutex);
+  m_sessions_condition.wait(lock, [this] { return m_active_sessions.empty(); });
 }
 
 std::shared_ptr<std::thread>
@@ -146,35 +146,35 @@ DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
                                              DAP *requesting_dap) {
   lldb::user_id_t debugger_id = debugger.GetID();
 
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
 
   // Check if we already have a thread (most common case)
-  auto it = debugger_event_threads_.find(debugger_id);
-  if (it != debugger_event_threads_.end() && it->second) {
+  auto it = m_debugger_event_threads.find(debugger_id);
+  if (it != m_debugger_event_threads.end() && it->second) {
     return it->second;
   }
 
   // Create new thread and store it
   auto new_thread =
       std::make_shared<std::thread>(&DAP::EventThread, requesting_dap);
-  debugger_event_threads_[debugger_id] = new_thread;
+  m_debugger_event_threads[debugger_id] = new_thread;
   return new_thread;
 }
 
 void DAPSessionManager::SetSharedDebugger(lldb::SBDebugger debugger) {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
-  shared_debugger_ = debugger;
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  m_shared_debugger = debugger;
 }
 
 std::optional<lldb::SBDebugger> DAPSessionManager::GetSharedDebugger() {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
-  return shared_debugger_;
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  return m_shared_debugger;
 }
 
 DAP *DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
-  std::lock_guard<std::mutex> lock(sessions_mutex_);
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
 
-  for (const auto &[io, dap] : active_sessions_) {
+  for (const auto &[io, dap] : m_active_sessions) {
     if (dap && dap->target.IsValid() && dap->target == target) {
       return dap;
     }
@@ -184,8 +184,8 @@ DAP *DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
 }
 
 void DAPSessionManager::CleanupSharedResources() {
-  if (shared_debugger_.has_value() && shared_debugger_->IsValid()) {
-    shared_debugger_ = std::nullopt;
+  if (m_shared_debugger.has_value() && m_shared_debugger->IsValid()) {
+    m_shared_debugger = std::nullopt;
   }
 }
 
