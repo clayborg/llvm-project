@@ -1624,15 +1624,19 @@ void DAP::EventThread() {
               "startDebugging", std::move(start_debugging_args));
         }
       } else if (lldb::SBBreakpoint::EventIsBreakpointEvent(event)) {
-        lldb::SBBreakpoint bp = lldb::SBBreakpoint::GetBreakpointFromEvent(event);
-        if (!bp.IsValid()) continue;
-        
+        lldb::SBBreakpoint bp =
+            lldb::SBBreakpoint::GetBreakpointFromEvent(event);
+        if (!bp.IsValid())
+          continue;
+
         lldb::SBTarget event_target = bp.GetTarget();
-        
+
         // Find the DAP instance that owns this target
-        DAP* dap_instance = DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
-        if (!dap_instance) continue;
-        
+        DAP *dap_instance =
+            DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
+        if (!dap_instance)
+          continue;
+
         if (event_mask & lldb::SBTarget::eBroadcastBitBreakpointChanged) {
           auto event_type =
               lldb::SBBreakpoint::GetBreakpointEventTypeFromEvent(event);
@@ -1666,18 +1670,22 @@ void DAP::EventThread() {
       } else if (event_mask & lldb::eBroadcastBitError ||
                  event_mask & lldb::eBroadcastBitWarning) {
         // Global debugger events - send to all DAP instances
-        std::vector<DAP*> active_instances = DAPSessionManager::GetInstance().GetActiveSessions();
-        for (DAP* dap_instance : active_instances) {
-          if (!dap_instance) continue;
-          
+        std::vector<DAP *> active_instances =
+            DAPSessionManager::GetInstance().GetActiveSessions();
+        for (DAP *dap_instance : active_instances) {
+          if (!dap_instance)
+            continue;
+
           lldb::SBStructuredData data =
               lldb::SBDebugger::GetDiagnosticFromEvent(event);
-          if (!data.IsValid()) continue;
-          
+          if (!data.IsValid())
+            continue;
+
           std::string type = GetStringValue(data.GetValueForKey("type"));
           std::string message = GetStringValue(data.GetValueForKey("message"));
-          dap_instance->SendOutput(OutputType::Important,
-                                  llvm::formatv("{0}: {1}", type, message).str());
+          dap_instance->SendOutput(
+              OutputType::Important,
+              llvm::formatv("{0}: {1}", type, message).str());
         }
       } else if (event.BroadcasterMatchesRef(broadcaster)) {
         if (event_mask & eBroadcastBitStopEventThread) {
