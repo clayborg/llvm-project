@@ -536,6 +536,7 @@ public:
     eBroadcastBitWatchpointChanged = (1 << 3),
     eBroadcastBitSymbolsLoaded = (1 << 4),
     eBroadcastBitSymbolsChanged = (1 << 5),
+    eBroadcastBitNewTargetSpawned = (1 << 6),
   };
 
   // These two functions fill out the Broadcaster interface:

@@ -64,11 +64,12 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   dap.ConfigureSourceMaps();
 
   lldb::SBError error;
-  lldb::SBTarget target = dap.CreateTarget(error);
-  if (error.Fail())
-    return ToError(error);
-
-  dap.SetTarget(target);
+  if (!dap.debugger.GetSelectedTarget().IsValid()) {
+    lldb::SBTarget target = dap.CreateTarget(error);
+    if (error.Fail())
+      return ToError(error);
+    dap.SetTarget(target);
+  }
 
   // Run any pre run LLDB commands the user specified in the launch.json
   if (Error err = dap.RunPreRunCommands())
