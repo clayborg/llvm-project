@@ -17,6 +17,7 @@
 #include "lldb/lldb-defines.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include <cstdint>
 
 using namespace llvm;
 using namespace lldb_dap::protocol;
@@ -31,8 +32,10 @@ namespace lldb_dap {
 Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   // Initialize DAP debugger and related components if not sharing previously
   // launched debugger.
-  bool use_shared_debugger = args.targetIdx != UINT32_MAX;
-  if (Error err = dap.InitializeDebugger(use_shared_debugger)) {
+  std::optional<uint32_t> target_idx =
+      (args.targetIdx == UINT32_MAX) ? std::nullopt
+                                     : std::optional<uint32_t>{args.targetIdx};
+  if (Error err = dap.InitializeDebugger(target_idx)) {
     return err;
   }
 
@@ -72,7 +75,7 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
 
   lldb::SBError error;
   lldb::SBTarget target;
-  if (use_shared_debugger) {
+  if (target_idx) {
     lldb::SBTarget target = dap.debugger.GetTargetAtIndex(args.targetIdx);
     if (!target.IsValid()) {
       error.SetErrorStringWithFormat("invalid target_idx %u in attach config",

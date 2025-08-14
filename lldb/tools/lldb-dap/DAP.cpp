@@ -161,14 +161,21 @@ DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
   return new_thread;
 }
 
-void DAPSessionManager::SetSharedDebugger(lldb::SBDebugger debugger) {
+void DAPSessionManager::SetSharedDebugger(uint32_t target_idx,
+                                          lldb::SBDebugger debugger) {
   std::lock_guard<std::mutex> lock(m_sessions_mutex);
-  m_shared_debugger = debugger;
+  m_target_to_debugger_map[target_idx] = debugger;
 }
 
-std::optional<lldb::SBDebugger> DAPSessionManager::GetSharedDebugger() {
+std::optional<lldb::SBDebugger>
+DAPSessionManager::GetSharedDebugger(uint32_t target_idx) {
   std::lock_guard<std::mutex> lock(m_sessions_mutex);
-  return m_shared_debugger;
+  auto pos = m_target_to_debugger_map.find(target_idx);
+  if (pos == m_target_to_debugger_map.end())
+    return std::nullopt;
+  lldb::SBDebugger debugger = pos->second;
+  m_target_to_debugger_map.erase(pos);
+  return debugger;
 }
 
 DAP *DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
@@ -184,9 +191,9 @@ DAP *DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
 }
 
 void DAPSessionManager::CleanupSharedResources() {
-  if (m_shared_debugger.has_value() && m_shared_debugger->IsValid()) {
-    m_shared_debugger = std::nullopt;
-  }
+  // SBDebugger destructors will handle cleanup when the map entries are
+  // destroyed
+  m_target_to_debugger_map.clear();
 }
 
 static std::string GetStringFromStructuredData(lldb::SBStructuredData &data,
@@ -1338,13 +1345,15 @@ llvm::Error DAP::StartEventThreads() {
   return llvm::Error::success();
 }
 
-llvm::Error DAP::InitializeDebugger(bool use_shared_debugger) {
+llvm::Error DAP::InitializeDebugger(std::optional<uint32_t> target_idx) {
   // Initialize debugger instance (shared or individual)
-  if (use_shared_debugger) {
-    auto shared_debugger = DAPSessionManager::GetInstance().GetSharedDebugger();
+  if (target_idx) {
+    auto shared_debugger =
+        DAPSessionManager::GetInstance().GetSharedDebugger(*target_idx);
     if (!shared_debugger) {
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "unable to get shared debugger");
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Unable to find existing debugger for target");
     }
     debugger = shared_debugger.value();
     return StartEventThreads();
@@ -1591,7 +1600,8 @@ void DAP::EventThread() {
           auto target_index = debugger.GetIndexOfTarget(target);
 
           // Set the shared debugger for GPU processes
-          DAPSessionManager::GetInstance().SetSharedDebugger(debugger);
+          DAPSessionManager::GetInstance().SetSharedDebugger(target_index,
+                                                             debugger);
 
           // We create "attachCommands" that will select the target that already
           // exists in LLDB. The DAP instance will attach to this already
