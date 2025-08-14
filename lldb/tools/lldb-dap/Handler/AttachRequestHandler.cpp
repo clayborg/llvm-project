@@ -64,12 +64,19 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   dap.ConfigureSourceMaps();
 
   lldb::SBError error;
-  if (!dap.debugger.GetSelectedTarget().IsValid()) {
-    lldb::SBTarget target = dap.CreateTarget(error);
-    if (error.Fail())
-      return ToError(error);
-    dap.SetTarget(target);
+  lldb::SBTarget target;
+  if (use_shared_debugger) {
+    lldb::SBTarget target = dap.debugger.GetTargetAtIndex(args.targetIdx);
+    if (!target.IsValid()) {
+      error.SetErrorStringWithFormat("invalid target_idx %u in attach config",
+                                     args.targetIdx);
+    }
+  } else {
+    target = dap.CreateTarget(error);
   }
+  if (error.Fail())
+    return ToError(error);
+  dap.SetTarget(target);
 
   // Run any pre run LLDB commands the user specified in the launch.json
   if (Error err = dap.RunPreRunCommands())

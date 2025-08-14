@@ -345,6 +345,9 @@ struct AttachRequestArguments {
   /// Path to the core file to debug.
   std::string coreFile;
 
+  /// Index of an existing target to attach to.
+  uint32_t targetIdx = UINT32_MAX;
+
   /// @}
 };
 bool fromJSON(const llvm::json::Value &, AttachRequestArguments &,
