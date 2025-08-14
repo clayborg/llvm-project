@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DAP.h"
+#include "CommandPlugins.h"
 #include "DAPLog.h"
 #include "EventHelper.h"
 #include "ExceptionBreakpoint.h"
@@ -86,14 +87,14 @@ const char DEV_NULL[] = "/dev/null";
 namespace lldb_dap {
 
 static DAPSessionManager *instance = nullptr;
-DAPSessionManager& DAPSessionManager::GetInstance() {
+DAPSessionManager &DAPSessionManager::GetInstance() {
   if (!instance) {
     instance = new DAPSessionManager();
   }
   return *instance;
 }
 
-void DAPSessionManager::RegisterSession(lldb::IOObjectSP io, DAP* dap) {
+void DAPSessionManager::RegisterSession(lldb::IOObjectSP io, DAP *dap) {
   std::lock_guard<std::mutex> lock(sessions_mutex_);
   active_sessions_[io] = dap;
 }
@@ -101,19 +102,19 @@ void DAPSessionManager::RegisterSession(lldb::IOObjectSP io, DAP* dap) {
 void DAPSessionManager::UnregisterSession(lldb::IOObjectSP io) {
   std::unique_lock<std::mutex> lock(sessions_mutex_);
   active_sessions_.erase(io);
-  
+
   // Clean up shared resources when the last session exits
   if (active_sessions_.empty()) {
     CleanupSharedResources();
   }
-  
+
   std::notify_all_at_thread_exit(sessions_condition_, std::move(lock));
 }
 
-std::vector<DAP*> DAPSessionManager::GetActiveSessions() {
+std::vector<DAP *> DAPSessionManager::GetActiveSessions() {
   std::lock_guard<std::mutex> lock(sessions_mutex_);
-  std::vector<DAP*> sessions;
-  for (const auto& [io, dap] : active_sessions_) {
+  std::vector<DAP *> sessions;
+  for (const auto &[io, dap] : active_sessions_) {
     if (dap) {
       sessions.push_back(dap);
     }
@@ -123,7 +124,7 @@ std::vector<DAP*> DAPSessionManager::GetActiveSessions() {
 
 void DAPSessionManager::DisconnectAllSessions() {
   std::lock_guard<std::mutex> lock(sessions_mutex_);
-  for (const auto& [io, dap] : active_sessions_) {
+  for (const auto &[io, dap] : active_sessions_) {
     if (dap) {
       if (llvm::Error error = dap->Disconnect()) {
         llvm::errs() << "DAP client " << dap->transport.GetClientName()
@@ -139,19 +140,22 @@ void DAPSessionManager::WaitForAllSessionsToDisconnect() {
   sessions_condition_.wait(lock, [this] { return active_sessions_.empty(); });
 }
 
-std::shared_ptr<std::thread> DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger, DAP* requesting_dap) {
+std::shared_ptr<std::thread>
+DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
+                                             DAP *requesting_dap) {
   lldb::user_id_t debugger_id = debugger.GetID();
-  
+
   std::lock_guard<std::mutex> lock(sessions_mutex_);
-  
+
   // Check if we already have a thread (most common case)
   auto it = debugger_event_threads_.find(debugger_id);
   if (it != debugger_event_threads_.end() && it->second) {
     return it->second;
   }
-  
+
   // Create new thread and store it
-  auto new_thread = std::make_shared<std::thread>(&DAP::EventThread, requesting_dap);
+  auto new_thread =
+      std::make_shared<std::thread>(&DAP::EventThread, requesting_dap);
   debugger_event_threads_[debugger_id] = new_thread;
   return new_thread;
 }
@@ -166,10 +170,10 @@ std::optional<lldb::SBDebugger> DAPSessionManager::GetSharedDebugger() {
   return shared_debugger_;
 }
 
-DAP* DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
+DAP *DAPSessionManager::FindDAPForTarget(lldb::SBTarget target) {
   std::lock_guard<std::mutex> lock(sessions_mutex_);
-  
-  for (const auto& [io, dap] : active_sessions_) {
+
+  for (const auto &[io, dap] : active_sessions_) {
     if (dap && dap->target.IsValid() && dap->target == target) {
       return dap;
     }
@@ -339,13 +343,14 @@ llvm::Error DAP::ConfigureIO(std::FILE *overrideOut, std::FILE *overrideErr) {
 
 void DAP::StopEventHandlers() {
   // Check if this is the last reference to the shared event thread
-  if (event_thread_sp && event_thread_sp.use_count() == 1 && event_thread_sp->joinable()) {
+  if (event_thread_sp && event_thread_sp.use_count() == 1 &&
+      event_thread_sp->joinable()) {
     // Signal the shared event thread to stop
     broadcaster.BroadcastEventByType(eBroadcastBitStopEventThread);
-    
+
     event_thread_sp->join();
   }
-  
+
   // Still handle the progress thread normally since it's per-DAP instance
   if (progress_event_thread.joinable()) {
     broadcaster.BroadcastEventByType(eBroadcastBitStopProgressThread);
@@ -891,7 +896,7 @@ void DAP::SetTarget(const lldb::SBTarget target) {
             lldb::SBTarget::eBroadcastBitModulesLoaded |
             lldb::SBTarget::eBroadcastBitModulesUnloaded |
             lldb::SBTarget::eBroadcastBitSymbolsLoaded |
-            lldb::SBTarget::eBroadcastBitSymbolsChanged | 
+            lldb::SBTarget::eBroadcastBitSymbolsChanged |
             lldb::SBTarget::eBroadcastBitNewTargetSpawned);
     listener.StartListeningForEvents(this->broadcaster,
                                      eBroadcastBitStopEventThread);
@@ -1323,6 +1328,80 @@ void DAP::StartProgressEventThread() {
   progress_event_thread = std::thread(&DAP::ProgressEventThread, this);
 }
 
+
+llvm::Error DAP::StartEventThreads() {
+  if (clientFeatures.contains(eClientFeatureProgressReporting))
+    StartProgressEventThread();
+
+  StartEventThread();
+
+  return llvm::Error::success();
+}
+
+llvm::Error DAP::InitializeDebugger(bool use_shared_debugger) {
+  // Initialize debugger instance (shared or individual)
+  if (use_shared_debugger) {
+    auto shared_debugger = DAPSessionManager::GetInstance().GetSharedDebugger();
+    if (!shared_debugger) {
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "unable to get shared debugger");
+    }
+    debugger = shared_debugger.value();
+    return StartEventThreads();
+  }
+
+  debugger = lldb::SBDebugger::Create(false);
+
+  // Configure input/output/error file descriptors
+  debugger.SetInputFile(in);
+  target = debugger.GetDummyTarget();
+
+  llvm::Expected<int> out_fd = out.GetWriteFileDescriptor();
+  if (!out_fd)
+    return out_fd.takeError();
+  debugger.SetOutputFile(lldb::SBFile(*out_fd, "w", false));
+
+  llvm::Expected<int> err_fd = err.GetWriteFileDescriptor();
+  if (!err_fd)
+    return err_fd.takeError();
+  debugger.SetErrorFile(lldb::SBFile(*err_fd, "w", false));
+
+  // The sourceInitFile option is not part of the DAP specification. It is an
+  // extension used by the test suite to prevent sourcing `.lldbinit` and
+  // changing its behavior.
+  if (sourceInitFile) {
+    debugger.SkipLLDBInitFiles(false);
+    debugger.SkipAppInitFiles(false);
+    lldb::SBCommandReturnObject init;
+    auto interp = debugger.GetCommandInterpreter();
+    interp.SourceInitFileInGlobalDirectory(init);
+    interp.SourceInitFileInHomeDirectory(init);
+  }
+
+  // Run initialization commands
+  if (llvm::Error err = RunPreInitCommands())
+    return err;
+
+  auto cmd = debugger.GetCommandInterpreter().AddMultiwordCommand(
+      "lldb-dap", "Commands for managing lldb-dap.");
+
+  if (clientFeatures.contains(eClientFeatureStartDebuggingRequest)) {
+    cmd.AddCommand(
+        "start-debugging", new StartDebuggingCommand(*this),
+        "Sends a startDebugging request from the debug adapter to the client "
+        "to start a child debug session of the same type as the caller.");
+  }
+
+  cmd.AddCommand(
+      "repl-mode", new ReplModeCommand(*this),
+      "Get or set the repl behavior of lldb-dap evaluation requests.");
+  cmd.AddCommand("send-event", new SendEventCommand(*this),
+                 "Sends an DAP event to the client.");
+
+
+  return StartEventThreads();
+}
+
 void DAP::ProgressEventThread() {
   lldb::SBListener listener("lldb-dap.progress.listener");
   debugger.GetBroadcaster().AddListener(
@@ -1383,7 +1462,6 @@ void DAP::ProgressEventThread() {
   }
 }
 
-
 // All events from the debugger, target, process, thread and frames are
 // received in this function that runs in its own thread. We are using a
 // "FILE *" to output packets back to VS Code and they have mutexes in them
@@ -1403,9 +1481,11 @@ void DAP::EventThread() {
       if (lldb::SBProcess::EventIsProcessEvent(event)) {
         lldb::SBProcess process = lldb::SBProcess::GetProcessFromEvent(event);
         // Find the DAP instance that owns this process's target
-        DAP* dap_instance = DAPSessionManager::GetInstance().FindDAPForTarget(process.GetTarget());
-        if (!dap_instance) continue;
-        
+        DAP *dap_instance = DAPSessionManager::GetInstance().FindDAPForTarget(
+            process.GetTarget());
+        if (!dap_instance)
+          continue;
+
         if (event_mask & lldb::SBProcess::eBroadcastBitStateChanged) {
           auto state = lldb::SBProcess::GetStateFromEvent(event);
           switch (state) {
@@ -1464,10 +1544,12 @@ void DAP::EventThread() {
             event_mask & lldb::SBTarget::eBroadcastBitModulesUnloaded ||
             event_mask & lldb::SBTarget::eBroadcastBitSymbolsLoaded ||
             event_mask & lldb::SBTarget::eBroadcastBitSymbolsChanged) {
-          lldb::SBTarget event_target = lldb::SBTarget::GetTargetFromEvent(event);
+          lldb::SBTarget event_target =
+              lldb::SBTarget::GetTargetFromEvent(event);
           // Find the DAP instance that owns this target
-          DAP* dap_instance = DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
-          if (!dap_instance) 
+          DAP *dap_instance =
+              DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
+          if (!dap_instance)
             continue;
 
           const uint32_t num_modules =
@@ -1487,7 +1569,8 @@ void DAP::EventThread() {
 
             llvm::StringRef module_id = p_module->id;
 
-            const bool module_exists = dap_instance->modules.contains(module_id);
+            const bool module_exists =
+                dap_instance->modules.contains(module_id);
             if (remove_module && module_exists) {
               dap_instance->modules.erase(module_id);
               dap_instance->Send(protocol::Event{
