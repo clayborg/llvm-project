@@ -86,8 +86,9 @@ const char DEV_NULL[] = "/dev/null";
 
 namespace lldb_dap {
 
-static DAPSessionManager *instance = nullptr;
 DAPSessionManager &DAPSessionManager::GetInstance() {
+  // NOTE: intentional leak to avoid issues with C++ destructor chain
+  static DAPSessionManager *instance = nullptr;
   if (!instance) {
     instance = new DAPSessionManager();
   }
@@ -339,7 +340,6 @@ llvm::Error DAP::ConfigureIO(std::FILE *overrideOut, std::FILE *overrideErr) {
 
   return llvm::Error::success();
 }
-
 
 void DAP::StopEventHandlers() {
   // Check if this is the last reference to the shared event thread
@@ -1321,13 +1321,13 @@ protocol::Capabilities DAP::GetCapabilities() {
 
 void DAP::StartEventThread() {
   // Get event thread for this debugger (creates it if it doesn't exist)
-  event_thread_sp = DAPSessionManager::GetInstance().GetEventThreadForDebugger(debugger, this);
+  event_thread_sp = DAPSessionManager::GetInstance().GetEventThreadForDebugger(
+      debugger, this);
 }
 
 void DAP::StartProgressEventThread() {
   progress_event_thread = std::thread(&DAP::ProgressEventThread, this);
 }
-
 
 llvm::Error DAP::StartEventThreads() {
   if (clientFeatures.contains(eClientFeatureProgressReporting))
@@ -1397,7 +1397,6 @@ llvm::Error DAP::InitializeDebugger(bool use_shared_debugger) {
       "Get or set the repl behavior of lldb-dap evaluation requests.");
   cmd.AddCommand("send-event", new SendEventCommand(*this),
                  "Sends an DAP event to the client.");
-
 
   return StartEventThreads();
 }
@@ -1594,6 +1593,9 @@ void DAP::EventThread() {
           // Set the shared debugger for GPU processes
           DAPSessionManager::GetInstance().SetSharedDebugger(debugger);
 
+          // We create "attachCommands" that will select the target that already
+          // exists in LLDB. The DAP instance will attach to this already
+          // existing target and the debug session will be ready to go.
           llvm::json::Object attach_config;
           llvm::json::Array attach_commands;
 
