@@ -315,8 +315,28 @@ class DebugCommunication(object):
         elif packet_type == "response":
             if packet["command"] == "disconnect":
                 keepGoing = False
+        elif packet_type == "request":
+            # This is a reverse request automatically spawned from LLDB (eg. for GPU targets)
+            command = packet.get("command", "unknown")
+            self.reverse_requests.append(packet)
+            if command == "startDebugging":
+                self._handle_startDebugging_request(packet)
+            else:
+                desc = f"unhandled automatic reverse request of type {command}"
+                raise ValueError(desc)
+                
         self._enqueue_recv_packet(packet)
         return keepGoing
+    
+    def _handle_startDebugging_request(self, packet):
+        response = {
+            "type": "response",
+            "request_seq": packet.get("seq", 0),
+            "success": True,
+            "command": "startDebugging",
+            "body": {}
+        }
+        self.send_packet(response, set_sequence=True)
 
     def _process_continued(self, all_threads_continued: bool):
         self.frame_scopes = {}
@@ -670,6 +690,7 @@ class DebugCommunication(object):
         sourceMap: Optional[Union[list[tuple[str, str]], dict[str, str]]] = None,
         gdbRemotePort: Optional[int] = None,
         gdbRemoteHostname: Optional[str] = None,
+        targetIdx: Optional[int] = None,
     ):
         args_dict = {}
         if pid is not None:
@@ -703,6 +724,8 @@ class DebugCommunication(object):
             args_dict["gdb-remote-port"] = gdbRemotePort
         if gdbRemoteHostname is not None:
             args_dict["gdb-remote-hostname"] = gdbRemoteHostname
+        if targetIdx is not None:
+            args_dict["targetIdx"] = targetIdx
         command_dict = {"command": "attach", "type": "request", "arguments": args_dict}
         return self.send_recv(command_dict)
 
@@ -1333,6 +1356,8 @@ class DebugAdapterServer(DebugCommunication):
     ):
         self.process = None
         self.connection = None
+        self.child_dap_sessions: list["DebugAdapterServer"] = []  # Track child sessions for cleanup
+        
         if executable is not None:
             process, connection = DebugAdapterServer.launch(
                 executable=executable, connection=connection, env=env, log_file=log_file
@@ -1414,6 +1439,65 @@ class DebugAdapterServer(DebugCommunication):
         if self.process:
             return self.process.pid
         return -1
+    
+    def get_child_sessions(self) -> list["DebugAdapterServer"]:
+        return self.child_dap_sessions
+    
+    def _handle_startDebugging_request(self, packet):
+        """Launch a new DebugAdapterServer with attach config parameters from the packet"""
+        try:
+            # Extract arguments from the packet
+            arguments = packet.get('arguments', {})
+            request_type = arguments.get('request', 'attach')  # 'attach' or 'launch'
+            configuration = arguments.get('configuration', {})
+            
+            # Create a new DAP session that launches its own lldb-dap process
+            child_dap = DebugAdapterServer(
+                connection=self.connection,
+                log_file=self.log_file
+            )
+            
+            # Track the child session for proper cleanup
+            self.child_dap_sessions.append(child_dap)
+            
+            # Initialize the child DAP session
+            child_dap.request_initialize()
+            
+            # Configure the child session based on the request type and configuration
+            if request_type == 'attach':
+                # Extract attach-specific parameters
+                attach_commands = configuration.get('attachCommands', [])
+                target_idx = configuration.get('targetIdx', None)
+                
+                # Send attach request to the child DAP
+                child_dap.request_attach(
+                    attachCommands=attach_commands,
+                    targetIdx=target_idx,
+                )
+            else:
+                raise ValueError(f"Unsupported startDebugging request type: {request_type}")
+            
+            # Send success response
+            response = {
+                "type": "response",
+                "request_seq": packet.get("seq", 0),
+                "success": True,
+                "command": "startDebugging",
+                "body": {}
+            }
+            
+        except Exception as e:
+            # Send error response
+            response = {
+                "type": "response", 
+                "request_seq": packet.get("seq", 0),
+                "success": False,
+                "command": "startDebugging",
+                "message": f"Failed to start debugging: {str(e)}",
+                "body": {}
+            }
+            
+        self.send_packet(response, set_sequence=True)
 
     def terminate(self):
         try:
