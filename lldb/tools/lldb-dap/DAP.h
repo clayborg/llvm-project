@@ -86,11 +86,11 @@ public:
   /// Wait for all sessions to finish disconnecting
   void WaitForAllSessionsToDisconnect();
 
-  /// Set the shared debugger instance (only for GPU processes)
-  void SetSharedDebugger(lldb::SBDebugger debugger);
+  /// Set the shared debugger instance for a specific target index
+  void SetSharedDebugger(uint32_t target_idx, lldb::SBDebugger debugger);
 
-  /// Get the shared debugger instance if it exists
-  std::optional<lldb::SBDebugger> GetSharedDebugger();
+  /// Get the shared debugger instance for a specific target index
+  std::optional<lldb::SBDebugger> GetSharedDebugger(uint32_t target_idx);
 
   /// Get or create event thread for a specific debugger
   std::shared_ptr<std::thread>
@@ -116,9 +116,9 @@ private:
   std::condition_variable m_sessions_condition;
   std::map<lldb::IOObjectSP, DAP *> m_active_sessions;
 
-  /// Optional shared debugger instance set when the native process
+  /// Optional map from target index to shared debugger set when the native process
   /// spawns a new GPU target
-  std::optional<lldb::SBDebugger> m_shared_debugger;
+  std::map<uint32_t, lldb::SBDebugger> m_target_to_debugger_map;
 
   /// Map from debugger ID to its event thread used for when
   /// multiple DAP sessions are using the same debugger instance.
@@ -474,7 +474,8 @@ struct DAP {
   /// @{
 
   /// Perform complete DAP initialization in one call
-  llvm::Error InitializeDebugger(bool use_shared_debugger);
+  llvm::Error
+  InitializeDebugger(std::optional<uint32_t> target_idx = std::nullopt);
 
   /// Start event handling threads based on client capabilities
   llvm::Error StartEventThreads();
