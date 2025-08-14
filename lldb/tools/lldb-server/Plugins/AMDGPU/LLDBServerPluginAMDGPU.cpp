@@ -80,7 +80,7 @@ static constexpr uint32_t kGpuLoaderBreakpointIdentifier = 1;
 // on the issues and alternatives:
 // https://github.com/clayborg/llvm-project/pull/20
 static const char *kSetDbgApiBreakpointByName =
-    nullptr; // rocr::_loader_debug_state
+    "_ZN4rocr19_loader_debug_stateEv"; // rocr::_loader_debug_state
 
 static amd_dbgapi_status_t amd_dbgapi_insert_breakpoint_callback(
     amd_dbgapi_client_process_id_t client_process_id,
