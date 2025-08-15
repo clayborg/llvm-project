@@ -10,6 +10,7 @@
 #define LLDB_TOOLS_LLDB_DAP_DAP_H
 
 #include "DAPForward.h"
+#include "DAPSessionManager.h"
 #include "ExceptionBreakpoint.h"
 #include "FunctionBreakpoint.h"
 #include "InstructionBreakpoint.h"
@@ -65,69 +66,6 @@ typedef llvm::DenseMap<lldb::addr_t, InstructionBreakpoint>
 using AdapterFeature = protocol::AdapterFeature;
 using ClientFeature = protocol::ClientFeature;
 
-/// Global DAP session manager
-class DAPSessionManager {
-public:
-  /// Get the singleton instance of the DAP session manager
-  static DAPSessionManager &GetInstance();
-
-  /// Register a DAP session
-  void RegisterSession(lldb::IOObjectSP io, DAP *dap);
-
-  /// Unregister a DAP session
-  void UnregisterSession(lldb::IOObjectSP io);
-
-  /// Get all active DAP sessions
-  std::vector<DAP *> GetActiveSessions();
-
-  /// Disconnect all active sessions
-  void DisconnectAllSessions();
-
-  /// Wait for all sessions to finish disconnecting
-  void WaitForAllSessionsToDisconnect();
-
-  /// Set the shared debugger instance for a specific target index
-  void SetSharedDebugger(uint32_t target_idx, lldb::SBDebugger debugger);
-
-  /// Get the shared debugger instance for a specific target index
-  std::optional<lldb::SBDebugger> GetSharedDebugger(uint32_t target_idx);
-
-  /// Get or create event thread for a specific debugger
-  std::shared_ptr<std::thread>
-  GetEventThreadForDebugger(lldb::SBDebugger debugger, DAP *requesting_dap);
-
-  /// Find the DAP instance that owns the given target
-  DAP *FindDAPForTarget(lldb::SBTarget target);
-
-  /// Clean up shared resources when the last session exits
-  void CleanupSharedResources();
-
-  /// Clean up expired event threads from the collection
-  void ReleaseExpiredEventThreads();
-
-private:
-  DAPSessionManager() = default;
-  ~DAPSessionManager() = default;
-
-  // Non-copyable and non-movable
-  DAPSessionManager(const DAPSessionManager &) = delete;
-  DAPSessionManager &operator=(const DAPSessionManager &) = delete;
-  DAPSessionManager(DAPSessionManager &&) = delete;
-  DAPSessionManager &operator=(DAPSessionManager &&) = delete;
-
-  std::mutex m_sessions_mutex;
-  std::condition_variable m_sessions_condition;
-  std::map<lldb::IOObjectSP, DAP *> m_active_sessions;
-
-  /// Optional map from target index to shared debugger set when the native
-  /// process spawns a new GPU target
-  std::map<uint32_t, lldb::SBDebugger> m_target_to_debugger_map;
-
-  /// Map from debugger ID to its event thread used for when
-  /// multiple DAP sessions are using the same debugger instance.
-  std::map<lldb::user_id_t, std::weak_ptr<std::thread>>
-      m_debugger_event_threads;
-};
 
 enum class OutputType { Console, Important, Stdout, Stderr, Telemetry };
 
