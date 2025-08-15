@@ -32,9 +32,7 @@ namespace lldb_dap {
 Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   // Initialize DAP debugger and related components if not sharing previously
   // launched debugger.
-  std::optional<uint32_t> target_idx =
-      (args.targetIdx == UINT32_MAX) ? std::nullopt
-                                     : std::optional<uint32_t>{args.targetIdx};
+  std::optional<uint32_t> target_idx = args.targetIdx;
   if (Error err = dap.InitializeDebugger(target_idx)) {
     return err;
   }
@@ -76,10 +74,10 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   lldb::SBError error;
   lldb::SBTarget target;
   if (target_idx) {
-    lldb::SBTarget target = dap.debugger.GetTargetAtIndex(args.targetIdx);
+    lldb::SBTarget target = dap.debugger.GetTargetAtIndex(*target_idx);
     if (!target.IsValid()) {
       error.SetErrorStringWithFormat("invalid target_idx %u in attach config",
-                                     args.targetIdx);
+                                     *target_idx);
     }
   } else {
     target = dap.CreateTarget(error);
