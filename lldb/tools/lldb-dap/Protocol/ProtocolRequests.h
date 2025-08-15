@@ -346,7 +346,7 @@ struct AttachRequestArguments {
   std::string coreFile;
 
   /// Index of an existing target to attach to.
-  uint32_t targetIdx = UINT32_MAX;
+  std::optional<uint32_t> targetIdx;
 
   /// @}
 };

@@ -102,6 +102,9 @@ public:
   /// Clean up shared resources when the last session exits
   void CleanupSharedResources();
 
+  /// Clean up expired event threads from the collection
+  void ReleaseExpiredEventThreads();
+
 private:
   DAPSessionManager() = default;
   ~DAPSessionManager() = default;
@@ -116,13 +119,13 @@ private:
   std::condition_variable m_sessions_condition;
   std::map<lldb::IOObjectSP, DAP *> m_active_sessions;
 
-  /// Optional map from target index to shared debugger set when the native process
-  /// spawns a new GPU target
+  /// Optional map from target index to shared debugger set when the native
+  /// process spawns a new GPU target
   std::map<uint32_t, lldb::SBDebugger> m_target_to_debugger_map;
 
   /// Map from debugger ID to its event thread used for when
   /// multiple DAP sessions are using the same debugger instance.
-  std::map<lldb::user_id_t, std::shared_ptr<std::thread>>
+  std::map<lldb::user_id_t, std::weak_ptr<std::thread>>
       m_debugger_event_threads;
 };
 

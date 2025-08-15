@@ -150,15 +150,19 @@ DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
 
   // Check if we already have a thread (most common case)
   auto it = m_debugger_event_threads.find(debugger_id);
-  if (it != m_debugger_event_threads.end() && it->second) {
-    return it->second;
+  if (it != m_debugger_event_threads.end()) {
+    if (auto thread_sp = it->second.lock()) {
+      return thread_sp;
+    }
+    // Our weak pointer has expired
+    m_debugger_event_threads.erase(it);
   }
 
   // Create new thread and store it
-  auto new_thread =
+  auto new_thread_sp =
       std::make_shared<std::thread>(&DAP::EventThread, requesting_dap);
-  m_debugger_event_threads[debugger_id] = new_thread;
-  return new_thread;
+  m_debugger_event_threads[debugger_id] = new_thread_sp;
+  return new_thread_sp;
 }
 
 void DAPSessionManager::SetSharedDebugger(uint32_t target_idx,
@@ -194,6 +198,19 @@ void DAPSessionManager::CleanupSharedResources() {
   // SBDebugger destructors will handle cleanup when the map entries are
   // destroyed
   m_target_to_debugger_map.clear();
+}
+
+void DAPSessionManager::ReleaseExpiredEventThreads() {
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  for (auto it = m_debugger_event_threads.begin();
+       it != m_debugger_event_threads.end();) {
+    // Check if the weak_ptr has expired (no DAP instances are using it anymore)
+    if (it->second.expired()) {
+      it = m_debugger_event_threads.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 static std::string GetStringFromStructuredData(lldb::SBStructuredData &data,
@@ -357,6 +374,11 @@ void DAP::StopEventHandlers() {
 
     event_thread_sp->join();
   }
+
+  event_thread_sp.reset();
+
+  // Clean up expired event threads from the session manager
+  DAPSessionManager::GetInstance().ReleaseExpiredEventThreads();
 
   // Still handle the progress thread normally since it's per-DAP instance
   if (progress_event_thread.joinable()) {
