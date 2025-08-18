@@ -66,7 +66,6 @@ typedef llvm::DenseMap<lldb::addr_t, InstructionBreakpoint>
 using AdapterFeature = protocol::AdapterFeature;
 using ClientFeature = protocol::ClientFeature;
 
-
 enum class OutputType { Console, Important, Stdout, Stderr, Telemetry };
 
 /// Buffer size for handling output events.
@@ -461,7 +460,7 @@ private:
 
   /// Event thread is a shared pointer in case we have a multiple
   /// DAP instances sharing the same event thread
-  std::shared_ptr<std::thread> event_thread_sp;
+  std::shared_ptr<ManagedEventThread> event_thread_sp;
   std::thread progress_event_thread;
   /// @}
 

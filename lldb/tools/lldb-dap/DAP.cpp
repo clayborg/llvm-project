@@ -239,15 +239,6 @@ llvm::Error DAP::ConfigureIO(std::FILE *overrideOut, std::FILE *overrideErr) {
 }
 
 void DAP::StopEventHandlers() {
-  // Check if this is the last reference to the shared event thread
-  if (event_thread_sp && event_thread_sp.use_count() == 1 &&
-      event_thread_sp->joinable()) {
-    // Signal the shared event thread to stop
-    broadcaster.BroadcastEventByType(eBroadcastBitStopEventThread);
-
-    event_thread_sp->join();
-  }
-
   event_thread_sp.reset();
 
   // Clean up expired event threads from the session manager

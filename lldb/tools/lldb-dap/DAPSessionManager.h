@@ -9,6 +9,7 @@
 #ifndef LLDB_TOOLS_LLDB_DAP_DAPSESSIONMANAGER_H
 #define LLDB_TOOLS_LLDB_DAP_DAPSESSIONMANAGER_H
 
+#include "lldb/API/SBBroadcaster.h"
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/lldb-types.h"
@@ -22,9 +23,24 @@
 
 namespace lldb_dap {
 
-struct DAP; // Forward declaration
+// Forward declarations
+struct DAP; 
 
-/// Global DAP session manager
+class ManagedEventThread {
+public:
+  // Constructor declaration
+  ManagedEventThread(lldb::SBBroadcaster broadcaster, std::thread t);
+
+  ~ManagedEventThread();
+
+  ManagedEventThread(const ManagedEventThread &) = delete;
+  ManagedEventThread &operator=(const ManagedEventThread &) = delete;
+
+private:
+  lldb::SBBroadcaster m_broadcaster;
+  std::thread m_event_thread;
+};
+
 /// Global DAP session manager
 class DAPSessionManager {
 public:
@@ -53,7 +69,7 @@ public:
   std::optional<lldb::SBDebugger> GetSharedDebugger(uint32_t target_idx);
 
   /// Get or create event thread for a specific debugger
-  std::shared_ptr<std::thread>
+  std::shared_ptr<ManagedEventThread>
   GetEventThreadForDebugger(lldb::SBDebugger debugger, DAP *requesting_dap);
 
   /// Find the DAP instance that owns the given target
@@ -85,8 +101,7 @@ private:
 
   /// Map from debugger ID to its event thread used for when
   /// multiple DAP sessions are using the same debugger instance.
-  std::map<lldb::user_id_t, std::weak_ptr<std::thread>>
-      m_debugger_event_threads;
+  std::map<lldb::user_id_t, std::weak_ptr<ManagedEventThread>> m_debugger_event_threads;
 };
 
 } // namespace lldb_dap

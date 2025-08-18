@@ -5,15 +5,27 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
 #include "DAPSessionManager.h"
 #include "DAP.h"
+#include "lldb/API/SBBroadcaster.h"
+#include "lldb/API/SBEvent.h"
 #include "lldb/API/SBTarget.h"
 #include "llvm/Support/Threading.h"
 #include <chrono>
 #include <mutex>
 
 namespace lldb_dap {
+
+ManagedEventThread::ManagedEventThread(lldb::SBBroadcaster broadcaster,
+                                       std::thread t)
+    : m_broadcaster(broadcaster), m_event_thread(std::move(t)) {}
+
+ManagedEventThread::~ManagedEventThread() {
+  if (m_event_thread.joinable()) {
+    m_broadcaster.BroadcastEventByType(eBroadcastBitStopEventThread);
+    m_event_thread.join();
+  }
+}
 
 DAPSessionManager &DAPSessionManager::GetInstance() {
   // NOTE: intentional leak to avoid issues with C++ destructor chain
@@ -74,26 +86,26 @@ void DAPSessionManager::WaitForAllSessionsToDisconnect() {
   m_sessions_condition.wait(lock, [this] { return m_active_sessions.empty(); });
 }
 
-std::shared_ptr<std::thread>
+std::shared_ptr<ManagedEventThread>
 DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
                                              DAP *requesting_dap) {
   lldb::user_id_t debugger_id = debugger.GetID();
-
   std::lock_guard<std::mutex> lock(m_sessions_mutex);
 
-  // Check if we already have a thread (most common case)
-  auto it = m_debugger_event_threads.find(debugger_id);
-  if (it != m_debugger_event_threads.end()) {
-    if (auto thread_sp = it->second.lock()) {
+  // Try to use shared event thread, if it exists
+  if (auto it = m_debugger_event_threads.find(debugger_id);
+      it != m_debugger_event_threads.end()) {
+    if (auto thread_sp = it->second.lock()) { 
       return thread_sp;
     }
     // Our weak pointer has expired
     m_debugger_event_threads.erase(it);
   }
 
-  // Create new thread and store it
-  auto new_thread_sp =
-      std::make_shared<std::thread>(&DAP::EventThread, requesting_dap);
+  // Create a new event thread and store it
+  auto new_thread_sp = std::make_shared<ManagedEventThread>(
+      requesting_dap->broadcaster,
+      std::thread(&DAP::EventThread, requesting_dap));
   m_debugger_event_threads[debugger_id] = new_thread_sp;
   return new_thread_sp;
 }
