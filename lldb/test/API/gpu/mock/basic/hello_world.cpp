@@ -16,8 +16,9 @@ int gpu_kernel() {
 }
 
 int main(int argc, const char **argv) {
+  // CPU BREAKPOINT - BEFORE INITIALIZE
   gpu_initialize();
-  // CPU BREAKPOINT - BEFORE LAUNCH
+  // CPU BREAKPOINT - AFTER INITIALIZE
   gpu_shlib_load();
   gpu_third_stop();
   gpu_shlib_load();
