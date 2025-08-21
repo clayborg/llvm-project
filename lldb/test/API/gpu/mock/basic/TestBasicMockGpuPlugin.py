@@ -7,7 +7,8 @@ import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test.lldbtest import *
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 
-CPU_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - BEFORE LAUNCH"
+CPU_BEFORE_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - BEFORE INITIALIZE"
+CPU_AFTER_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - AFTER INITIALIZE"
 GPU_BREAKPOINT_COMMENT = "// MOCK GPU BREAKPOINT"
 SOURCE_FILE = "hello_world.cpp"
 
@@ -20,7 +21,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.source_spec = lldb.SBFileSpec(SOURCE_FILE, False)
         (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
             lldbutil.run_to_source_breakpoint(
-                self, CPU_BREAKPOINT_COMMENT, self.source_spec
+                self, CPU_BEFORE_BREAKPOINT_COMMENT, self.source_spec
             )
         )
 
@@ -29,6 +30,14 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Verify that two targets exist: one CPU and one mock GPU.
         Ensures the GPU thread is correctly named.
         """
+        # Check that there is one CPU target before GPU is initialized.
+        self.assertEqual(self.dbg.GetNumTargets(), 1, "There is one CPU target")
+
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
         # Check that there are two targets.
         self.assertEqual(self.dbg.GetNumTargets(), 2, "There are two targets")
 
@@ -51,11 +60,21 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Test that we can read registers from the mock GPU target
         and the "fake" register values are correct.
         """
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
         # Switch to the GPU target and read the registers.
         self.select_gpu()
         gpu_thread = self.gpu_process.GetThreadAtIndex(0)
         gpu_frame = gpu_thread.GetFrameAtIndex(0)
-        gpu_registers = lldbutil.get_registers(gpu_frame, "general purpose")
+        gpu_registers_raw = lldbutil.get_registers(gpu_frame, "general purpose")
+
+        # Convert the registers to a dictionary for easier checking.
+        gpu_registers = {
+            reg.GetName(): reg.GetValueAsUnsigned() for reg in gpu_registers_raw
+        }
 
         expected_registers = {
             "R0": 0x0,
@@ -72,11 +91,9 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             "Flags": 0xB,
         }
         for reg_name, expected_value in expected_registers.items():
-            # Find the register by name in the gpu_registers list.
-            reg = next((r for r in gpu_registers if r.GetName() == reg_name), None)
-            self.assertIsNotNone(reg, f"Register {reg_name} not found")
+            self.assertIn(reg_name, gpu_registers)
             self.assertEqual(
-                reg.GetValueAsUnsigned(),
+                gpu_registers[reg_name],
                 expected_value,
                 f"Register {reg_name} value mismatch",
             )
