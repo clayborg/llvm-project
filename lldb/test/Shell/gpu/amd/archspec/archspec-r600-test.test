@@ -1,0 +1,132 @@
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_R600
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=r600
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_R630
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=r630
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RS880
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rs880
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RV670
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rv670
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RV670
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rv670
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RV710
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rv710
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RV730
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rv730
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_RV770
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=rv770
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_CEDAR
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=cedar
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_CYPRESS
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=cypress
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_JUNIPER
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=juniper
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_REDWOOD
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=redwood
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_SUMO
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=sumo
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_BARTS
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=barts
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_CAICOS
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=caicos
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_CAYMAN
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=cayman
+
+# RUN: yaml2obj %s -o %t.obj -DFLAGS=EF_AMDGPU_MACH_R600_TURKS
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'image list -t' \
+# RUN:   -o 'script m = lldb.target.modules[0]' \
+# RUN:   -o 'script print("Address size =", m.GetAddressByteSize())' \
+# RUN:   | FileCheck %s -DCPU=turks
+
+
+# CHECK:          r600-amd-amdhsa--[[CPU]]
+# CHECK:          Address size = 4
+
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS32
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_AMDGPU
+  OSABI:           ELFOSABI_AMDGPU_HSA
+  ABIVersion:      4 # ELFABIVERSION_AMDGPU_HSA_V6
+  Flags:           [ [[FLAGS]] ]

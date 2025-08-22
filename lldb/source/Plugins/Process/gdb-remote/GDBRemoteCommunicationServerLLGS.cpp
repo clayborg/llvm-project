@@ -44,6 +44,7 @@
 #include "lldb/Utility/UnimplementedError.h"
 #include "lldb/Utility/UriParser.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/TargetParser/Triple.h"
@@ -103,6 +104,13 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
                                 &GDBRemoteCommunicationServerLLGS::Handle__M);
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType__m,
                                 &GDBRemoteCommunicationServerLLGS::Handle__m);
+  RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_qMemRead,
+      &GDBRemoteCommunicationServerLLGS::Handle_qMemRead);
+  RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jAddressSpacesInfo,
+      &GDBRemoteCommunicationServerLLGS::Handle_jAddressSpacesInfo);
+
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType_p,
                                 &GDBRemoteCommunicationServerLLGS::Handle_p);
   RegisterMemberFunctionHandler(StringExtractorGDBRemote::eServerPacketType_P,
@@ -553,14 +561,54 @@ static llvm::StringRef GetEncodingNameOrEmpty(const RegisterInfo &reg_info) {
 
 static llvm::StringRef GetFormatNameOrEmpty(const RegisterInfo &reg_info) {
   switch (reg_info.format) {
+  case eFormatDefault:
+    return "";
+  case eFormatBoolean:
+    return "boolean";
   case eFormatBinary:
     return "binary";
+  case eFormatBytes:
+    return "bytes";
+  case eFormatBytesWithASCII:
+    return "bytes-with-ascii";
+  case eFormatChar:
+    return "char";
+  case eFormatCharPrintable:
+    return "char-printable";
+  case eFormatComplex:
+    return "complex";
+  case eFormatCString:
+    return "cstring";
   case eFormatDecimal:
     return "decimal";
+  case eFormatEnum:
+    return "enum";
   case eFormatHex:
     return "hex";
+  case eFormatHexUppercase:
+    return "hex-uppercase";
   case eFormatFloat:
     return "float";
+  case eFormatOctal:
+    return "octal";
+  case eFormatOSType:
+    return "ostype";
+  case eFormatUnicode16:
+    return "unicode16";
+  case eFormatUnicode32:
+    return "unicode32";
+  case eFormatUnsigned:
+    return "unsigned";
+  case eFormatPointer:
+    return "pointer";
+  case eFormatVectorOfChar:
+    return "vector-char";
+  case eFormatVectorOfSInt64:
+    return "vector-sint64";
+  case eFormatVectorOfFloat16:
+    return "vector-float16";
+  case eFormatVectorOfFloat64:
+    return "vector-float64";
   case eFormatVectorOfSInt8:
     return "vector-sint8";
   case eFormatVectorOfUInt8:
@@ -579,8 +627,24 @@ static llvm::StringRef GetFormatNameOrEmpty(const RegisterInfo &reg_info) {
     return "vector-uint64";
   case eFormatVectorOfUInt128:
     return "vector-uint128";
+  case eFormatComplexInteger:
+    return "complex-integer";
+  case eFormatCharArray:
+    return "char-array";
+  case eFormatAddressInfo:
+    return "address-info";
+  case eFormatHexFloat:
+    return "hex-float";
+  case eFormatInstruction:
+    return "instruction";
+  case eFormatVoid:
+    return "void";
+  case eFormatUnicode8:
+    return "unicode8";
+  case eFormatFloat128:
+    return "float128";
   default:
-    return "";
+    llvm_unreachable("Unknown register format");
   };
 }
 
@@ -814,7 +878,8 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
   return threads_array;
 }
 
-StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
+StreamGDBRemote
+GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     NativeThreadProtocol &thread) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
 
@@ -824,7 +889,7 @@ StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
            thread.GetID());
 
   // Grab the reason this thread stopped.
-  StreamString response;
+  StreamGDBRemote response;
   struct ThreadStopInfo tid_stop_info;
   std::string description;
   if (!thread.GetStopReason(tid_stop_info, description))
@@ -1025,12 +1090,23 @@ GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
   if (!thread)
     return SendErrorResponse(51);
 
-  StreamString response = PrepareStopReplyPacketForThread(*thread);
+  StreamGDBRemote response = PrepareStopReplyPacketForThread(*thread);
   if (response.Empty())
     return SendErrorResponse(42);
 
-  if (!extra_stop_reply_args.empty())
-    response.PutCString(extra_stop_reply_args);
+  // Append the lldb-server stop ID so we can use that in LLDB if needed.
+  response.Printf("stop_id:%" PRIu32 ";", process.GetStopID());
+
+  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply
+  // packet.
+  for (auto &plugin_up : m_plugins) {
+    if (std::optional<GPUActions> gpu_actions =
+            plugin_up->NativeProcessIsStopping()) {
+      response.PutCString("gpu-actions:");
+      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+      response.PutChar(';');
+    }
+  }
 
   if (m_non_stop && !force_synchronous) {
     PacketResult ret = SendNotificationPacketNoLock(
@@ -1050,7 +1126,8 @@ void GDBRemoteCommunicationServerLLGS::EnqueueStopReplyPackets(
 
   for (NativeThreadProtocol &listed_thread : m_current_process->Threads()) {
     if (listed_thread.GetID() != thread_to_skip) {
-      StreamString stop_reply = PrepareStopReplyPacketForThread(listed_thread);
+      StreamGDBRemote stop_reply =
+          PrepareStopReplyPacketForThread(listed_thread);
       if (!stop_reply.Empty())
         m_stop_notification_queue.push_back(stop_reply.GetString().str());
     }
@@ -1106,7 +1183,7 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Stopped(
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log, "GDBRemoteCommunicationServerLLGS::%s called", __FUNCTION__);
 
-  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply 
+  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply
   // packet.
   StreamGDBRemote extra_stop_reply_args;
   for (auto &plugin_up : m_plugins) {
@@ -1118,7 +1195,7 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Stopped(
     }
   }
 
-  // Check if the process has any GPUActions to perform. 
+  // Check if the process has any GPUActions to perform.
   if (std::optional<GPUActions> gpu_actions = process->GetGPUActions()) {
     extra_stop_reply_args.PutCString("gpu-actions:");
     extra_stop_reply_args.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
@@ -1952,7 +2029,7 @@ GDBRemoteCommunicationServerLLGS::Handle_stop_reason(
       // stop reasons).
       NativeThreadProtocol *thread = m_current_process->GetCurrentThread();
       if (thread) {
-        StreamString stop_reply = PrepareStopReplyPacketForThread(*thread);
+        StreamGDBRemote stop_reply = PrepareStopReplyPacketForThread(*thread);
         if (!stop_reply.Empty())
           m_stop_notification_queue.push_back(stop_reply.GetString().str());
       }
@@ -4025,6 +4102,101 @@ GDBRemoteCommunicationServerLLGS::Handle_QMemTags(
 }
 
 GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jAddressSpacesInfo(
+    StringExtractorGDBRemote &packet) {
+  Log *log = GetLog(LLDBLog::Process);
+
+  // Ensure we have a process.
+  if (!m_current_process ||
+      (m_current_process->GetID() == LLDB_INVALID_PROCESS_ID)) {
+    LLDB_LOGF(
+        log,
+        "GDBRemoteCommunicationServerLLGS::%s failed, no process available",
+        __FUNCTION__);
+    return SendErrorResponse(Status::FromErrorString("invalid process"));
+  }
+  std::vector<AddressSpaceInfo> address_spaces =
+      m_current_process->GetAddressSpaces();
+  if (address_spaces.empty())
+    return SendUnimplementedResponse(packet.GetStringRef().data());
+  StreamGDBRemote response;
+  response.PutAsJSONArray(address_spaces);
+  return SendPacketNoLock(response.GetString());
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_qMemRead(
+    StringExtractorGDBRemote &packet) {
+
+  // Ensure we have a process.
+  if (!m_current_process ||
+      (m_current_process->GetID() == LLDB_INVALID_PROCESS_ID)) {
+    Log *log = GetLog(LLDBLog::Process);
+    LLDB_LOGF(
+        log,
+        "GDBRemoteCommunicationServerLLGS::%s failed, no process available",
+        __FUNCTION__);
+    return SendErrorResponse(Status::FromErrorString("invalid process"));
+  }
+
+  // We are expecting
+  // qMemRead:<key>:<value>;<key>:<value>;...[;<key>:<value>;]
+
+  llvm::StringRef key;
+  llvm::StringRef value;
+  std::optional<lldb::addr_t> addr;
+  std::optional<uint64_t> space;
+  std::optional<uint64_t> length;
+  NativeThreadProtocol *thread = nullptr;
+
+  Log *log = GetLog(GDBRLog::Plugin);
+
+  packet.SetFilePos(::strlen("qMemRead:"));
+  uint64_t uval64;
+  while (packet.GetNameColonValue(key, value)) {
+    LLDB_LOG(log, "qMemRead key = \"{0}\", value = \"{1}\"", key, value);
+    if (key == "addr") {
+      if (value.getAsInteger(16, uval64))
+        return SendIllFormedResponse(packet, "invalid address value");
+      addr = uval64;
+    } else if (key == "length") {
+      if (value.getAsInteger(16, uval64))
+        return SendIllFormedResponse(packet, "invalid length value");
+      length = uval64;
+    } else if (key == "space") {
+      if (value.getAsInteger(16, uval64))
+        return SendIllFormedResponse(packet, "invalid address space value");
+      space = uval64;
+    } else if (key == "tid") {
+      if (value.getAsInteger(16, uval64))
+        return SendIllFormedResponse(packet, "invalid tid value");
+      thread = m_current_process->GetThreadByID(uval64);
+      if (!thread)
+        return SendErrorResponse(Status::FromErrorString("Invalid thread ID"));
+    }
+  }
+
+  if (!addr)
+    return SendErrorResponse(
+        Status::FromErrorString("missing required \"addr\" key/value pair"));
+  if (!length)
+    return SendErrorResponse(
+        Status::FromErrorString("missing required \"length\" key/value pair"));
+
+  StreamGDBRemote response;
+  size_t bytes_read = 0;
+  std::string buf(*length, '\0');
+
+  Status error = m_current_process->ReadMemoryWithSpace(
+      *addr, space.value_or(0), thread, buf.data(), *length, bytes_read);
+  if (error.Fail())
+    return SendErrorResponse(error);
+
+  response.PutBytesAsRawHex8(buf.data(), bytes_read);
+  return SendPacketNoLock(response.GetString());
+}
+
+GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_qSaveCore(
     StringExtractorGDBRemote &packet) {
   // Fail if we don't have a current process.
@@ -4348,6 +4520,8 @@ std::vector<std::string> GDBRemoteCommunicationServerLLGS::HandleFeatures(
     ret.push_back("gpu-plugins+");
   if (bool(plugin_features & Extension::gpu_dyld))
     ret.push_back("gpu-dyld+");
+  if (bool(plugin_features & Extension::address_spaces))
+    ret.push_back("address-spaces+");
 
   // check for client features
   m_extensions_supported = {};

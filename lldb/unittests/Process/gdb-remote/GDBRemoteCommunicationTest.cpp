@@ -19,7 +19,7 @@ namespace {
 
 class TestClient : public GDBRemoteCommunication {
 public:
-  TestClient() : GDBRemoteCommunication() {}
+  TestClient() : GDBRemoteCommunication("TestClient") {}
 
   PacketResult ReadPacket(StringExtractorGDBRemote &response) {
     return GDBRemoteCommunication::ReadPacket(response, std::chrono::seconds(1),

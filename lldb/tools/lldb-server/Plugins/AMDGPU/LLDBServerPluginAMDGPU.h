@@ -67,6 +67,9 @@ public:
     return (ProcessAMDGPU *)m_gdb_server->GetCurrentProcess();
   }
 
+  // Free the memory using the matching callback provided to the debug library.
+  void FreeDbgApiClientMemory(void *mem);
+
   bool CreateGPUBreakpoint(uint64_t addr);
 
   // TODO: make this private
@@ -84,8 +87,7 @@ private:
   void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
 
   bool initRocm();
-  bool HandleGPUInternalBreakpointHit(const GPUInternalBreakpoinInfo &bp,
-                                      bool &has_new_libraries);
+  bool HandleGPUInternalBreakpointHit(const GPUInternalBreakpoinInfo &bp);
   amd_dbgapi_event_id_t
   process_event_queue(amd_dbgapi_event_kind_t until_event_kind);
   bool processGPUEvent();

@@ -150,7 +150,7 @@ protected:
 
   PacketResult SendWResponse(NativeProcessProtocol *process);
 
-  StreamString PrepareStopReplyPacketForThread(NativeThreadProtocol &thread);
+  StreamGDBRemote PrepareStopReplyPacketForThread(NativeThreadProtocol &thread);
 
   PacketResult SendStopReplyPacketForThread(NativeProcessProtocol &process,
                                             lldb::tid_t tid,
@@ -287,6 +287,10 @@ protected:
   PacketResult Handle_qMemTags(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_QMemTags(StringExtractorGDBRemote &packet);
+
+  PacketResult Handle_qMemRead(StringExtractorGDBRemote &packet);
+  
+  PacketResult Handle_jAddressSpacesInfo(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_T(StringExtractorGDBRemote &packet);
 

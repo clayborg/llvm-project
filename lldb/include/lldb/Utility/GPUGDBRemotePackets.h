@@ -76,7 +76,13 @@ llvm::json::Value toJSON(const GPUBreakpointByAddress &data);
 /// plug-in.
 ///-----------------------------------------------------------------------------
 struct GPUBreakpointInfo {
+<<<<<<< HEAD
   std::string identifier;
+=======
+  /// A unique breakpoint ID that is used to identify this breakpoint in the
+  /// the LLDBServerPlugin::BreakpointWasHit(...) callback.
+  uint32_t identifier = 0;
+>>>>>>> f1343a44f5b28872dc405a62d5797ecf21bffd8c
   /// An optional breakpoint by name info.
   std::optional<GPUBreakpointByName> name_info;
   /// An optional load address to set a breakpoint at in the native process.
@@ -173,15 +179,36 @@ llvm::json::Value toJSON(const GPUPluginConnectionInfo &data);
 ///-----------------------------------------------------------------------------
 struct GPUActions {
   GPUActions() = default;
+<<<<<<< HEAD
   GPUActions(llvm::StringRef plugin_name) : plugin_name(plugin_name) {}
 
   /// The name of the plugin.
   std::string plugin_name;
+=======
+  GPUActions(llvm::StringRef _plugin_name) : 
+      plugin_name(_plugin_name) {}
+  GPUActions(llvm::StringRef _plugin_name, uint32_t _stop_id) :
+      plugin_name(_plugin_name),  stop_id(_stop_id) {}
+
+  /// The name of the plugin.
+  std::string plugin_name;
+  /// The stop ID in the process that this action is associated with. If the
+  /// wait_for_gpu_process_to_stop is true, this stop ID will be used to wait
+  /// for. If the wait_for_gpu_process_to_resume is set to true it will wait
+  /// for this stop ID to be resumed.
+  std::optional<uint32_t> stop_id;
+>>>>>>> f1343a44f5b28872dc405a62d5797ecf21bffd8c
   /// New breakpoints to set. Nothing to set if this is empty.
   std::vector<GPUBreakpointInfo> breakpoints;
   /// If a GPU connection is available return a connect URL to use to reverse
   /// connect to the GPU GDB server as a separate process.
   std::optional<GPUPluginConnectionInfo> connect_info;
+<<<<<<< HEAD
+=======
+  /// Set this to true if the GPU process needs to be stopped before the actions
+  /// can proceed.
+  bool wait_for_gpu_process_to_stop = false;
+>>>>>>> f1343a44f5b28872dc405a62d5797ecf21bffd8c
   /// Set this to true if the native plug-in should tell the ProcessGDBRemote
   /// in LLDB for the GPU process to load libraries. This allows the native
   /// process to be notified that it should query for the shared libraries on
@@ -269,8 +296,13 @@ llvm::json::Value toJSON(const GPUDynamicLoaderLibraryInfo &data);
 ///-----------------------------------------------------------------------------
 struct GPUPluginBreakpointHitResponse {
   GPUPluginBreakpointHitResponse() = default;
+<<<<<<< HEAD
   GPUPluginBreakpointHitResponse(llvm::StringRef plugin_name)
       : actions(plugin_name) {}
+=======
+  GPUPluginBreakpointHitResponse(llvm::StringRef plugin_name, uint32_t stop_id)
+      : actions(plugin_name, stop_id) {}
+>>>>>>> f1343a44f5b28872dc405a62d5797ecf21bffd8c
 
   ///< Set to true if this berakpoint should be disabled.
   bool disable_bp = false;

@@ -7,33 +7,42 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLDBServerPluginMockGPU.h"
+#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
+#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ProcessMockGPU.h"
 #include "lldb/Host/common/TCPSocket.h"
-#include "llvm/Support/Error.h"
-#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
+#include "llvm/Support/Error.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
-#include <thread>
 
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
+enum {
+  BreakpointIDInitialize = 1,
+  BreakpointIDShlibLoad = 2,
+  BreakpointIDThirdStop = 3,
+  BreakpointIDResumeAndWaitForResume = 4,
+  BreakpointIDWaitForStop = 5
+};
+
 LLDBServerPluginMockGPU::LLDBServerPluginMockGPU(
-  LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop)
+    LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop)
     : LLDBServerPlugin(native_process, main_loop) {
   m_process_manager_up.reset(new ProcessMockGPU::Manager(m_main_loop));
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
       m_main_loop, *m_process_manager_up, "mock-gpu.server"));
 
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGF(log, "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() faking launch...");
+  LLDB_LOGF(
+      log,
+      "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() faking launch...");
   ProcessLaunchInfo info;
   info.GetFlags().Set(eLaunchFlagStopAtEntry | eLaunchFlagDebug |
                       eLaunchFlagDisableASLR);
@@ -47,19 +56,19 @@ LLDBServerPluginMockGPU::LLDBServerPluginMockGPU(
   m_gdb_server->SetLaunchInfo(info);
   Status error = m_gdb_server->LaunchProcess();
   if (error.Fail()) {
-    LLDB_LOGF(log, "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() failed to launch: %s", error.AsCString());
+    LLDB_LOGF(log,
+              "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() failed to "
+              "launch: %s",
+              error.AsCString());
   } else {
-    LLDB_LOGF(log, "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() launched successfully");
+    LLDB_LOGF(log, "LLDBServerPluginMockGPU::LLDBServerPluginMockGPU() "
+                   "launched successfully");
   }
 }
 
-LLDBServerPluginMockGPU::~LLDBServerPluginMockGPU() {
-  CloseFDs();
-}
+LLDBServerPluginMockGPU::~LLDBServerPluginMockGPU() { CloseFDs(); }
 
-llvm::StringRef LLDBServerPluginMockGPU::GetPluginName() {
-  return "mock-gpu";
-}
+llvm::StringRef LLDBServerPluginMockGPU::GetPluginName() { return "mock-gpu"; }
 
 void LLDBServerPluginMockGPU::CloseFDs() {
   if (m_fds[0] != -1) {
@@ -84,8 +93,7 @@ int LLDBServerPluginMockGPU::GetEventFileDescriptorAtIndex(size_t idx) {
   return m_fds[0];
 }
 
-
-bool LLDBServerPluginMockGPU::HandleEventFileDescriptorEvent(int fd) { 
+bool LLDBServerPluginMockGPU::HandleEventFileDescriptorEvent(int fd) {
   if (fd == m_fds[0]) {
     char buf[1];
     // Read 1 bytes from the fd
@@ -95,43 +103,8 @@ bool LLDBServerPluginMockGPU::HandleEventFileDescriptorEvent(int fd) {
   return false;
 }
 
-void LLDBServerPluginMockGPU::AcceptAndMainLoopThread(
-    std::unique_ptr<TCPSocket> listen_socket_up) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGF(log, "%s spawned", __PRETTY_FUNCTION__);
-  Socket *socket = nullptr;
-  Status error = listen_socket_up->Accept(std::chrono::seconds(30), socket);
-  // Scope for lock guard.
-  {
-    // Protect access to m_is_listening and m_is_connected.
-    std::lock_guard<std::mutex> guard(m_connect_mutex);
-    m_is_listening = false;
-    if (error.Fail()) {
-      LLDB_LOGF(log, "%s error returned from Accept(): %s", __PRETTY_FUNCTION__, 
-                error.AsCString());  
-      return;
-    }
-    m_is_connected = true;
-  }
-
-  LLDB_LOGF(log, "%s initializing connection", __PRETTY_FUNCTION__);
-  std::unique_ptr<Connection> connection_up(
-      new ConnectionFileDescriptor(std::unique_ptr<Socket>(socket)));
-  m_gdb_server->InitializeConnection(std::move(connection_up));
-  LLDB_LOGF(log, "%s running main loop", __PRETTY_FUNCTION__);
-  m_main_loop_status = m_main_loop.Run();
-  LLDB_LOGF(log, "%s main loop exited!", __PRETTY_FUNCTION__);
-  if (m_main_loop_status.Fail()) {
-    LLDB_LOGF(log, "%s main loop exited with an error: %s", __PRETTY_FUNCTION__,
-              m_main_loop_status.AsCString());
-
-  }
-  // Protect access to m_is_connected.
-  std::lock_guard<std::mutex> guard(m_connect_mutex);
-  m_is_connected = false;
-}
-
-std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection() {
+std::optional<GPUPluginConnectionInfo>
+LLDBServerPluginMockGPU::CreateConnection() {
   std::lock_guard<std::mutex> guard(m_connect_mutex);
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGF(log, "%s called", __PRETTY_FUNCTION__);
@@ -145,21 +118,35 @@ std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection
   }
   m_is_listening = true;
   LLDB_LOGF(log, "%s trying to listen on port 0", __PRETTY_FUNCTION__);
-  llvm::Expected<std::unique_ptr<TCPSocket>> sock = 
+  llvm::Expected<std::unique_ptr<TCPSocket>> sock =
       Socket::TcpListen("localhost:0", 5);
   if (sock) {
     GPUPluginConnectionInfo connection_info;
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
-    connection_info.connect_url = llvm::formatv("connect://localhost:{}", 
-                                                listen_port);
+    connection_info.connect_url =
+        llvm::formatv("connect://localhost:{}", listen_port);
     LLDB_LOGF(log, "%s listening to %u", __PRETTY_FUNCTION__, listen_port);
-    std::thread t(&LLDBServerPluginMockGPU::AcceptAndMainLoopThread, this, 
-                  std::move(*sock));
-    t.detach();
+
+    m_listen_socket = std::move(*sock);
+    m_is_connected = false;
+    auto res = m_listen_socket->Accept(
+        m_main_loop, [this](std::unique_ptr<Socket> socket) {
+          std::unique_ptr<Connection> connection_up(
+              new ConnectionFileDescriptor(std::move(socket)));
+          this->m_gdb_server->InitializeConnection(std::move(connection_up));
+          m_is_connected = true;
+        });
+    if (res) {
+      m_read_handles = std::move(*res);
+    } else {
+      LLDB_LOGF(log, "MockGPU failed to accept: %s",
+                llvm::toString(res.takeError()).c_str());
+    }
+
     return connection_info;
   } else {
     std::string error = llvm::toString(sock.takeError());
-    LLDB_LOGF(log, "%s failed to listen to localhost:0: %s", 
+    LLDB_LOGF(log, "%s failed to listen to localhost:0: %s",
               __PRETTY_FUNCTION__, error.c_str());
   }
   m_is_listening = false;
@@ -173,7 +160,7 @@ std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
     GPUActions actions;
     actions.plugin_name = GetPluginName();
     GPUBreakpointInfo bp;
-    bp.identifier = "3rd stop breakpoint";
+    bp.identifier = BreakpointIDThirdStop;
     bp.name_info = {"a.out", "gpu_third_stop"};
     actions.breakpoints.emplace_back(std::move(bp));
     return actions;
@@ -183,50 +170,85 @@ std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
 
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
+  const auto bp_identifier = args.breakpoint.identifier;
   Log *log = GetLog(GDBRLog::Plugin);
-  std::string json_string;
-  std::string &bp_identifier = args.breakpoint.identifier;
-  llvm::raw_string_ostream os(json_string);
-  os << toJSON(args);
-  LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(\"%s\"):\nJSON:\n%s", 
-            bp_identifier.c_str(), json_string.c_str());
-
-  GPUPluginBreakpointHitResponse response;
-  response.actions.plugin_name = GetPluginName();
-  if (bp_identifier == "gpu_initialize") {
+  if (log) {
+    std::string json_string;
+    llvm::raw_string_ostream os(json_string);
+    os << toJSON(args);
+    LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(%u):\nJSON:\n%s",
+              bp_identifier, json_string.c_str());
+  }
+  NativeProcessProtocol *gpu_process = m_gdb_server->GetCurrentProcess();
+  GPUPluginBreakpointHitResponse response(GetPluginName(),
+                                          gpu_process->GetStopID());
+  if (bp_identifier == BreakpointIDInitialize) {
     response.disable_bp = true;
-    LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(\"%s\") disabling breakpoint", 
-              bp_identifier.c_str());
+    LLDB_LOGF(
+        log,
+        "LLDBServerPluginMockGPU::BreakpointWasHit(%u) disabling breakpoint",
+        bp_identifier);
     response.actions.connect_info = CreateConnection();
 
     // We asked for the symbol "gpu_shlib_load" to be delivered as a symbol
     // value when the "gpu_initialize" breakpoint was set. So we will use this
     // to set a breakpoint by address to test setting breakpoints by address.
-    std::optional<uint64_t> gpu_shlib_load_addr = 
+    std::optional<uint64_t> gpu_shlib_load_addr =
         args.GetSymbolValue("gpu_shlib_load");
     if (gpu_shlib_load_addr) {
       GPUBreakpointInfo bp;
-      bp.identifier = "gpu_shlib_load";
+      bp.identifier = BreakpointIDShlibLoad;
       bp.addr_info = {*gpu_shlib_load_addr};
       bp.symbol_names.push_back("g_shlib_list");
       bp.symbol_names.push_back("invalid_symbol");
       response.actions.breakpoints.emplace_back(std::move(bp));
     }
-  } else if (bp_identifier == "gpu_shlib_load") {
+  } else if (bp_identifier == BreakpointIDShlibLoad) {
     // Tell the native process to tell the GPU process to load libraries.
     response.actions.load_libraries = true;
+  } else if (bp_identifier == BreakpointIDThirdStop) {
+    // Tell the native process to tell the GPU process to load libraries.
+    response.actions.load_libraries = true;
+  } else if (bp_identifier == BreakpointIDResumeAndWaitForResume) {
+    response.actions.resume_gpu_process = true;
+    response.actions.wait_for_gpu_process_to_resume = true;
+  } else if (bp_identifier == BreakpointIDWaitForStop) {
+    // Update the stop ID to make sure it reflects the fact that we will need
+    // to stop at the next stop ID.
+    response.actions.stop_id = gpu_process->GetNextStopID();
+    response.actions.wait_for_gpu_process_to_stop = true;
+    // Simulate a long wait for the GPU process to stop.
+    std::thread resume_after_delay_thread([gpu_process] {
+      sleep(5);
+      gpu_process->Halt();
+    });
+    resume_after_delay_thread.detach();
   }
+
   return response;
 }
 
 GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
   GPUActions init_actions;
   init_actions.plugin_name = GetPluginName();
-  
-  GPUBreakpointInfo bp1;
-  bp1.identifier = "gpu_initialize";
-  bp1.name_info = {"a.out", "gpu_initialize"};  
-  bp1.symbol_names.push_back("gpu_shlib_load");
-  init_actions.breakpoints.emplace_back(std::move(bp1));
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDInitialize;
+    bp.name_info = {"a.out", "gpu_initialize"};
+    bp.symbol_names.push_back("gpu_shlib_load");
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDResumeAndWaitForResume;
+    bp.name_info = {"a.out", "gpu_resume_and_wait_for_resume"};
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDWaitForStop;
+    bp.name_info = {"a.out", "gpu_wait_for_stop"};
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
   return init_actions;
 }

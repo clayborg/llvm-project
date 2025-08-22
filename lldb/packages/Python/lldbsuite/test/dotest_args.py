@@ -1,7 +1,7 @@
 # System modules
 import argparse
-import sys
 import os
+import sys
 import textwrap
 
 # LLDB modules
@@ -59,13 +59,19 @@ def create_parser():
         ),
     )
     group.add_argument(
+        "--triple",
+        metavar="triple",
+        dest="triple",
+        help=textwrap.dedent(
+            """Specify the target triple. Used for cross compilation."""
+        ),
+    )
+    group.add_argument(
         "--hipcc-path",
         metavar="path",
         dest="hipcc_path",
         default="",
-        help=textwrap.dedent(
-            """Specify the path to a ROCM hipcc compiler."""
-        ),
+        help=textwrap.dedent("""Specify the path to a ROCM hipcc compiler."""),
     )
     if sys.platform == "darwin":
         group.add_argument(

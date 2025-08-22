@@ -47,11 +47,22 @@ using namespace lldb_private;
 #define LLDB_OPTIONS_memory_read
 #include "CommandOptions.inc"
 
+Status MemorySpaceValidator(const char *string, void *baton) {
+  if (baton == nullptr)
+    return Status::FromErrorString("--space can't be used without a process");
+  Process *process = static_cast<Process *>(baton);
+  if (auto info = process->GetAddressSpaceInfo(string))
+    return Status(); // Success, we found this address space by name.
+  else
+    return Status::FromError(info.takeError());
+}
+
 class OptionGroupReadMemory : public OptionGroup {
 public:
   OptionGroupReadMemory()
       : m_num_per_line(1, 1), m_offset(0, 0),
-        m_language_for_type(eLanguageTypeUnknown) {}
+        m_language_for_type(eLanguageTypeUnknown),
+        m_address_space(nullptr, MemorySpaceValidator, nullptr) {}
 
   ~OptionGroupReadMemory() override = default;
 
@@ -93,19 +104,26 @@ public:
       error = m_offset.SetValueFromString(option_value);
       break;
 
+    case 'p':
+      error = m_address_space.SetValueFromString(option_value);
+      break;
+
     default:
       llvm_unreachable("Unimplemented option");
     }
     return error;
   }
 
-  void OptionParsingStarting(ExecutionContext *execution_context) override {
+  void OptionParsingStarting(ExecutionContext *exe_ctx) override {
     m_num_per_line.Clear();
     m_output_as_binary = false;
     m_view_as_type.Clear();
     m_force = false;
     m_offset.Clear();
     m_language_for_type.Clear();
+    m_address_space.Clear();
+    // Update the address space baton to the execution context process.
+    m_address_space.SetValidatorBaton(exe_ctx->GetProcessPtr());
   }
 
   Status FinalizeSettings(Target *target, OptionGroupFormat &format_options) {
@@ -156,6 +174,7 @@ public:
 
     case eFormatBinary:
     case eFormatFloat:
+    case eFormatFloat128:
     case eFormatOctal:
     case eFormatDecimal:
     case eFormatEnum:
@@ -270,7 +289,8 @@ public:
   bool AnyOptionWasSet() const {
     return m_num_per_line.OptionWasSet() || m_output_as_binary ||
            m_view_as_type.OptionWasSet() || m_offset.OptionWasSet() ||
-           m_language_for_type.OptionWasSet();
+           m_language_for_type.OptionWasSet() || 
+           m_address_space.OptionWasSet();
   }
 
   OptionValueUInt64 m_num_per_line;
@@ -279,6 +299,7 @@ public:
   bool m_force = false;
   OptionValueUInt64 m_offset;
   OptionValueLanguage m_language_for_type;
+  OptionValueString m_address_space;
 };
 
 // Read memory from the inferior process
@@ -660,9 +681,25 @@ protected:
         return;
       }
 
-      Address address(addr, nullptr);
-      bytes_read = target->ReadMemory(address, data_sp->GetBytes(),
-                                      data_sp->GetByteSize(), error, true);
+      // See if we have a address space?
+      if (m_memory_options.m_address_space.OptionWasSet()) {
+        Process *process = m_exe_ctx.GetProcessPtr();
+        if (process) {
+          llvm::StringRef addr_space =
+              m_memory_options.m_address_space.GetCurrentValueAsRef();
+          // Store the thread in case the address space is thread specific.
+          AddressSpec addr_spec(addr, addr_space, m_exe_ctx.GetThreadSP());
+          bytes_read = process->ReadMemory(addr_spec, data_sp->GetBytes(), 
+                                          data_sp->GetByteSize(), error);
+        } else {
+          error = Status::FromErrorString("reading from an address space "
+                                          "requires a process");
+        }
+      } else {
+        Address address(addr, nullptr);
+        bytes_read = target->ReadMemory(address, data_sp->GetBytes(),
+                                        data_sp->GetByteSize(), error, true);
+      }
       if (bytes_read == 0) {
         const char *error_cstr = error.AsCString();
         if (error_cstr && error_cstr[0]) {
@@ -1356,6 +1393,7 @@ protected:
       switch (m_format_options.GetFormat()) {
       case kNumFormats:
       case eFormatFloat: // TODO: add support for floats soon
+      case eFormatFloat128:
       case eFormatCharPrintable:
       case eFormatBytesWithASCII:
       case eFormatComplex:

@@ -40,6 +40,16 @@ struct CoreDefinition {
 
 } // namespace lldb_private
 
+#define AMD_GPU_CORE_DEF_R600(sub)                                             \
+  {                                                                            \
+    eByteOrderLittle, 4, 4, 16, llvm::Triple::r600,                            \
+        ArchSpec::eCore_amd_gpu_r600_##sub, "r600"                             \
+  }
+#define AMD_GPU_CORE_DEF_GCN(sub)                                              \
+  {                                                                            \
+    eByteOrderLittle, 8, 4, 16, llvm::Triple::amdgcn,                          \
+        ArchSpec::eCore_amd_gpu_gcn_##sub, "amdgcn"                            \
+  }
 // This core information can be looked using the ArchSpec::Core as the index
 static const CoreDefinition g_core_definitions[] = {
     {eByteOrderLittle, 4, 2, 4, llvm::Triple::arm, ArchSpec::eCore_arm_generic,
@@ -228,9 +238,9 @@ static const CoreDefinition g_core_definitions[] = {
     {eByteOrderLittle, 4, 4, 4, llvm::Triple::hexagon,
      ArchSpec::eCore_hexagon_hexagonv5, "hexagonv5"},
 
-    {eByteOrderLittle, 4, 2, 4, llvm::Triple::riscv32, ArchSpec::eCore_riscv32,
+    {eByteOrderLittle, 4, 2, 8, llvm::Triple::riscv32, ArchSpec::eCore_riscv32,
      "riscv32"},
-    {eByteOrderLittle, 8, 2, 4, llvm::Triple::riscv64, ArchSpec::eCore_riscv64,
+    {eByteOrderLittle, 8, 2, 8, llvm::Triple::riscv64, ArchSpec::eCore_riscv64,
      "riscv64"},
 
     {eByteOrderLittle, 4, 4, 4, llvm::Triple::loongarch32,
@@ -248,15 +258,81 @@ static const CoreDefinition g_core_definitions[] = {
 
     {eByteOrderLittle, 4, 1, 4, llvm::Triple::wasm32, ArchSpec::eCore_wasm32,
      "wasm32"},
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::r600, 
-      ArchSpec::eCore_amd_gpu_r600,"r600"},
-    {eByteOrderLittle, 8, 4, 4, llvm::Triple::amdgcn, 
-      ArchSpec::eCore_amd_gpu_gcn, "amdgcn"},
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx, 
-      ArchSpec::eCore_nvidia_nvptx,"nvptx"},
-    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64, 
-      ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
-  };
+    AMD_GPU_CORE_DEF_R600(R600),
+    AMD_GPU_CORE_DEF_R600(R630),
+    AMD_GPU_CORE_DEF_R600(RS880),
+    AMD_GPU_CORE_DEF_R600(RV670),
+    AMD_GPU_CORE_DEF_R600(RV710),
+    AMD_GPU_CORE_DEF_R600(RV730),
+    AMD_GPU_CORE_DEF_R600(RV770),
+    AMD_GPU_CORE_DEF_R600(CEDAR),
+    AMD_GPU_CORE_DEF_R600(CYPRESS),
+    AMD_GPU_CORE_DEF_R600(JUNIPER),
+    AMD_GPU_CORE_DEF_R600(REDWOOD),
+    AMD_GPU_CORE_DEF_R600(SUMO),
+    AMD_GPU_CORE_DEF_R600(BARTS),
+    AMD_GPU_CORE_DEF_R600(CAICOS),
+    AMD_GPU_CORE_DEF_R600(CAYMAN),
+    AMD_GPU_CORE_DEF_R600(TURKS),
+    AMD_GPU_CORE_DEF_R600(unknown),
+    AMD_GPU_CORE_DEF_GCN(GFX600),
+    AMD_GPU_CORE_DEF_GCN(GFX601),
+    AMD_GPU_CORE_DEF_GCN(GFX602),
+    AMD_GPU_CORE_DEF_GCN(GFX700),
+    AMD_GPU_CORE_DEF_GCN(GFX701),
+    AMD_GPU_CORE_DEF_GCN(GFX702),
+    AMD_GPU_CORE_DEF_GCN(GFX703),
+    AMD_GPU_CORE_DEF_GCN(GFX704),
+    AMD_GPU_CORE_DEF_GCN(GFX705),
+    AMD_GPU_CORE_DEF_GCN(GFX801),
+    AMD_GPU_CORE_DEF_GCN(GFX802),
+    AMD_GPU_CORE_DEF_GCN(GFX803),
+    AMD_GPU_CORE_DEF_GCN(GFX805),
+    AMD_GPU_CORE_DEF_GCN(GFX810),
+    AMD_GPU_CORE_DEF_GCN(GFX900),
+    AMD_GPU_CORE_DEF_GCN(GFX902),
+    AMD_GPU_CORE_DEF_GCN(GFX904),
+    AMD_GPU_CORE_DEF_GCN(GFX906),
+    AMD_GPU_CORE_DEF_GCN(GFX908),
+    AMD_GPU_CORE_DEF_GCN(GFX909),
+    AMD_GPU_CORE_DEF_GCN(GFX90A),
+    AMD_GPU_CORE_DEF_GCN(GFX90C),
+    AMD_GPU_CORE_DEF_GCN(GFX942),
+    AMD_GPU_CORE_DEF_GCN(GFX950),
+    AMD_GPU_CORE_DEF_GCN(GFX1010),
+    AMD_GPU_CORE_DEF_GCN(GFX1011),
+    AMD_GPU_CORE_DEF_GCN(GFX1012),
+    AMD_GPU_CORE_DEF_GCN(GFX1013),
+    AMD_GPU_CORE_DEF_GCN(GFX1030),
+    AMD_GPU_CORE_DEF_GCN(GFX1031),
+    AMD_GPU_CORE_DEF_GCN(GFX1032),
+    AMD_GPU_CORE_DEF_GCN(GFX1033),
+    AMD_GPU_CORE_DEF_GCN(GFX1034),
+    AMD_GPU_CORE_DEF_GCN(GFX1035),
+    AMD_GPU_CORE_DEF_GCN(GFX1036),
+    AMD_GPU_CORE_DEF_GCN(GFX1100),
+    AMD_GPU_CORE_DEF_GCN(GFX1101),
+    AMD_GPU_CORE_DEF_GCN(GFX1102),
+    AMD_GPU_CORE_DEF_GCN(GFX1103),
+    AMD_GPU_CORE_DEF_GCN(GFX1150),
+    AMD_GPU_CORE_DEF_GCN(GFX1151),
+    AMD_GPU_CORE_DEF_GCN(GFX1152),
+    AMD_GPU_CORE_DEF_GCN(GFX1153),
+    AMD_GPU_CORE_DEF_GCN(GFX1200),
+    AMD_GPU_CORE_DEF_GCN(GFX1201),
+    AMD_GPU_CORE_DEF_GCN(GFX1250),
+    AMD_GPU_CORE_DEF_GCN(GFX9_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(GFX9_4_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(GFX10_1_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(GFX10_3_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(GFX11_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(GFX12_GENERIC),
+    AMD_GPU_CORE_DEF_GCN(unknown),
+    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx,
+     ArchSpec::eCore_nvidia_nvptx, "nvptx"},
+    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64,
+     ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
+};
 
 // Ensure that we have an entry in the g_core_definitions for each core. If you
 // comment out an entry above, you will need to comment out the corresponding
@@ -268,9 +344,9 @@ static_assert(sizeof(g_core_definitions) / sizeof(CoreDefinition) ==
 struct ArchDefinitionEntry {
   ArchSpec::Core core;
   uint32_t cpu;
-  uint32_t sub;
-  uint32_t cpu_mask;
-  uint32_t sub_mask;
+  uint32_t sub = LLDB_INVALID_CPUTYPE;
+  uint32_t cpu_mask = UINT32_MAX;
+  uint32_t sub_mask = UINT32_MAX;
 };
 
 struct ArchDefinition {
@@ -372,6 +448,16 @@ static const ArchDefinition g_macho_arch_def = {eArchTypeMachO,
                                                 std::size(g_macho_arch_entries),
                                                 g_macho_arch_entries, "mach-o"};
 
+#define AMD_GPU_ARCH_DEF_R600(sub)                                             \
+  {                                                                            \
+    ArchSpec::eCore_amd_gpu_r600_##sub, llvm::ELF::EM_AMDGPU,                  \
+        llvm::ELF::EF_AMDGPU_MACH_R600_##sub                                   \
+  }
+#define AMD_GPU_ARCH_DEF_GCN(sub)                                              \
+  {                                                                            \
+    ArchSpec::eCore_amd_gpu_gcn_##sub, llvm::ELF::EM_AMDGPU,                   \
+        llvm::ELF::EF_AMDGPU_MACH_AMDGCN_##sub                                 \
+  }
 //===----------------------------------------------------------------------===//
 // A table that gets searched linearly for matches. This table is used to
 // convert cpu type and subtypes to architecture names, and to convert
@@ -442,12 +528,80 @@ static const ArchDefinitionEntry g_elf_arch_entries[] = {
     {ArchSpec::eCore_loongarch64, llvm::ELF::EM_LOONGARCH,
      ArchSpec::eLoongArchSubType_loongarch64, 0xFFFFFFFFu,
      0xFFFFFFFFu}, // loongarch64
-    // TODO: add data that says what the address byte size is in there 
-    // structures so we can tell r600 from gcn
-    // {ArchSpec::eCore_amd_gpu_r600, llvm::ELF::EM_AMDGPU, LLDB_INVALID_CPUTYPE,
-    //  0xFFFFFFFFu, 0xFFFFFFFFu},
-    {ArchSpec::eCore_amd_gpu_gcn, llvm::ELF::EM_AMDGPU, LLDB_INVALID_CPUTYPE,
-     0xFFFFFFFFu, 0xFFFFFFFFu},
+
+    AMD_GPU_ARCH_DEF_R600(R600),
+    AMD_GPU_ARCH_DEF_R600(R630),
+    AMD_GPU_ARCH_DEF_R600(RS880),
+    AMD_GPU_ARCH_DEF_R600(RV670),
+    AMD_GPU_ARCH_DEF_R600(RV710),
+    AMD_GPU_ARCH_DEF_R600(RV730),
+    AMD_GPU_ARCH_DEF_R600(RV770),
+    AMD_GPU_ARCH_DEF_R600(CEDAR),
+    AMD_GPU_ARCH_DEF_R600(CYPRESS),
+    AMD_GPU_ARCH_DEF_R600(JUNIPER),
+    AMD_GPU_ARCH_DEF_R600(REDWOOD),
+    AMD_GPU_ARCH_DEF_R600(SUMO),
+    AMD_GPU_ARCH_DEF_R600(BARTS),
+    AMD_GPU_ARCH_DEF_R600(CAICOS),
+    AMD_GPU_ARCH_DEF_R600(CAYMAN),
+    AMD_GPU_ARCH_DEF_R600(TURKS),
+    // Unknown AMD R600 GPU
+    {ArchSpec::eCore_amd_gpu_r600_unknown, llvm::ELF::EM_AMDGPU},
+    AMD_GPU_ARCH_DEF_GCN(GFX600),
+    AMD_GPU_ARCH_DEF_GCN(GFX601),
+    AMD_GPU_ARCH_DEF_GCN(GFX602),
+    AMD_GPU_ARCH_DEF_GCN(GFX700),
+    AMD_GPU_ARCH_DEF_GCN(GFX701),
+    AMD_GPU_ARCH_DEF_GCN(GFX702),
+    AMD_GPU_ARCH_DEF_GCN(GFX703),
+    AMD_GPU_ARCH_DEF_GCN(GFX704),
+    AMD_GPU_ARCH_DEF_GCN(GFX705),
+    AMD_GPU_ARCH_DEF_GCN(GFX801),
+    AMD_GPU_ARCH_DEF_GCN(GFX802),
+    AMD_GPU_ARCH_DEF_GCN(GFX803),
+    AMD_GPU_ARCH_DEF_GCN(GFX805),
+    AMD_GPU_ARCH_DEF_GCN(GFX810),
+    AMD_GPU_ARCH_DEF_GCN(GFX900),
+    AMD_GPU_ARCH_DEF_GCN(GFX902),
+    AMD_GPU_ARCH_DEF_GCN(GFX904),
+    AMD_GPU_ARCH_DEF_GCN(GFX906),
+    AMD_GPU_ARCH_DEF_GCN(GFX908),
+    AMD_GPU_ARCH_DEF_GCN(GFX909),
+    AMD_GPU_ARCH_DEF_GCN(GFX90A),
+    AMD_GPU_ARCH_DEF_GCN(GFX90C),
+    AMD_GPU_ARCH_DEF_GCN(GFX942),
+    AMD_GPU_ARCH_DEF_GCN(GFX950),
+    AMD_GPU_ARCH_DEF_GCN(GFX1010),
+    AMD_GPU_ARCH_DEF_GCN(GFX1011),
+    AMD_GPU_ARCH_DEF_GCN(GFX1012),
+    AMD_GPU_ARCH_DEF_GCN(GFX1013),
+    AMD_GPU_ARCH_DEF_GCN(GFX1030),
+    AMD_GPU_ARCH_DEF_GCN(GFX1031),
+    AMD_GPU_ARCH_DEF_GCN(GFX1032),
+    AMD_GPU_ARCH_DEF_GCN(GFX1033),
+    AMD_GPU_ARCH_DEF_GCN(GFX1034),
+    AMD_GPU_ARCH_DEF_GCN(GFX1035),
+    AMD_GPU_ARCH_DEF_GCN(GFX1036),
+    AMD_GPU_ARCH_DEF_GCN(GFX1100),
+    AMD_GPU_ARCH_DEF_GCN(GFX1101),
+    AMD_GPU_ARCH_DEF_GCN(GFX1102),
+    AMD_GPU_ARCH_DEF_GCN(GFX1103),
+    AMD_GPU_ARCH_DEF_GCN(GFX1150),
+    AMD_GPU_ARCH_DEF_GCN(GFX1151),
+    AMD_GPU_ARCH_DEF_GCN(GFX1152),
+    AMD_GPU_ARCH_DEF_GCN(GFX1153),
+    AMD_GPU_ARCH_DEF_GCN(GFX1200),
+    AMD_GPU_ARCH_DEF_GCN(GFX1201),
+    AMD_GPU_ARCH_DEF_GCN(GFX1250),
+    AMD_GPU_ARCH_DEF_GCN(GFX9_GENERIC),
+    AMD_GPU_ARCH_DEF_GCN(GFX9_4_GENERIC),
+    AMD_GPU_ARCH_DEF_GCN(GFX10_1_GENERIC),
+    AMD_GPU_ARCH_DEF_GCN(GFX10_3_GENERIC),
+    AMD_GPU_ARCH_DEF_GCN(GFX11_GENERIC),
+    AMD_GPU_ARCH_DEF_GCN(GFX12_GENERIC),
+    // Unknown ADM GCN GPU
+    {ArchSpec::eCore_amd_gpu_gcn_unknown, llvm::ELF::EM_AMDGPU},
+
     {ArchSpec::eCore_nvidia_nvptx, llvm::ELF::EM_CUDA, LLDB_INVALID_CPUTYPE,
      0xFFFFFFFFu, 0xFFFFFFFFu},
     {ArchSpec::eCore_nvidia_nvptx64, llvm::ELF::EM_CUDA, LLDB_INVALID_CPUTYPE,
@@ -559,6 +713,8 @@ FindArchDefinitionEntry(const ArchDefinition *def, ArchSpec::Core core) {
   }
   return nullptr;
 }
+
+static llvm::StringRef GetAMDGPUVariantName(uint32_t sub);
 
 //===----------------------------------------------------------------------===//
 // Constructors and destructors.
@@ -686,40 +842,57 @@ std::string ArchSpec::GetClangTargetCPU() const {
 
   if (GetTriple().isARM())
     cpu = llvm::ARM::getARMCPUForArch(GetTriple(), "").str();
+
+  if (GetTriple().isAMDGPU()) {
+    uint32_t sub = GetElfCPUSubType();
+    if (sub != LLDB_INVALID_CPUTYPE) {
+      cpu = GetAMDGPUVariantName(sub);
+    }
+  }
   return cpu;
 }
 
-uint32_t ArchSpec::GetMachOCPUType() const {
-  const CoreDefinition *core_def = FindCoreDefinition(m_core);
-  if (core_def) {
-    const ArchDefinitionEntry *arch_def =
-        FindArchDefinitionEntry(&g_macho_arch_def, core_def->core);
-    if (arch_def) {
-      return arch_def->cpu;
-    }
-  }
+static const ArchDefinitionEntry *
+FindArchDefEntryIfCoreIsValid(const ArchDefinition *def, ArchSpec::Core core) {
+  if (const CoreDefinition *core_def = FindCoreDefinition(core))
+    return FindArchDefinitionEntry(def, core_def->core);
+
+  return nullptr;
+}
+
+static uint32_t GetCPUType(const ArchDefinition *def, ArchSpec::Core core) {
+  if (const ArchDefinitionEntry *arch_def =
+          FindArchDefEntryIfCoreIsValid(def, core))
+    return arch_def->cpu;
   return LLDB_INVALID_CPUTYPE;
+}
+
+static uint32_t GetCPUSubType(const ArchDefinition *def, ArchSpec::Core core) {
+  if (const ArchDefinitionEntry *arch_def =
+          FindArchDefEntryIfCoreIsValid(def, core))
+    return arch_def->sub;
+  return LLDB_INVALID_CPUTYPE;
+}
+
+uint32_t ArchSpec::GetMachOCPUType() const {
+  return GetCPUType(&g_macho_arch_def, m_core);
 }
 
 uint32_t ArchSpec::GetMachOCPUSubType() const {
-  const CoreDefinition *core_def = FindCoreDefinition(m_core);
-  if (core_def) {
-    const ArchDefinitionEntry *arch_def =
-        FindArchDefinitionEntry(&g_macho_arch_def, core_def->core);
-    if (arch_def) {
-      return arch_def->sub;
-    }
-  }
-  return LLDB_INVALID_CPUTYPE;
+  return GetCPUSubType(&g_macho_arch_def, m_core);
 }
 
-uint32_t ArchSpec::GetDataByteSize() const {
-  return 1;
+uint32_t ArchSpec::GetElfCPUType() const {
+  return GetCPUType(&g_elf_arch_def, m_core);
 }
 
-uint32_t ArchSpec::GetCodeByteSize() const {
-  return 1;
+uint32_t ArchSpec::GetElfCPUSubType() const {
+  return GetCPUSubType(&g_elf_arch_def, m_core);
 }
+
+uint32_t ArchSpec::GetDataByteSize() const { return 1; }
+
+uint32_t ArchSpec::GetCodeByteSize() const { return 1; }
 
 llvm::Triple::ArchType ArchSpec::GetMachine() const {
   const CoreDefinition *core_def = FindCoreDefinition(m_core);
@@ -889,6 +1062,150 @@ void ArchSpec::MergeFrom(const ArchSpec &other) {
   }
 }
 
+static llvm::StringRef GetAMDGPUVariantName(uint32_t sub) {
+  switch (sub) {
+  case llvm::ELF::EF_AMDGPU_MACH_R600_R600:
+    return "r600";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_R630:
+    return "r630";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_RS880:
+    return "rs880";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_RV670:
+    return "rv670";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_RV710:
+    return "rv710";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_RV730:
+    return "rv730";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_RV770:
+    return "rv770";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_CEDAR:
+    return "cedar";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_CYPRESS:
+    return "cypress";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_JUNIPER:
+    return "juniper";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_REDWOOD:
+    return "redwood";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_SUMO:
+    return "sumo";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_BARTS:
+    return "barts";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_CAICOS:
+    return "caicos";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_CAYMAN:
+    return "cayman";
+  case llvm::ELF::EF_AMDGPU_MACH_R600_TURKS:
+    return "turks";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX600:
+    return "gfx600";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX601:
+    return "gfx601";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX602:
+    return "gfx602";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX700:
+    return "gfx700";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX701:
+    return "gfx701";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX702:
+    return "gfx702";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX703:
+    return "gfx703";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX704:
+    return "gfx704";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX705:
+    return "gfx705";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX801:
+    return "gfx801";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX802:
+    return "gfx802";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX803:
+    return "gfx803";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX805:
+    return "gfx805";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX810:
+    return "gfx810";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX900:
+    return "gfx900";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX902:
+    return "gfx902";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX904:
+    return "gfx904";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX906:
+    return "gfx906";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX908:
+    return "gfx908";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX909:
+    return "gfx909";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX90A:
+    return "gfx90a";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX90C:
+    return "gfx90c";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX942:
+    return "gfx942";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX950:
+    return "gfx950";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1010:
+    return "gfx1010";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1011:
+    return "gfx1011";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1012:
+    return "gfx1012";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1013:
+    return "gfx1013";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1030:
+    return "gfx1030";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1031:
+    return "gfx1031";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1032:
+    return "gfx1032";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1033:
+    return "gfx1033";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1034:
+    return "gfx1034";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1035:
+    return "gfx1035";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1036:
+    return "gfx1036";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1100:
+    return "gfx1100";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1101:
+    return "gfx1101";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1102:
+    return "gfx1102";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1103:
+    return "gfx1103";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1150:
+    return "gfx1150";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1151:
+    return "gfx1151";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1152:
+    return "gfx1152";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1153:
+    return "gfx1153";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1200:
+    return "gfx1200";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1201:
+    return "gfx1201";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX1250:
+    return "gfx1250";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX9_GENERIC:
+    return "gfx9-generic";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX9_4_GENERIC:
+    return "gfx9-4-generic";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX10_1_GENERIC:
+    return "gfx10-1-generic";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX10_3_GENERIC:
+    return "gfx10-3-generic";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX11_GENERIC:
+    return "gfx11-generic";
+  case llvm::ELF::EF_AMDGPU_MACH_AMDGCN_GFX12_GENERIC:
+    return "gfx12-generic";
+  default:
+    break;
+  }
+  return llvm::StringRef("unknown");
+}
+
 bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
                                uint32_t sub, uint32_t os) {
   m_core = kCore_invalid;
@@ -941,8 +1258,9 @@ bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
             m_triple.setOS(llvm::Triple::OSType::UnknownOS);
             break;
           case llvm::ELF::ELFOSABI_AMDGPU_HSA:
+            m_triple.setVendor(llvm::Triple::VendorType::AMD);
             m_triple.setOS(llvm::Triple::OSType::AMDHSA);
-            break;            
+            break;
           }
         } else if (arch_type == eArchTypeCOFF && os == llvm::Triple::Win32) {
           m_triple.setVendor(llvm::Triple::PC);
@@ -954,10 +1272,25 @@ bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
           m_triple.setVendor(llvm::Triple::UnknownVendor);
           m_triple.setOS(llvm::Triple::UnknownOS);
         }
-        // Fall back onto setting the machine type if the arch by name
-        // failed...
-        if (m_triple.getArch() == llvm::Triple::UnknownArch)
+        switch (m_triple.getArch()) {
+        case llvm::Triple::UnknownArch:
+          // Fall back onto setting the machine type if the arch by name
+          // failed...
           m_triple.setArch(core_def->machine);
+          break;
+        case llvm::Triple::r600:
+        case llvm::Triple::amdgcn: {
+          // AMDGPU arches are special, the append an 5th element to the
+          // triple that comes after the environment and contains the sub
+          // type name.
+          std::string environment("-");
+          environment += GetAMDGPUVariantName(arch_def_entry->sub);
+          m_triple.setEnvironmentName(environment);
+          break;
+        }
+        default:
+          break;
+        }
       }
     } else {
       Log *log(GetLog(LLDBLog::Target | LLDBLog::Process | LLDBLog::Platform));
@@ -1191,8 +1524,8 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     break;
 
   // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
-  // Cortex-M0 - ARMv6-M - armv6m 
-  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M0 - ARMv6-M - armv6m
+  // Cortex-M3 - ARMv7-M - armv7m
   // Cortex-M4 - ARMv7E-M - armv7em
   case ArchSpec::eCore_arm_armv7em:
     if (!enforce_exact_match) {
@@ -1209,8 +1542,8 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     break;
 
   // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
-  // Cortex-M0 - ARMv6-M - armv6m 
-  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M0 - ARMv6-M - armv6m
+  // Cortex-M3 - ARMv7-M - armv7m
   // Cortex-M4 - ARMv7E-M - armv7em
   case ArchSpec::eCore_arm_armv7m:
     if (!enforce_exact_match) {
@@ -1227,8 +1560,8 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     break;
 
   // v. https://en.wikipedia.org/wiki/ARM_Cortex-M#Silicon_customization
-  // Cortex-M0 - ARMv6-M - armv6m 
-  // Cortex-M3 - ARMv7-M - armv7m 
+  // Cortex-M0 - ARMv6-M - armv6m
+  // Cortex-M3 - ARMv7-M - armv7m
   // Cortex-M4 - ARMv7E-M - armv7em
   case ArchSpec::eCore_arm_armv6m:
     if (!enforce_exact_match) {
@@ -1454,7 +1787,6 @@ bool lldb_private::operator<(const ArchSpec &lhs, const ArchSpec &rhs) {
   const ArchSpec::Core rhs_core = rhs.GetCore();
   return lhs_core < rhs_core;
 }
-
 
 bool lldb_private::operator==(const ArchSpec &lhs, const ArchSpec &rhs) {
   return lhs.GetCore() == rhs.GetCore();

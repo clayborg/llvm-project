@@ -883,7 +883,7 @@ size_t SBProcess::ReadMemory(addr_t addr, void *dst, size_t dst_len,
         "no buffer provided to read %zu bytes into", dst_len);
     return 0;
   }
-
+  
   size_t bytes_read = 0;
   ProcessSP process_sp(GetSP());
 
@@ -903,6 +903,37 @@ size_t SBProcess::ReadMemory(addr_t addr, void *dst, size_t dst_len,
 
   return bytes_read;
 }
+
+size_t SBProcess::ReadMemoryFromSpec(SBAddressSpec addr_spec, void *dst, 
+                                     size_t dst_len, SBError &sb_error) {
+  LLDB_INSTRUMENT_VA(this, addr_spec, dst, dst_len, sb_error);
+
+  if (!dst) {
+    sb_error = Status::FromErrorStringWithFormat(
+        "no buffer provided to read %zu bytes into", dst_len);
+    return 0;
+  }
+
+  size_t bytes_read = 0;
+  ProcessSP process_sp(GetSP());
+  if (process_sp) {
+    Process::StopLocker stop_locker;
+    if (stop_locker.TryLock(&process_sp->GetRunLock())) {
+      std::lock_guard<std::recursive_mutex> guard(
+          process_sp->GetTarget().GetAPIMutex());
+      bytes_read = process_sp->ReadMemory(addr_spec.ref(), dst, dst_len, 
+                                          sb_error.ref());
+    } else {
+      sb_error = Status::FromErrorString("process is running");
+    }
+  } else {
+    sb_error = Status::FromErrorString("SBProcess is invalid");
+  }
+
+  return bytes_read;
+}
+
+
 
 size_t SBProcess::ReadCStringFromMemory(addr_t addr, void *buf, size_t size,
                                         lldb::SBError &sb_error) {
@@ -1263,6 +1294,15 @@ lldb::SBError SBProcess::SaveCore(SBSaveCoreOptions &options) {
     return error;
   }
 
+  if (!options.GetProcess())
+    options.SetProcess(process_sp);
+
+  if (options.GetProcess().GetSP() != process_sp) {
+    error = Status::FromErrorString(
+        "Save Core Options configured for a different process.");
+    return error;
+  }
+
   std::lock_guard<std::recursive_mutex> guard(
       process_sp->GetTarget().GetAPIMutex());
 
@@ -1271,7 +1311,7 @@ lldb::SBError SBProcess::SaveCore(SBSaveCoreOptions &options) {
     return error;
   }
 
-  error.ref() = PluginManager::SaveCore(process_sp, options.ref());
+  error.ref() = PluginManager::SaveCore(options.ref());
 
   return error;
 }

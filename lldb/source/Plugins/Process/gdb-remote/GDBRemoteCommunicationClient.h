@@ -19,6 +19,8 @@
 #include <vector>
 
 #include "lldb/Host/File.h"
+#include "lldb/Target/Process.h"
+#include "lldb/Utility/AddressSpace.h"
 #include "lldb/Utility/AddressableBits.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/GDBRemote.h"
@@ -436,10 +438,10 @@ public:
 
   std::optional<std::vector<GPUActions>> GetGPUInitializeActions();
 
-  std::optional<GPUPluginBreakpointHitResponse> 
+  std::optional<GPUPluginBreakpointHitResponse>
   GPUBreakpointHit(const GPUPluginBreakpointHitArgs &args);
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args);
 
   bool GetThreadExtendedInfoSupported();
@@ -459,6 +461,12 @@ public:
 
   Status WriteMemoryTags(lldb::addr_t addr, size_t len, int32_t type,
                          const std::vector<uint8_t> &tags);
+
+  std::vector<AddressSpaceInfo> GetAddressSpaces();
+
+  size_t ReadMemory(ProcessGDBRemote *process, const AddressSpec &addr_spec,
+                    const AddressSpaceInfo &info, void *buf, size_t size,
+                    Status &error);
 
   /// Use qOffsets to query the offset used when relocating the target
   /// executable. If successful, the returned structure will contain at least
@@ -549,7 +557,7 @@ public:
   bool SupportsGPUDynamicLoader() const {
     return m_supports_gdb_remote_gpu_dyld == eLazyBoolYes;
   }
-  
+
 protected:
   LazyBool m_supports_not_sending_acks = eLazyBoolCalculate;
   LazyBool m_supports_thread_suffix = eLazyBoolCalculate;
@@ -604,7 +612,8 @@ protected:
       m_supports_qSymbol : 1, m_qSymbol_requests_done : 1,
       m_supports_qModuleInfo : 1, m_supports_jThreadsInfo : 1,
       m_supports_jModulesInfo : 1, m_supports_vFileSize : 1,
-      m_supports_vFileMode : 1, m_supports_vFileExists : 1, m_supports_vRun : 1;
+      m_supports_vFileMode : 1, m_supports_vFileExists : 1, m_supports_vRun : 1,
+      m_supports_address_spaces : 1;
 
   /// Current gdb remote protocol process identifier for all other operations
   lldb::pid_t m_curr_pid = LLDB_INVALID_PROCESS_ID;

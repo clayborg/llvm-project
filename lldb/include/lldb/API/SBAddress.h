@@ -130,6 +130,53 @@ private:
 bool LLDB_API operator==(const SBAddress &lhs, const SBAddress &rhs);
 #endif
 
+
+/// A class that represents a specification for an address that can include an
+/// address space and other info needed to read or write to a memory address.
+///
+/// This object is uses to read and write to memory addresses that need more 
+/// data to describe a location in memory.  For example, a memory address in a 
+/// process can be described by a single load address, but a memory address in a 
+/// GPU might require an address space identifier and possibly a thread for 
+/// address spaces that are thread specific.
+class LLDB_API SBAddressSpec {
+public:
+  /// Create an invalid address spec.
+  SBAddressSpec();
+
+  /// Copy constructor.
+  SBAddressSpec(const SBAddressSpec &rhs);
+
+  /// Create from a load address.
+  ///
+  /// This represents a load address in memory and is equivalent to calling the
+  /// ReadMemory(...) methods that take a single lldb::addr_t value.
+  SBAddressSpec(lldb::addr_t load_addr);
+
+  /// Create and instance from a address and address space name.
+  SBAddressSpec(lldb::addr_t addr, const char *address_space);
+
+  /// Create and instance from a load address and address space that is thread
+  /// specific.
+  SBAddressSpec(lldb::addr_t addr, const char *address_space, 
+                lldb::SBThread thread);
+
+  ~SBAddressSpec();
+
+  /// Assignment operator.
+  const lldb::SBAddressSpec &operator=(const lldb::SBAddressSpec &rhs);
+
+protected:
+  friend class SBProcess;
+  
+  lldb_private::AddressSpec &ref();
+
+  const lldb_private::AddressSpec &ref() const;
+
+private:
+  std::unique_ptr<lldb_private::AddressSpec> m_opaque_up;
+};
+
 } // namespace lldb
 
 #endif // LLDB_API_SBADDRESS_H

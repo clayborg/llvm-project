@@ -9,6 +9,7 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_PROCESSAMDGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_PROCESSAMDGPU_H
 
+#include "GpuModuleManager.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include <amd-dbgapi/amd-dbgapi.h>
@@ -26,7 +27,8 @@ class ProcessAMDGPU : public NativeProcessProtocol {
   ProcessInstanceInfo m_process_info;
 
 public:
-  ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate, LLDBServerPluginAMDGPU *plugin);
+  ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate,
+                LLDBServerPluginAMDGPU *plugin);
 
   Status Resume(const ResumeActionList &resume_actions) override;
 
@@ -82,30 +84,21 @@ public:
   // Custom accessors
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   bool handleWaveStop(amd_dbgapi_event_id_t eventId);
 
   bool handleDebugEvent(amd_dbgapi_event_id_t eventId,
-    amd_dbgapi_event_kind_t eventKind);
-  
-  struct GPUModule {
-    std::string path;
-    uint64_t base_address;
-    uint64_t offset;
-    uint64_t size;
-    bool is_loaded;
-  };
-  std::unordered_map<uintptr_t, GPUModule>& GetGPUModules() {
-    return m_gpu_modules;
-  }
+                        amd_dbgapi_event_kind_t eventKind);
 
-  GPUModule parseCodeObjectUrl(const std::string &url, uint64_t load_address);
+  bool HasDyldChangesToReport() const {
+    return m_gpu_module_manager.HasChangedCodeObjects();
+  }
   void AddThread(amd_dbgapi_wave_id_t wave_id);
-  
-  LLDBServerPluginAMDGPU* m_debugger = nullptr;
-  std::unordered_map<uintptr_t, GPUModule> m_gpu_modules;
+
+  LLDBServerPluginAMDGPU *m_debugger = nullptr;
+  GpuModuleManager m_gpu_module_manager;
 
   enum class State {
     Initializing,
@@ -133,8 +126,8 @@ public:
   llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
   Attach(lldb::pid_t pid,
          NativeProcessProtocol::NativeDelegate &native_delegate) override;
-  
-  LLDBServerPluginAMDGPU* m_debugger = nullptr;
+
+  LLDBServerPluginAMDGPU *m_debugger = nullptr;
 };
 
 } // namespace lldb_server

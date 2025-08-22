@@ -9,13 +9,12 @@
 #include "ProcessMockGPU.h"
 #include "ThreadMockGPU.h"
 
+#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "llvm/Support/Error.h"
-#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-
 
 using namespace lldb;
 using namespace lldb_private;
@@ -59,13 +58,50 @@ Status ProcessMockGPU::Signal(int signo) {
 ///
 /// \return
 ///     Returns an error object.
-Status ProcessMockGPU::Interrupt() { return Status(); }
+Status ProcessMockGPU::Interrupt() { return Halt(); }
 
 Status ProcessMockGPU::Kill() { return Status(); }
 
 Status ProcessMockGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                   size_t &bytes_read) {
   return Status::FromErrorString("unimplemented");
+}
+
+#define ADDR_SPACE_1 1
+#define ADDR_SPACE_2 2
+
+std::vector<AddressSpaceInfo> ProcessMockGPU::GetAddressSpaces() {
+  std::vector<AddressSpaceInfo> result;
+  result.push_back({"Global", ADDR_SPACE_1, false});
+  result.push_back({"Thread", ADDR_SPACE_2, true});
+  return result;
+}
+
+Status ProcessMockGPU::ReadMemoryWithSpace(lldb::addr_t addr,
+                                           uint64_t addr_space,
+                                           NativeThreadProtocol *thread,
+                                           void *buf, size_t size,
+                                           size_t &bytes_read) {
+  bytes_read = 0;
+  switch (addr_space) {
+  case ADDR_SPACE_1:
+    ::memset(buf, '1', size);
+    bytes_read = size;
+    return Status();
+
+  case ADDR_SPACE_2:
+    // Address space 1 requires a thread
+    if (thread == nullptr)
+      return Status::FromErrorString("reading from address space \"Thread\" "
+                                     "requires a thread");
+    ::memset(buf, '2', size);
+    bytes_read = size;
+    return Status();
+
+  default:
+    return Status::FromErrorStringWithFormat("invalid address space %" PRIu64,
+                                             addr_space);
+  }
 }
 
 Status ProcessMockGPU::WriteMemory(lldb::addr_t addr, const void *buf,
@@ -128,8 +164,9 @@ bool ProcessMockGPU::GetProcessInfo(ProcessInstanceInfo &proc_info) {
   return true;
 }
 
-std::optional<GPUDynamicLoaderResponse> 
-ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) {
+std::optional<GPUDynamicLoaderResponse>
+ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(
+    const GPUDynamicLoaderArgs &args) {
   GPUDynamicLoaderResponse response;
   // First example of a shared library. This is for cases where there is a file
   // on disk that contains an object file that can be loaded into the process
@@ -152,8 +189,8 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   lib2.file_offset = 0x1000;
   lib2.file_size = 0x500;
   response.library_infos.push_back(lib2);
-  /// Third example of a shared library. This is for cases where there the 
-  /// object file is loaded into the memory of the native process. LLDB will 
+  /// Third example of a shared library. This is for cases where there the
+  /// object file is loaded into the memory of the native process. LLDB will
   /// need create an in memory object file using the data in this info.
   GPUDynamicLoaderLibraryInfo lib3;
   lib3.pathname = "/usr/lib/lib3.so";
@@ -162,7 +199,7 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   response.library_infos.push_back(lib3);
 
   /// Fourth example of a shared library where we load each of the top level
-  /// sections of an object file at different addresses. 
+  /// sections of an object file at different addresses.
   GPUDynamicLoaderLibraryInfo lib4;
   lib4.pathname = "/usr/lib/lib4.so";
   lib4.loaded_sections.push_back({{"PT_LOAD[0]"}, 0x0e0000});
@@ -171,25 +208,24 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   lib4.loaded_sections.push_back({{"PT_LOAD[3]"}, 0x020000});
   response.library_infos.push_back(lib4);
 
-  /// Fifth example of a shared library. This is for cases where there the 
-  /// object file is loaded individual sections are loaded at different 
-  /// addresses instead of having a single load address for the entire object 
-  /// file. This allows GPU plug-ins to load sections at different addresses 
-  /// as they are loaded by the GPU driver. Sections can be created for 
+  /// Fifth example of a shared library. This is for cases where there the
+  /// object file is loaded individual sections are loaded at different
+  /// addresses instead of having a single load address for the entire object
+  /// file. This allows GPU plug-ins to load sections at different addresses
+  /// as they are loaded by the GPU driver. Sections can be created for
   /// functions in the ObjectFileELF plug-in when parsing the GPU ELF file so
-  /// that individual functions can be loaded at different addresses as the 
+  /// that individual functions can be loaded at different addresses as the
   /// driver loads them.
   GPUDynamicLoaderLibraryInfo lib5;
   lib5.pathname = "/usr/lib/lib5.so";
-  /// Here we are going to assume that the .text section has functions that 
-  /// create sections for each function in the object file. Then each function 
+  /// Here we are going to assume that the .text section has functions that
+  /// create sections for each function in the object file. Then each function
   /// can be loaded at a different address as the driver loads them.
-  lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "foo"}, 0x80000}); 
-  lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "bar"}, 0x80200}); 
+  lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "foo"}, 0x80000});
+  lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "bar"}, 0x80200});
   response.library_infos.push_back(lib5);
   return response;
 }
-
 
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessMockGPU::Manager::Launch(
@@ -207,8 +243,7 @@ ProcessMockGPU::Manager::Attach(
   return llvm::createStringError("Unimplemented function");
 }
 
-
 ProcessMockGPU::Extension
 ProcessMockGPU::Manager::GetSupportedExtensions() const {
-  return Extension::gpu_dyld;
+  return Extension::gpu_dyld | Extension::address_spaces;
 }

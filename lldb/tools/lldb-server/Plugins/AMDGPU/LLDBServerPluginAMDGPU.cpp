@@ -55,7 +55,7 @@ static amd_dbgapi_status_t amd_dbgapi_client_process_get_info_callback(
 // Internal name used to identify the gpu loader breakpoint.
 // We match this name in the GPUBreakpointInfo passed into the
 // `BreakpointWasHit` callback to identify which breakpoint was hit.
-static const char *kGpuLoaderBreakpointIdentifier = "GPU loader breakpoint";
+static constexpr uint32_t kGpuLoaderBreakpointIdentifier = 1;
 
 // Set the internal gpu breakpoint by symbol name instead of using the address
 // passed into the `insert_breakpoint` callback. The ROCdbgapi library
@@ -415,7 +415,7 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                        "launched successfully");
       }
       actions.connect_info = CreateConnection();
-      actions.connect_info->synchronous = true; 
+      actions.connect_info->synchronous = true;
     }
     return actions;
   } else {
@@ -445,10 +445,9 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
 }
 
 bool LLDBServerPluginAMDGPU::HandleGPUInternalBreakpointHit(
-    const GPUInternalBreakpoinInfo &bp, bool &has_new_libraries) {
-  LLDB_LOGF(GetLog(GDBRLog::Plugin), "Hit %s at address: 0x%" PRIx64,
+    const GPUInternalBreakpoinInfo &bp) {
+  LLDB_LOGF(GetLog(GDBRLog::Plugin), "Hit %u at address: 0x%" PRIx64,
             kGpuLoaderBreakpointIdentifier, bp.addr);
-  has_new_libraries = false;
   amd_dbgapi_breakpoint_id_t breakpoint_id{bp.breakpoind_id};
   amd_dbgapi_breakpoint_action_t action;
 
@@ -471,9 +470,6 @@ bool LLDBServerPluginAMDGPU::HandleGPUInternalBreakpointHit(
     amd_dbgapi_event_id_t resume_event_id =
         process_event_queue(AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME);
     amd_dbgapi_event_processed(resume_event_id);
-    if (!GetGPUProcess()->GetGPUModules().empty()) {
-      has_new_libraries = true;
-    }
     return true;
   } else {
     LLDB_LOGF(GetLog(GDBRLog::Plugin), "Unknown action: %d", action);
@@ -508,6 +504,10 @@ amd_dbgapi_event_id_t LLDBServerPluginAMDGPU::process_event_queue(
     amd_dbgapi_event_processed(event_id);
   }
   return AMD_DBGAPI_EVENT_NONE;
+}
+
+void LLDBServerPluginAMDGPU::FreeDbgApiClientMemory(void *mem) {
+  s_dbgapi_callbacks.deallocate_memory(mem);
 }
 
 bool LLDBServerPluginAMDGPU::SetGPUBreakpoint(uint64_t addr,
@@ -587,7 +587,7 @@ llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   Log *log = GetLog(GDBRLog::Plugin);
   std::string json_string;
-  std::string &bp_identifier = args.breakpoint.identifier;
+  const auto bp_identifier = args.breakpoint.identifier;
   llvm::raw_string_ostream os(json_string);
   os << toJSON(args);
   LLDB_LOGF(log, "LLDBServerPluginAMDGPU::BreakpointWasHit(\"%s\"):\nJSON:\n%s",
@@ -610,13 +610,11 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
       return llvm::createStringError(
           "Breakpoint address does not match expected value from ROCdbgapi");
     }
-    bool has_new_libraries = false;
-    bool success = HandleGPUInternalBreakpointHit(m_gpu_internal_bp.value(),
-                                                  has_new_libraries);
+    bool success = HandleGPUInternalBreakpointHit(m_gpu_internal_bp.value());
     assert(success);
-    if (has_new_libraries) {
+    if (GetGPUProcess()->HasDyldChangesToReport()) {
       response.actions.wait_for_gpu_process_to_resume = true;
-      auto process = m_gdb_server->GetCurrentProcess();
+      auto *process = m_gdb_server->GetCurrentProcess();
       ThreadAMDGPU *thread = (ThreadAMDGPU *)process->GetCurrentThread();
       thread->SetStopReason(lldb::eStopReasonDynamicLoader);
       process->Halt();

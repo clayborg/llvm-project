@@ -119,6 +119,10 @@ public:
     m_validator_baton = baton;
   }
 
+  void SetValidatorBaton(void *baton) {
+    m_validator_baton = baton;
+  }
+
 protected:
   std::string m_current_value;
   std::string m_default_value;

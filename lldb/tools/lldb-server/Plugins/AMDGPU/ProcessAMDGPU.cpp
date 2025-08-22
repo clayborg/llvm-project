@@ -15,8 +15,10 @@
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/UnimplementedError.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Error.h"
 
+#include <amd-dbgapi/amd-dbgapi.h>
 #include <cinttypes>
 #include <iostream>
 
@@ -97,7 +99,19 @@ size_t ProcessAMDGPU::UpdateThreads() {
 }
 
 const ArchSpec &ProcessAMDGPU::GetArchitecture() const {
-  m_arch = ArchSpec("amdgpu");
+  // Query the subtype from the dbgapi.
+  uint32_t cpu_subtype = 0;
+  amd_dbgapi_status_t status = amd_dbgapi_architecture_get_info(
+      m_debugger->m_architecture_id,
+      AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE, sizeof(cpu_subtype),
+      &cpu_subtype);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin),
+              "amd_dbgapi_architecture_get_info failed: %d", status);
+  }
+
+  m_arch = ArchSpec(eArchTypeELF, llvm::ELF::EM_AMDGPU, cpu_subtype);
+  m_arch.MergeFrom(ArchSpec("amdgcn-amd-amdhsa"));
   return m_arch;
 }
 
@@ -141,16 +155,15 @@ bool ProcessAMDGPU::GetProcessInfo(ProcessInstanceInfo &proc_info) {
   return true;
 }
 
-static
-std::optional<lldb_private::GPUDynamicLoaderLibraryInfo>
-ParseLibraryInfo(const ProcessAMDGPU::GPUModule &gpu_module) {
+static std::optional<lldb_private::GPUDynamicLoaderLibraryInfo>
+ParseLibraryInfo(const GpuModuleManager::CodeObject &code_object) {
   // This function will parse the shared library string that AMDs GPU driver
   // sends to the debugger. The format is one of:
   //  file://<path>#offset=<file-offset>&size=<file-size>
   //  memory://<name>#offset=<image-addr>&size=<image-size>
   lldb_private::GPUDynamicLoaderLibraryInfo lib_info;
-  lib_info.load = true;
-  lib_info.load_address = gpu_module.base_address;
+  lib_info.load = code_object.IsLoaded();
+  lib_info.load_address = code_object.load_address;
 
   auto get_offset_and_size = [](llvm::StringRef &values,
                                 std::optional<uint64_t> &offset,
@@ -172,7 +185,7 @@ ParseLibraryInfo(const ProcessAMDGPU::GPUModule &gpu_module) {
     }
   };
 
-  llvm::StringRef lib_spec = gpu_module.path;
+  llvm::StringRef lib_spec = code_object.uri;
   if (lib_spec.consume_front("file://")) {
     llvm::StringRef path, values;
     std::tie(path, values) = lib_spec.split('#');
@@ -199,7 +212,6 @@ ParseLibraryInfo(const ProcessAMDGPU::GPUModule &gpu_module) {
   return lib_info;
 }
 
-
 std::optional<GPUDynamicLoaderResponse>
 ProcessAMDGPU::GetGPUDynamicLoaderLibraryInfos(
     const GPUDynamicLoaderArgs &args) {
@@ -208,31 +220,35 @@ ProcessAMDGPU::GetGPUDynamicLoaderLibraryInfos(
 
   GPUDynamicLoaderResponse response;
 
-  const auto &gpu_modules = m_gpu_modules;
+  llvm::iterator_range<GpuModuleManager::CodeObjectList::const_iterator>
+      code_objects = args.full ? m_gpu_module_manager.GetLoadedCodeObjects()
+                               : m_gpu_module_manager.GetChangedCodeObjects();
 
   LLDB_LOGF(log, "ProcessAMDGPU::%s() found %zu GPU modules", __FUNCTION__,
-            gpu_modules.size());
+            std::distance(code_objects.begin(), code_objects.end()));
 
-  // Convert each GPU module to an SVR4LibraryInfo object
-  for (const auto &[addr, module] : gpu_modules) {
-    if (module.is_loaded) {
-      if (auto lib_info = ParseLibraryInfo(module)) {
-        LLDB_LOGF(log,
-                  "ProcessAMDGPU::%s() adding library: path=%s, load_addr=0x%" PRIx64
-                  ", native_memory_address=%" PRIu64 ", native_memory_size=%" PRIu64
-                  ", file_offset=%" PRIu64 ", file_size=%" PRIu64,
-                  __FUNCTION__, lib_info->pathname.c_str(),
-                  lib_info->load_address.value_or(0),
-                  lib_info->native_memory_address.value_or(0), lib_info->native_memory_size.value_or(0),
-                  lib_info->file_offset.value_or(0), lib_info->file_size.value_or(0));
-        response.library_infos.push_back(*lib_info);
-      } else {
-        LLDB_LOGF(log,
-                  "ProcessAMDGPU::%s() failed to parse module path \"%s\"",
-                  __FUNCTION__, module.path.c_str());
-      }
+  for (const GpuModuleManager::CodeObject &code_object : code_objects) {
+    if (auto lib_info = ParseLibraryInfo(code_object)) {
+      LLDB_LOGF(
+          log,
+          "ProcessAMDGPU::%s() %s library: path=%s, load_addr=0x%" PRIx64
+          ", native_memory_address=%" PRIu64 ", native_memory_size=%" PRIu64
+          ", file_offset=%" PRIu64 ", file_size=%" PRIu64,
+          __FUNCTION__, lib_info->load ? "load" : "unload",
+          lib_info->pathname.c_str(), lib_info->load_address.value_or(0),
+          lib_info->native_memory_address.value_or(0),
+          lib_info->native_memory_size.value_or(0),
+          lib_info->file_offset.value_or(0), lib_info->file_size.value_or(0));
+      response.library_infos.push_back(*lib_info);
+    } else {
+      LLDB_LOGF(log, "ProcessAMDGPU::%s() failed to parse module path \"%s\"",
+                __FUNCTION__, code_object.uri.c_str());
     }
   }
+
+  // We have reported all changes to lldb so clear the list
+  // to accumulate only the new changes.
+  m_gpu_module_manager.ClearChangedObjectList();
 
   return response;
 }
@@ -430,7 +446,7 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
       return result;
     }
 
-    m_gpu_modules.clear();
+    m_gpu_module_manager.BeginCodeObjectListUpdate();
     for (size_t i = 0; i < count; ++i) {
       uint64_t l_addr;
       char *uri_bytes;
@@ -451,11 +467,10 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
                 "Code object %zu: %s at address %" PRIu64, i, uri_bytes,
                 l_addr);
 
-      if (m_gpu_modules.find(l_addr) == m_gpu_modules.end()) {
-        GPUModule mod = parseCodeObjectUrl(uri_bytes, l_addr);
-        m_gpu_modules[l_addr] = mod;
-      }
+      m_gpu_module_manager.CodeObjectIsLoaded(uri_bytes, l_addr);
+      m_debugger->FreeDbgApiClientMemory(uri_bytes);
     }
+    m_gpu_module_manager.EndCodeObjectListUpdate();
     break;
   }
 
@@ -464,48 +479,6 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
     break;
   }
   return result;
-}
-
-ProcessAMDGPU::GPUModule
-ProcessAMDGPU::parseCodeObjectUrl(const std::string &url,
-                                  uint64_t load_address) {
-  GPUModule info;
-  info.path = url;
-  info.base_address = load_address;
-  info.offset = 0;
-  info.size = 0;
-  info.is_loaded = true;
-
-  // Find offset parameter
-  size_t offset_pos = url.find("#offset=");
-  if (offset_pos != std::string::npos) {
-    offset_pos += 8; // Skip "#offset="
-    size_t amp_pos = url.find('&', offset_pos);
-    std::string offset_str;
-
-    if (amp_pos != std::string::npos) {
-      offset_str = url.substr(offset_pos, amp_pos - offset_pos);
-    } else {
-      offset_str = url.substr(offset_pos);
-    }
-
-    // Handle hex format (0x prefix)
-    if (offset_str.substr(0, 2) == "0x") {
-      info.offset = std::stoull(offset_str.substr(2), nullptr, 16);
-    } else {
-      info.offset = std::stoull(offset_str);
-    }
-  }
-
-  // Find size parameter
-  size_t size_pos = url.find("&size=");
-  if (size_pos != std::string::npos) {
-    size_pos += 6; // Skip "&size="
-    std::string size_str = url.substr(size_pos);
-    info.size = std::stoull(size_str);
-  }
-
-  return info;
 }
 
 void ProcessAMDGPU::AddThread(amd_dbgapi_wave_id_t wave_id) {

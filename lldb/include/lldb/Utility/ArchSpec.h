@@ -91,14 +91,16 @@ public:
   };
 
   enum RISCVeflags {
-    eRISCV_rvc              = 0x00000001, /// RVC, +c
-    eRISCV_float_abi_soft   = 0x00000000, /// soft float
-    eRISCV_float_abi_single = 0x00000002, /// single precision floating point, +f
-    eRISCV_float_abi_double = 0x00000004, /// double precision floating point, +d
-    eRISCV_float_abi_quad   = 0x00000006, /// quad precision floating point, +q
-    eRISCV_float_abi_mask   = 0x00000006,
-    eRISCV_rve              = 0x00000008, /// RVE, +e
-    eRISCV_tso              = 0x00000010, /// RVTSO (total store ordering)
+    eRISCV_rvc = 0x00000001,            /// RVC, +c
+    eRISCV_float_abi_soft = 0x00000000, /// soft float
+    eRISCV_float_abi_single =
+        0x00000002, /// single precision floating point, +f
+    eRISCV_float_abi_double =
+        0x00000004,                     /// double precision floating point, +d
+    eRISCV_float_abi_quad = 0x00000006, /// quad precision floating point, +q
+    eRISCV_float_abi_mask = 0x00000006,
+    eRISCV_rve = 0x00000008, /// RVE, +e
+    eRISCV_tso = 0x00000010, /// RVTSO (total store ordering)
   };
 
   enum RISCVSubType {
@@ -236,8 +238,76 @@ public:
 
     eCore_wasm32,
 
-    eCore_amd_gpu_r600,
-    eCore_amd_gpu_gcn,
+    eCore_amd_gpu_r600_R600,
+    eCore_amd_gpu_r600_R630,
+    eCore_amd_gpu_r600_RS880,
+    eCore_amd_gpu_r600_RV670,
+    eCore_amd_gpu_r600_RV710,
+    eCore_amd_gpu_r600_RV730,
+    eCore_amd_gpu_r600_RV770,
+    eCore_amd_gpu_r600_CEDAR,
+    eCore_amd_gpu_r600_CYPRESS,
+    eCore_amd_gpu_r600_JUNIPER,
+    eCore_amd_gpu_r600_REDWOOD,
+    eCore_amd_gpu_r600_SUMO,
+    eCore_amd_gpu_r600_BARTS,
+    eCore_amd_gpu_r600_CAICOS,
+    eCore_amd_gpu_r600_CAYMAN,
+    eCore_amd_gpu_r600_TURKS,
+    eCore_amd_gpu_r600_unknown,
+    eCore_amd_gpu_gcn_GFX600,
+    eCore_amd_gpu_gcn_GFX601,
+    eCore_amd_gpu_gcn_GFX602,
+    eCore_amd_gpu_gcn_GFX700,
+    eCore_amd_gpu_gcn_GFX701,
+    eCore_amd_gpu_gcn_GFX702,
+    eCore_amd_gpu_gcn_GFX703,
+    eCore_amd_gpu_gcn_GFX704,
+    eCore_amd_gpu_gcn_GFX705,
+    eCore_amd_gpu_gcn_GFX801,
+    eCore_amd_gpu_gcn_GFX802,
+    eCore_amd_gpu_gcn_GFX803,
+    eCore_amd_gpu_gcn_GFX805,
+    eCore_amd_gpu_gcn_GFX810,
+    eCore_amd_gpu_gcn_GFX900,
+    eCore_amd_gpu_gcn_GFX902,
+    eCore_amd_gpu_gcn_GFX904,
+    eCore_amd_gpu_gcn_GFX906,
+    eCore_amd_gpu_gcn_GFX908,
+    eCore_amd_gpu_gcn_GFX909,
+    eCore_amd_gpu_gcn_GFX90A,
+    eCore_amd_gpu_gcn_GFX90C,
+    eCore_amd_gpu_gcn_GFX942,
+    eCore_amd_gpu_gcn_GFX950,
+    eCore_amd_gpu_gcn_GFX1010,
+    eCore_amd_gpu_gcn_GFX1011,
+    eCore_amd_gpu_gcn_GFX1012,
+    eCore_amd_gpu_gcn_GFX1013,
+    eCore_amd_gpu_gcn_GFX1030,
+    eCore_amd_gpu_gcn_GFX1031,
+    eCore_amd_gpu_gcn_GFX1032,
+    eCore_amd_gpu_gcn_GFX1033,
+    eCore_amd_gpu_gcn_GFX1034,
+    eCore_amd_gpu_gcn_GFX1035,
+    eCore_amd_gpu_gcn_GFX1036,
+    eCore_amd_gpu_gcn_GFX1100,
+    eCore_amd_gpu_gcn_GFX1101,
+    eCore_amd_gpu_gcn_GFX1102,
+    eCore_amd_gpu_gcn_GFX1103,
+    eCore_amd_gpu_gcn_GFX1150,
+    eCore_amd_gpu_gcn_GFX1151,
+    eCore_amd_gpu_gcn_GFX1152,
+    eCore_amd_gpu_gcn_GFX1153,
+    eCore_amd_gpu_gcn_GFX1200,
+    eCore_amd_gpu_gcn_GFX1201,
+    eCore_amd_gpu_gcn_GFX1250,
+    eCore_amd_gpu_gcn_GFX9_GENERIC,
+    eCore_amd_gpu_gcn_GFX9_4_GENERIC,
+    eCore_amd_gpu_gcn_GFX10_1_GENERIC,
+    eCore_amd_gpu_gcn_GFX10_3_GENERIC,
+    eCore_amd_gpu_gcn_GFX11_GENERIC,
+    eCore_amd_gpu_gcn_GFX12_GENERIC,
+    eCore_amd_gpu_gcn_unknown,
 
     eCore_nvidia_nvptx,
     eCore_nvidia_nvptx64,
@@ -288,7 +358,13 @@ public:
     kCore_mips64el_last = eCore_mips64r6el,
 
     kCore_mips_first = eCore_mips32,
-    kCore_mips_last = eCore_mips64r6el
+    kCore_mips_last = eCore_mips64r6el,
+
+    kCore_amd_gpu_first = eCore_amd_gpu_r600_R600,
+    kCore_amd_gpu_last = eCore_amd_gpu_gcn_unknown,
+
+    kCore_nvidia_gpu_first = eCore_nvidia_nvptx,
+    kCore_nvidia_gpu_last = eCore_nvidia_nvptx64
 
   };
 
@@ -450,6 +526,10 @@ public:
   uint32_t GetMachOCPUType() const;
 
   uint32_t GetMachOCPUSubType() const;
+
+  uint32_t GetElfCPUType() const;
+
+  uint32_t GetElfCPUSubType() const;
 
   /// Architecture data byte width accessor
   ///

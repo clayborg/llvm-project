@@ -166,6 +166,9 @@ ProcessProperties::ProcessProperties(lldb_private::Process *process)
     m_collection_sp->SetValueChangedCallback(
         ePropertyPythonOSPluginPath,
         [this] { m_process->LoadOperatingSystemPlugin(true); });
+    m_collection_sp->SetValueChangedCallback(
+        ePropertyDisableLangRuntimeUnwindPlans,
+        [this] { DisableLanguageRuntimeUnwindPlansCallback(); });
   }
 
   m_experimental_properties_up =
@@ -280,6 +283,15 @@ void ProcessProperties::SetDisableLangRuntimeUnwindPlans(bool disable) {
   m_process->Flush();
 }
 
+void ProcessProperties::DisableLanguageRuntimeUnwindPlansCallback() {
+  if (!m_process)
+    return;
+  for (auto thread_sp : m_process->Threads()) {
+    thread_sp->ClearStackFrames();
+    thread_sp->DiscardThreadPlans(/*force*/ true);
+  }
+}
+
 bool ProcessProperties::GetDetachKeepsStopped() const {
   const uint32_t idx = ePropertyDetachKeepsStopped;
   return GetPropertyAtIndexAs<bool>(
@@ -365,6 +377,7 @@ bool ProcessProperties::TrackMemoryCacheChanges() const {
   return GetPropertyAtIndexAs<bool>(
       idx, g_process_properties[idx].default_uint_value != 0);
 }
+
 
 ProcessSP Process::FindPlugin(lldb::TargetSP target_sp,
                               llvm::StringRef plugin_name,
@@ -1910,6 +1923,40 @@ Status Process::DisableSoftwareBreakpoint(BreakpointSite *bp_site) {
       bp_site->GetID(), (uint64_t)bp_addr, error.AsCString());
   return error;
 }
+
+
+size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf, 
+                           size_t size, Status &error) {
+  error.Clear();
+  if (addr_spec.IsInDefaultAddressSpace()) {
+    llvm::Expected<lldb::addr_t> load_addr = 
+        addr_spec.ResolveAddressInDefaultAddressSpace(*this);
+    if (load_addr) {
+      // We were able to resolve the address to an address in the default 
+      // address space. Just call our standard read memory method.
+      return DoReadMemory(*load_addr, buf, size, error);
+    }
+    error = Status::FromError(load_addr.takeError());
+    return 0;
+  }
+  // We have an address that can't be resolved in the default address space, so
+  // we need to call the overload that knows how to read from an address space.
+  llvm::Expected<AddressSpaceInfo> info = 
+      GetAddressSpaceInfo(addr_spec.GetSpaceName());
+  if (info)
+    return DoReadMemory(addr_spec, *info, buf, size, error);
+  error = Status::FromError(info.takeError());
+  return 0;
+}
+
+size_t Process::DoReadMemory(const AddressSpec &addr_spec, 
+                             const AddressSpaceInfo &info, void *buf, 
+                             size_t size, Status &error) {
+  error = 
+      Status::FromErrorString("AddressSpec memory reading is not supported");
+  return 0;
+}
+
 
 // Uncomment to verify memory caching works after making changes to caching
 // code
@@ -6832,4 +6879,102 @@ void Process::SetAddressableBitMasks(AddressableBits bit_masks) {
     SetHighmemCodeAddressMask(high_addr_mask);
     SetHighmemDataAddressMask(high_addr_mask);
   }
+}
+
+
+
+llvm::Expected<lldb::ModuleSP> AddressSpec::GetModule() const {
+  if (m_module_wp.expired())
+    return llvm::createStringError("module has expired");
+  return m_module_wp.lock();
+}
+
+llvm::Expected<lldb::ThreadSP> AddressSpec::GetThread() const {
+  if (m_thread_wp.expired())
+    return llvm::createStringError("module has expired");
+  return m_thread_wp.lock();
+}
+
+llvm::Expected<uint64_t>
+AddressSpec::GetSpaceIndex(lldb_private::Process &process) const {
+  llvm::Expected<AddressSpaceInfo> info = 
+      process.GetAddressSpaceInfo(GetSpaceName());
+  if (info)
+    return info->value;
+  return info.takeError();
+}
+
+llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
+    lldb_private::Process &process) const {
+  if (!IsInDefaultAddressSpace())
+      return llvm::createStringError("address is not in the default address "
+                                    "space");
+  // This object holds a weak pointer to a module. We need to make sure the
+  // module hasn't been destroyed. 
+  auto exp_module = GetModule();
+  if (!exp_module)
+    return exp_module.takeError();
+  ModuleSP module_sp = *exp_module;
+  if (module_sp) {
+    // This object holds a weak pointer to a thread and we need to make sure
+    // thread is still around.
+    auto exp_thread = GetThread();
+    if (!exp_thread)
+      return exp_thread.takeError();
+    ThreadSP thread_sp = *exp_thread;
+    if (thread_sp) {
+      // We have thread local storage address specification. Try to resolve the
+      // TLS address via the dynamic loader.
+      DynamicLoader *dyld = process.GetDynamicLoader();
+      if (dyld) {
+        addr_t load_addr = 
+            dyld->GetThreadLocalData(module_sp, thread_sp, m_value);
+        if (load_addr != LLDB_INVALID_ADDRESS)
+          return load_addr;
+        return llvm::createStringError(
+            "dynamic loader was unable to resolve the thread local address");
+      }
+      return llvm::createStringError(
+            "no dynamic loader, unable to resolve the thread local address");
+    } else {
+      // m_value is a file address within a module.
+      Address so_addr;
+      if (module_sp->ResolveFileAddress(m_value, so_addr)) {
+        addr_t load_addr = so_addr.GetLoadAddress(&process.GetTarget());
+        if (load_addr != LLDB_INVALID_ADDRESS)
+          return load_addr;
+        return llvm::createStringError(
+            "section for module file address is not loaded in the target");
+      }
+      return llvm::createStringError(
+          "unable to resolve file address in module");      
+    }
+  }
+  // We just have a plain load address already
+  return m_value;
+}
+
+llvm::Expected<AddressSpaceInfo> 
+Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
+  if (m_address_spaces.empty())
+    return llvm::createStringError("process doesn't support address spaces");
+
+  for (const auto &address_space_info: m_address_spaces) {
+    if (address_space_info.name == address_space_name.str())
+      return address_space_info;
+  }
+
+  std::string error_str("invalid address space \"");
+  error_str.append(address_space_name.str());
+  error_str.append("\", address space must be one of:");
+  bool first = true;
+  for (const auto &addr_space_info: m_address_spaces) {
+    if (!first)
+      error_str.append(",");
+    error_str.append(" \"");
+    error_str.append(addr_space_info.name);
+    error_str.append("\"");
+    first = false;
+  }
+  return llvm::createStringError(error_str.c_str());
 }

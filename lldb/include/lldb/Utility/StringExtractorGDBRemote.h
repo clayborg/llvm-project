@@ -131,6 +131,7 @@ public:
 
     eServerPacketType_jSignalsInfo,
     eServerPacketType_jModulesInfo,
+    eServerPacketType_jAddressSpacesInfo,
 
     eServerPacketType_vAttach,
     eServerPacketType_vAttachWait,
@@ -187,6 +188,9 @@ public:
     eServerPacketType_jGPUPluginInitialize,
     eServerPacketType_jGPUPluginBreakpointHit,
     eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
+
+    eServerPacketType_qMemRead, // Read memory with address space.
+
   };
 
   ServerPacketType GetServerPacketType() const;
@@ -220,8 +224,7 @@ public:
   std::optional<std::pair<lldb::pid_t, lldb::tid_t>>
   GetPidTid(lldb::pid_t default_pid);
 
-
-  template<class T> std::optional<T> GetFromJSONText() {
+  template <class T> std::optional<T> GetFromJSONText() {
     llvm::Expected<T> info = llvm::json::parse<T>(Peek(), "");
     if (info)
       return *info;
@@ -229,7 +232,7 @@ public:
     return std::nullopt;
   }
 
-  template<class T> std::optional<T> GetFromJSONHexASCII() {
+  template <class T> std::optional<T> GetFromJSONHexASCII() {
     std::string json;
     GetHexByteString(json);
     llvm::Expected<T> info = llvm::json::parse<T>(json.c_str(), "");

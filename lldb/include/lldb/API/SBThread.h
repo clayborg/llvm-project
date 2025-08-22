@@ -230,6 +230,7 @@ public:
   SBValue GetSiginfo();
 
 private:
+  friend class SBAddressSpec;
   friend class SBBreakpoint;
   friend class SBBreakpointLocation;
   friend class SBBreakpointCallbackBaton;
@@ -250,9 +251,6 @@ private:
   SBThread(const lldb::ThreadSP &lldb_object_sp);
 
   void SetThread(const lldb::ThreadSP &lldb_object_sp);
-
-  SBError ResumeNewPlan(lldb_private::ExecutionContext &exe_ctx,
-                        lldb_private::ThreadPlan *new_plan);
 
   lldb::ThreadSP GetSP() const;
 

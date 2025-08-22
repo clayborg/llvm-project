@@ -10,7 +10,6 @@ how this invocation of the test suite should be run.
 # System modules
 import os
 
-
 # Third-party modules
 import unittest
 
@@ -45,6 +44,9 @@ dsymutil = None
 sdkroot = None
 make_path = None
 hipcc_path = None
+
+# Allow specifying a triple for cross compilation.
+triple = None
 
 # The overriden dwarf verison.
 # Don't use this to test the current compiler's
@@ -141,6 +143,7 @@ enabled_plugins = []
 # the build type of lldb
 # Typical values include Debug, Release, RelWithDebInfo and MinSizeRel
 cmake_build_type = None
+
 
 def shouldSkipBecauseOfCategories(test_categories):
     if use_categories:

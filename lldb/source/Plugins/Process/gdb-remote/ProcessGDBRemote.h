@@ -10,6 +10,7 @@
 #define LLDB_SOURCE_PLUGINS_PROCESS_GDB_REMOTE_PROCESSGDBREMOTE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -50,6 +51,38 @@ class ThreadGDBRemote;
 class ProcessGDBRemote : public Process,
                          private GDBRemoteClientBase::ContinueDelegate {
 public:
+  // A class that is used to synchronize lldb-server stop-ids between different
+  // processes. This is currently used to synchronize GPUAction requests where
+  // the native process wants to wait for the GPU process to resume or vice 
+  // versa.
+  class SyncState {
+    ProcessGDBRemote &m_process;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    /// The stop ID from our GDB server (lldb-server).
+    std::optional<uint64_t> m_stop_id;
+    std::optional<lldb::StateType> m_state;
+
+    void SetStateImpl(uint64_t stop_id,  lldb::StateType state) {
+      // Scope to ensure the lock is released prior to calling notify.
+      {
+        std::lock_guard<std::mutex> guard(m_mutex);
+        m_stop_id = stop_id;
+        m_state = state;
+      }
+      m_cv.notify_all();
+    }
+
+  public:
+    SyncState(ProcessGDBRemote &process) : m_process(process) {}
+    ~SyncState() = default;
+
+    void SetStateStopped(uint64_t stop_id);
+    void DidResume();
+    void WaitForStop(uint64_t stop_id);
+    void WaitForResume(uint64_t stop_id);
+  };
+
   ~ProcessGDBRemote() override;
 
   static lldb::ProcessSP CreateInstance(lldb::TargetSP target_sp,
@@ -137,6 +170,10 @@ public:
 
   // Process Memory
   size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
+                      Status &error) override;
+
+  size_t DoReadMemory(const AddressSpec &addr_spec, 
+                      const AddressSpaceInfo &info, void *buf, size_t size, 
                       Status &error) override;
 
   Status
@@ -247,6 +284,8 @@ protected:
   friend class GDBRemoteRegisterContext;
 
   ProcessGDBRemote(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp);
+
+  virtual std::shared_ptr<ThreadGDBRemote> CreateThread(lldb::tid_t tid);
 
   bool SupportsMemoryTagging() override;
 
@@ -425,6 +464,7 @@ protected:
   Status DoGetMemoryRegionInfo(lldb::addr_t load_addr,
                                MemoryRegionInfo &region_info) override;
 
+  SyncState &GetSyncState() { return m_sync_state; }
 private:
   // For ProcessGDBRemote only
   std::string m_partial_profile_data;
@@ -512,6 +552,8 @@ private:
   // directly because the map may reallocate. Pointers to these are contained
   // within instances of RegisterFlags.
   llvm::StringMap<std::unique_ptr<FieldEnum>> m_registers_enum_types;
+
+  SyncState m_sync_state;
 };
 
 } // namespace process_gdb_remote

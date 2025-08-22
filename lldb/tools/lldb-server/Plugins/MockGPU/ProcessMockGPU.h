@@ -24,23 +24,21 @@ class ProcessMockGPU : public NativeProcessProtocol {
   ProcessInstanceInfo m_process_info;
 
 public:
-
-class Manager : public NativeProcessProtocol::Manager {
+  class Manager : public NativeProcessProtocol::Manager {
   public:
-    Manager(MainLoop &mainloop)
-        : NativeProcessProtocol::Manager(mainloop) {}
-  
+    Manager(MainLoop &mainloop) : NativeProcessProtocol::Manager(mainloop) {}
+
     llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
     Launch(ProcessLaunchInfo &launch_info,
            NativeProcessProtocol::NativeDelegate &native_delegate) override;
-  
+
     llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
     Attach(lldb::pid_t pid,
            NativeProcessProtocol::NativeDelegate &native_delegate) override;
-  
+
     Extension GetSupportedExtensions() const override;
   };
-  
+
   ProcessMockGPU(lldb::pid_t pid, NativeDelegate &delegate);
 
   Status Resume(const ResumeActionList &resume_actions) override;
@@ -70,6 +68,12 @@ class Manager : public NativeProcessProtocol::Manager {
   Status ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                     size_t &bytes_read) override;
 
+  std::vector<AddressSpaceInfo> GetAddressSpaces() override;
+
+  Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
+                             NativeThreadProtocol *thread, void *buf,
+                             size_t size, size_t &bytes_read) override;
+
   Status WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                      size_t &bytes_written) override;
 
@@ -94,13 +98,12 @@ class Manager : public NativeProcessProtocol::Manager {
 
   bool GetProcessInfo(ProcessInstanceInfo &info) override;
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   // Custom accessors
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
 };
-
 
 } // namespace lldb_server
 } // namespace lldb_private

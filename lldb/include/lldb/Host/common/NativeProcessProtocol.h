@@ -14,10 +14,11 @@
 #include "NativeWatchpointList.h"
 #include "lldb/Host/Host.h"
 #include "lldb/Host/MainLoop.h"
+#include "lldb/Utility/AddressSpace.h"
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/Iterable.h"
 #include "lldb/Utility/Status.h"
-#include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/TraceGDBRemotePackets.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "lldb/lldb-private-forward.h"
@@ -92,6 +93,14 @@ public:
 
   virtual Status ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                             size_t &bytes_read) = 0;
+
+  virtual std::vector<AddressSpaceInfo> GetAddressSpaces() { return {}; }
+
+  virtual Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
+                                     NativeThreadProtocol *thread, void *buf,
+                                     size_t size, size_t &bytes_read) {
+    return Status::FromErrorString("ReadMemoryWithSpace not supported");
+  };
 
   Status ReadMemoryWithoutTrap(lldb::addr_t addr, void *buf, size_t size,
                                size_t &bytes_read);
@@ -235,6 +244,10 @@ public:
 
   uint32_t GetStopID() const;
 
+  // Return the next stop ID. If the state is running, it will return the next
+  // stop ID, else if it is stopped, it will return the current stop ID.
+  uint32_t GetNextStopID() const;
+
   // Callbacks for low-level process state changes
   class NativeDelegate {
   public:
@@ -258,36 +271,32 @@ public:
   virtual Status GetFileLoadAddress(const llvm::StringRef &file_name,
                                     lldb::addr_t &load_addr) = 0;
 
-  virtual std::optional<GPUDynamicLoaderResponse> 
+  virtual std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) {
     return std::nullopt;
   }
 
   /// Add GPU actions to the next stop reply packet.
   ///
-  /// This function will get called each time a stop reply packet is being 
+  /// This function will get called each time a stop reply packet is being
   /// created and allows either the native process or GPU process to add any
-  /// GPUActions to the stop reply packet. 
+  /// GPUActions to the stop reply packet.
   ///
-  /// If the GPUActions are added to the GPU stop reply packet, then these 
+  /// If the GPUActions are added to the GPU stop reply packet, then these
   /// actions will be executed in the CPU process that owns the GPU plug-in and
-  /// the GPU process can auto resume. 
+  /// the GPU process can auto resume.
   ///
   /// If the GPUActions are added to the CPU stop reply packet, then the actions
   /// will be performed on the CPU process.
   ///
-  /// This is currently targeted for GPU processes that can return a "fake" stop 
-  /// reason which allows the GPU to perform GPUActions on the CPU process 
+  /// This is currently targeted for GPU processes that can return a "fake" stop
+  /// reason which allows the GPU to perform GPUActions on the CPU process
   /// and then auto resume the GPU process. This can be used if the GPU process
-  /// gets a notification or event from the GPU debug driver that doesn't 
+  /// gets a notification or event from the GPU debug driver that doesn't
   /// actually stop the GPU, yet requires interaction with the CPU process, like
   /// setting a breakpoint in the CPU process.
   ///
-  virtual std::optional<GPUActions> GetGPUActions() {
-    return std::nullopt;
-  };
-
-
+  virtual std::optional<GPUActions> GetGPUActions() { return std::nullopt; };
 
   /// Extension flag constants, returned by Manager::GetSupportedExtensions()
   /// and passed to SetEnabledExtension()
@@ -303,8 +312,8 @@ public:
     siginfo_read = (1u << 8),
     gpu_plugins = (1u << 9),
     gpu_dyld = (1u << 10),
-
-    LLVM_MARK_AS_BITMASK_ENUM(gpu_dyld)
+    address_spaces = (1u << 11),
+    LLVM_MARK_AS_BITMASK_ENUM(address_spaces)
   };
 
   class Manager {
@@ -334,8 +343,7 @@ public:
     ///     A NativeProcessProtocol shared pointer if the operation succeeded or
     ///     an error object if it failed.
     virtual llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
-    Launch(ProcessLaunchInfo &launch_info,
-           NativeDelegate &native_delegate) = 0;
+    Launch(ProcessLaunchInfo &launch_info, NativeDelegate &native_delegate) = 0;
 
     /// Attach to an existing process.
     ///
@@ -506,10 +514,11 @@ protected:
   virtual llvm::Expected<llvm::ArrayRef<uint8_t>>
   GetSoftwareBreakpointTrapOpcode(size_t size_hint);
 
-  /// Return the offset of the PC relative to the software breakpoint that was hit. If an
-  /// architecture (e.g. arm) reports breakpoint hits before incrementing the PC, this offset
-  /// will be 0. If an architecture (e.g. intel) reports breakpoints hits after incrementing the
-  /// PC, this offset will be the size of the breakpoint opcode.
+  /// Return the offset of the PC relative to the software breakpoint that was
+  /// hit. If an architecture (e.g. arm) reports breakpoint hits before
+  /// incrementing the PC, this offset will be 0. If an architecture (e.g.
+  /// intel) reports breakpoints hits after incrementing the PC, this offset
+  /// will be the size of the breakpoint opcode.
   virtual size_t GetSoftwareBreakpointPCOffset();
 
   // Adjust the thread's PC after hitting a software breakpoint. On
