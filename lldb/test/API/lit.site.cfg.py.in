@@ -52,6 +52,10 @@ if lldb_build_intel_pt == '1':
     config.enabled_plugins.append('intel-pt')
 
 # GPU Plugins
+lldb_enable_mock_gpu_plugin = '@LLDB_ENABLE_MOCK_GPU_PLUGIN@'
+if lldb_enable_mock_gpu_plugin == 'ON' or lldb_enable_mock_gpu_plugin == '1':
+    config.enabled_plugins.append('lldb-mock-gpu')
+
 lldb_enable_amdgpu_plugin = '@LLDB_ENABLE_AMDGPU_PLUGIN@'
 if lldb_enable_amdgpu_plugin == 'ON' or lldb_enable_amdgpu_plugin == '1':
     config.enabled_plugins.append('lldb-amdgpu')
