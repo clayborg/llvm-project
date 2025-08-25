@@ -7,10 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "NVIDIAGPU.h"
+#include "AddressSpaces.h"
+#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ThreadNVIDIAGPU.h"
 #include "Utils.h"
-
-#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "cudadebugger.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Utility/DataBufferLLVM.h"
@@ -190,19 +190,6 @@ Status NVIDIAGPU::Signal(int signo) {
 Status NVIDIAGPU::Interrupt() { return Status(); }
 
 Status NVIDIAGPU::Kill() { return Status(); }
-
-Status NVIDIAGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                             size_t &bytes_read) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::ReadMemory(). addr: {0}, size: {1}", addr, size);
-
-  CUDBGResult res = GetCudaAPI().readGlobalMemory(addr, buf, size);
-  if (res != CUDBG_SUCCESS)
-    return Status::FromErrorString(cudbgGetErrorString(res));
-
-  bytes_read = size;
-  return Status();
-}
 
 Status NVIDIAGPU::WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                               size_t &bytes_written) {
@@ -406,7 +393,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
 }
 
 NVIDIAGPU::Extension NVIDIAGPU::Manager::GetSupportedExtensions() const {
-  return Extension::gpu_dyld;
+  return Extension::gpu_dyld | Extension::address_spaces;
 }
 
 std::optional<GPUDynamicLoaderResponse>
@@ -438,4 +425,91 @@ DeviceInformation &NVIDIAGPU::GetDeviceInformation(int device_id) {
   auto [it, inserted] =
       m_device_information.try_emplace(device_id, GetCudaAPI(), device_id);
   return it->second;
+}
+
+std::vector<AddressSpaceInfo> NVIDIAGPU::GetAddressSpaces() {
+  std::vector<AddressSpaceInfo> result;
+  // is_thread_specific should be true for all address spaces that may return a
+  // different value for different threads.
+  result.push_back(
+      {"const", AddressSpace::ConstStorage, /*is_thread_specific=*/false});
+  result.push_back(
+      {"global", AddressSpace::GlobalStorage, /*is_thread_specific=*/false});
+  result.push_back(
+      {"local", AddressSpace::LocalStorage, /*is_thread_specific=*/true});
+  result.push_back(
+      {"param", AddressSpace::ParamStorage, /*is_thread_specific=*/true});
+  result.push_back(
+      {"shared", AddressSpace::SharedStorage, /*is_thread_specific=*/true});
+  result.push_back(
+      {"generic", AddressSpace::GenericStorage, /*is_thread_specific=*/true});
+  return result;
+}
+
+Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
+                                      NativeThreadProtocol *thread, void *buf,
+                                      size_t size, size_t &bytes_readn) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::ReadMemoryWithSpace(). addr: {0}, size: {1}", addr,
+           size);
+
+  auto GetPhysicalCoords = [&thread]() -> PhysicalCoords {
+    ThreadNVIDIAGPU &nv_thread = *static_cast<ThreadNVIDIAGPU *>(thread);
+    return nv_thread.GetPhysicalCoords();
+  };
+  CUDBGResult res;
+
+  switch (addr_space) {
+  case AddressSpace::ConstStorage: 
+  case AddressSpace::GlobalStorage: {
+    // Const storage can be read as global storage.
+    res = GetCudaAPI().readGlobalMemory(addr, buf, size);
+    break;
+  }
+  case AddressSpace::LocalStorage: {
+    PhysicalCoords coords = GetPhysicalCoords();
+    res = GetCudaAPI().readLocalMemory(coords.dev_id, coords.sm_id,
+                                       coords.warp_id, coords.lane_id, addr,
+                                       buf, size);
+    break;
+  }
+  case AddressSpace::ParamStorage: {
+    PhysicalCoords coords = GetPhysicalCoords();
+    res = GetCudaAPI().readParamMemory(coords.dev_id, coords.sm_id,
+                                       coords.warp_id, addr, buf, size);
+    break;
+  }
+  case AddressSpace::SharedStorage: {
+    PhysicalCoords coords = GetPhysicalCoords();
+    res = GetCudaAPI().readSharedMemory(coords.dev_id, coords.sm_id,
+                                        coords.warp_id, addr, buf, size);
+    break;
+  }
+  case AddressSpace::GenericStorage: {
+    PhysicalCoords coords = GetPhysicalCoords();
+    res = GetCudaAPI().readGenericMemory(coords.dev_id, coords.sm_id,
+                                         coords.warp_id, coords.lane_id, addr,
+                                         buf, size);
+    break;
+  }
+  default:
+    return Status::FromErrorStringWithFormatv("Invalid address space '{0}'",
+                                              addr_space);
+  }
+
+  if (res != CUDBG_SUCCESS) {
+    bytes_readn = 0;
+    return Status::FromErrorString(cudbgGetErrorString(res));
+  }
+
+  bytes_readn = size;
+  return Status();
+}
+
+Status NVIDIAGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
+                             size_t &bytes_read) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::ReadMemory(). addr: {0}, size: {1}", addr, size);
+  return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage, /*thread=*/nullptr, buf,
+                             size, bytes_read);
 }
