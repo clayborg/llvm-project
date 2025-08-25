@@ -1140,6 +1140,14 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Exited(
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log, "GDBRemoteCommunicationServerLLGS::%s called", __FUNCTION__);
 
+  // Notify GPU plugins that the native process has exited
+  auto exit_status = process->GetExitStatus();
+  if (exit_status.has_value()) {
+    for (auto &plugin_up : m_plugins) {
+      plugin_up->NativeProcessDidExit(*exit_status);
+    }
+  }
+
   PacketResult result = SendStopReasonForState(
       *process, StateType::eStateExited, /*force_synchronous=*/false);
   if (result != PacketResult::Success) {

@@ -82,6 +82,14 @@ public:
     return std::nullopt;
   };
 
+  /// Get the GPU plug-in notified when the native process exits.
+  ///
+  /// This function will get called when the native process exits. This allows
+  /// GPU plugins to perform proper termination
+  ///
+  /// \param[in] exit_status The exit status of the native process.
+  virtual void NativeProcessDidExit(const WaitStatus &exit_status) {};
+
   /// Get the GPU plug-in initialization actions.
   ///
   /// Each GPU plugin can return a structure that describes the GPU plug-in and
