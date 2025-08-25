@@ -296,6 +296,12 @@ public:
   /// \return the DeviceInformation object for the given device id.
   DeviceInformation &GetDeviceInformation(int device_id);
 
+  std::vector<AddressSpaceInfo> GetAddressSpaces() override;
+
+  Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
+                             NativeThreadProtocol *thread, void *buf,
+                             size_t size, size_t &bytes_readn) override;
+
 private:
   friend class Manager;
 
