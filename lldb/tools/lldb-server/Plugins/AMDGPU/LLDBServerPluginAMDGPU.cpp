@@ -562,6 +562,13 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   return response;
 }
 
+void LLDBServerPluginAMDGPU::NativeProcessDidExit(const WaitStatus &exit_status) {
+  // Bare bones implementation for exit behavior if GPU process exits.
+  ProcessAMDGPU *gpu_process = GetGPUProcess();
+  if (gpu_process)
+    gpu_process->HandleNativeProcessExit(exit_status);
+}
+
 GPUActions LLDBServerPluginAMDGPU::GetInitializeActions() {
   GPUActions init_actions;
   init_actions.plugin_name = GetPluginName();

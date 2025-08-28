@@ -168,9 +168,8 @@ void LLDBServerPluginMockGPU::NativeProcessDidExit(
     const WaitStatus &exit_status) {
   // Tell the GPU process to exit
   NativeProcessProtocol *gpu_process = m_gdb_server->GetCurrentProcess();
-  if (auto *mock_gpu_process = static_cast<ProcessMockGPU *>(gpu_process)) {
+  if (auto *mock_gpu_process = static_cast<ProcessMockGPU *>(gpu_process))
     mock_gpu_process->HandleNativeProcessExit(exit_status);
-  }
 }
 
 llvm::Expected<GPUPluginBreakpointHitResponse>

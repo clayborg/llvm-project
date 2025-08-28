@@ -301,7 +301,8 @@ public:
     return std::nullopt;
   };
 
-
+  // Handle exiting the GPU process when a native process exits.
+  virtual void HandleNativeProcessExit(const WaitStatus &exit_status) {};
 
   /// Extension flag constants, returned by Manager::GetSupportedExtensions()
   /// and passed to SetEnabledExtension()

@@ -146,6 +146,11 @@ void ProcessAMDGPU::SetLaunchInfo(ProcessLaunchInfo &launch_info) {
       static_cast<ProcessInfo &>(launch_info);
 }
 
+void ProcessAMDGPU::HandleNativeProcessExit(const WaitStatus &exit_status) {
+  // Set our exit status to match the native process and notify delegates
+  SetExitStatus(exit_status, true);
+}
+
 bool ProcessAMDGPU::GetProcessInfo(ProcessInstanceInfo &proc_info) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGF(log, "ProcessAMDGPU::%s() entered", __FUNCTION__);
