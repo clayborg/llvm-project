@@ -1,4 +1,4 @@
-//===-- DeviceInformation.cpp --------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DeviceInformation.h"
-#include "Utils.h"
+#include "../Utils/Utils.h"
 
 using namespace lldb_private::lldb_server;
 
@@ -19,7 +19,7 @@ size_t DeviceInformation::GetNumRRegisters() {
   CUDBGResult res = m_api.getNumRegisters(m_device_id, &num_r_registers);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError("DeviceInformation::GetNumRRegisters(). "
-                           "getNumRegisters failed: {0}",
+                           "getNumRegisters failed: {}",
                            cudbgGetErrorString(res));
   }
   m_num_r_registers = static_cast<size_t>(num_r_registers);
