@@ -1,4 +1,4 @@
-//===-- CUDADebuggerAPI.cpp -----------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "CUDADebuggerAPI.h"
+#include "../Utils/Utils.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "Utils.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "llvm/Support/Error.h"
 
@@ -47,7 +47,7 @@ void CUDBGAPIDeleter(CUDBGAPI api) {
   CUDBGResult res = api->finalize();
   if (res != CUDBG_SUCCESS) {
     Log *log = GetLog(GDBRLog::Plugin);
-    LLDB_LOG(log, "Failed to finalize the CUDA Debugger API. {0}",
+    LLDB_LOG(log, "Failed to finalize the CUDA Debugger API. {}",
              cudbgGetErrorString(res));
   }
 }
@@ -59,7 +59,7 @@ static Error VerifyDebuggerCapabilities(CUDADebuggerAPI &api) {
       api->getSupportedDebuggerCapabilities(&supported_capabilities);
   if (res != CUDBG_SUCCESS)
     return createStringError(
-        "Failed to get the GPU debugger supported capabilities. {0}",
+        "Failed to get the GPU debugger supported capabilities. {}",
         cudbgGetErrorString(res));
   if (!(supported_capabilities & CUDBG_DEBUGGER_CAPABILITY_SUSPEND_EVENTS))
     return createStringError(
@@ -78,7 +78,7 @@ static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
                                llvm::StringRef symbol_name, const T &value) {
   std::optional<uint64_t> symbol_address = bp_args.GetSymbolValue(symbol_name);
   if (!symbol_address)
-    return createStringErrorFmt("Couldn't find address for symbol {0}",
+    return createStringErrorFmt("Couldn't find address for symbol {}",
                                 symbol_name);
 
   size_t bytes_written = 0;
@@ -102,10 +102,10 @@ static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
   Status status = linux_process.WriteMemory(*symbol_address, data_ptr,
                                             value_size, bytes_written);
   if (status.Fail())
-    return createStringErrorFmt("Failed to write symbol {0}: {1}", symbol_name,
+    return createStringErrorFmt("Failed to write symbol {}: {}", symbol_name,
                                 status.AsCString());
   if (bytes_written != value_size)
-    return createStringErrorFmt("Failed to write symbol {0}", symbol_name);
+    return createStringErrorFmt("Failed to write symbol {}", symbol_name);
   return Error::success();
 }
 
@@ -148,21 +148,21 @@ static Error WriteConfigurationToLibcuda(void *libcuda, uint32_t pid,
   auto *api_client_pid = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_APICLIENT_PID.c_str()));
   if (!api_client_pid)
-    return createStringErrorFmt("Failed to find symbol {0} in {1}",
+    return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_PID,
                                 CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
 
   auto *api_client_revision = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_APICLIENT_REVISION.c_str()));
   if (!api_client_revision)
-    return createStringErrorFmt("Failed to find symbol {0} in {1}",
+    return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_REVISION,
                                 CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
 
   auto *session_id_ptr = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_SESSION_ID.c_str()));
   if (!session_id_ptr)
-    return createStringErrorFmt("Failed to find symbol {0} in {1}",
+    return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_SESSION_ID,
                                 CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
 
@@ -188,7 +188,7 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
     char *injection_path = reinterpret_cast<char *>(
         dlsym(libcuda, Symbols::CUDBG_INJECTION_PATH.c_str()));
     if (!injection_path)
-      return createStringErrorFmt("Failed to find symbol {0} in {1}",
+      return createStringErrorFmt("Failed to find symbol {} in {}",
                                   Symbols::CUDBG_INJECTION_PATH,
                                   CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
     strcpy(injection_path, path);
@@ -202,7 +202,7 @@ static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda) {
   const CudbgGetAPIFn cudbgGetAPI = reinterpret_cast<CudbgGetAPIFn>(
       dlsym(libcuda, Symbols::CUDBG_GET_API.c_str()));
   if (!cudbgGetAPI)
-    return createStringErrorFmt("Failed to find symbol {0} in {1}",
+    return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_GET_API,
                                 CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
 
@@ -211,7 +211,7 @@ static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda) {
       cudbgGetAPI(CUDBG_API_VERSION_MAJOR, CUDBG_API_VERSION_MINOR,
                   CUDBG_API_VERSION_REVISION, &api);
   if (res != CUDBG_SUCCESS)
-    return createStringErrorFmt("The `cudbgGetAPI` call failed. {0}",
+    return createStringErrorFmt("The `cudbgGetAPI` call failed. {}",
                                 cudbgGetErrorString(res));
 
   return api;
@@ -233,7 +233,7 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
 
   void *libcuda = dlopen(CUDA_API_LIBRARY_NAME, RTLD_LAZY);
   if (!libcuda)
-    return createStringErrorFmt("Failed to dlopen {0}", CUDA_API_LIBRARY_NAME);
+    return createStringErrorFmt("Failed to dlopen {}", CUDA_API_LIBRARY_NAME);
 
   if (Error err =
           WriteConfigurationToLibcuda(libcuda, pid, revision, session_id))
@@ -250,7 +250,7 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
 
   CUDBGResult res = api->initialize();
   if (res != CUDBG_SUCCESS)
-    return createStringErrorFmt("The `CUDBGAPI.initialize` call failed. {0}",
+    return createStringErrorFmt("The `CUDBGAPI.initialize` call failed. {}",
                                 cudbgGetErrorString(res));
 
   if (Error err = VerifyDebuggerCapabilities(api))
@@ -265,7 +265,7 @@ CUDADebuggerAPI::Initialize(const GPUPluginBreakpointHitArgs &args,
   Expected<CUDADebuggerAPI> api = InitializeImpl(args, linux_process);
   if (!api)
     return createStringErrorFmt(
-        "Failed to initialize the CUDA Debugger API. {0}",
+        "Failed to initialize the CUDA Debugger API. {}",
         llvm::toString(api.takeError()));
   return api;
 }
