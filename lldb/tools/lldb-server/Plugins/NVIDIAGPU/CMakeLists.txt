@@ -8,7 +8,6 @@ add_lldb_library(lldbServerPluginNVIDIAGPU
   NVIDIAGPU.cpp
   RegisterContextNVIDIAGPU.cpp
   ThreadNVIDIAGPU.cpp
-  Utils.cpp
 )
 
 set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC 

@@ -1,4 +1,4 @@
-//===-- Exceptions.cpp ----------------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,9 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "Exceptions.h"
+#include "../Utils/Utils.h"
 #include "Coords.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "Utils.h"
 
 using namespace lldb_private::process_gdb_remote;
 
@@ -23,7 +23,7 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
   CUDBGResult res = api.getNumSMs(dev_id, &num_sms);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
-        "NVIDIAGPU::FindExceptionInfo(). Failed to get number of SMs: {0}",
+        "NVIDIAGPU::FindExceptionInfo(). Failed to get number of SMs: {}",
         cudbgGetErrorString(res));
   }
 
@@ -53,7 +53,7 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
   res = api.getNumWarps(dev_id, &num_warps);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError("NVIDIAGPU::FindExceptionInfo(). Failed to get "
-                           "number of warps: {0}",
+                           "number of warps: {}",
                            cudbgGetErrorString(res));
   }
 
@@ -61,7 +61,7 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
   res = api.readValidWarps(dev_id, sm_id, &valid_warps_mask);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
-        "NVIDIAGPU::FindExceptionInfo(). Failed to read valid warps: {0}",
+        "NVIDIAGPU::FindExceptionInfo(). Failed to read valid warps: {}",
         cudbgGetErrorString(res));
   }
 
@@ -73,7 +73,7 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
     res = api.readWarpState(dev_id, sm_id, wp, &warp);
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
-          "NVIDIAGPU::FindExceptionInfo(). Failed to read warp state: {0}",
+          "NVIDIAGPU::FindExceptionInfo(). Failed to read warp state: {}",
           cudbgGetErrorString(res));
     }
 
@@ -87,13 +87,12 @@ std::optional<ExceptionInfo> FindExceptionInfo(const CUDBGAPI_st &api) {
         if (res != CUDBG_SUCCESS)
           logAndReportFatalError(
               "NVIDIAGPU::FindExceptionInfo(). Failed to read lane "
-              "exception: {0}",
+              "exception: {}",
               cudbgGetErrorString(res));
 
         if (exception != CUDBGException_t::CUDBG_EXCEPTION_NONE) {
           physical_coords = PhysicalCoords(dev_id, sm_id, wp, ln);
-          LLDB_LOG(log,
-                   "Exception {0} found at {1}", exception,
+          LLDB_LOG(log, "Exception {} found at {}", exception,
                    physical_coords.Dump());
 
           return ExceptionInfo{physical_coords, exception};
