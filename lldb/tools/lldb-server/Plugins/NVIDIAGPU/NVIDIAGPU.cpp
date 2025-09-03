@@ -1,4 +1,4 @@
-//===-- NVIDIAGPU.cpp -----------------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,10 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "NVIDIAGPU.h"
+#include "../Utils/Utils.h"
 #include "AddressSpaces.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ThreadNVIDIAGPU.h"
-#include "Utils.h"
 #include "cudadebugger.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Utility/DataBufferLLVM.h"
@@ -116,7 +116,7 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
 
 Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::Resume(). Pre-resume state: {0}",
+  LLDB_LOG(log, "NVIDIAGPU::Resume(). Pre-resume state: {}",
            StateToString(GetState()));
 
   if (m_is_faking_a_stop_for_dyld) {
@@ -126,7 +126,7 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
     CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
-          "Failed to acknowledge CUDA Debugger API events. {0}",
+          "Failed to acknowledge CUDA Debugger API events. {}",
           cudbgGetErrorString(res));
     }
   } else {
@@ -135,7 +135,7 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
 
     Status status;
     if (res != CUDBG_SUCCESS) {
-      LLDB_LOG(log, "NVIDIAGPU::Resume(). Failed to resume device: {0}", res);
+      LLDB_LOG(log, "NVIDIAGPU::Resume(). Failed to resume device: {}", res);
       return Status::FromErrorString("Failed to resume device");
     }
   }
@@ -150,7 +150,7 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
 
 Status NVIDIAGPU::Halt() {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::Halt(). Pre-halt state: {0}",
+  LLDB_LOG(log, "NVIDIAGPU::Halt(). Pre-halt state: {}",
            StateToString(GetState()));
   // According to Andrew, halting the devices takes ~0.2ms - ~10 ms.
   CUDBGResult res = GetCudaAPI().suspendDevice(/*device_id=*/0);
@@ -159,7 +159,7 @@ Status NVIDIAGPU::Halt() {
   if (res != CUDBG_SUCCESS) {
     std::string error_string =
         std::string("Failed to suspend device. ") + cudbgGetErrorString(res);
-    LLDB_LOG(log, "NVIDIAGPU::Halt(). {0}", error_string);
+    LLDB_LOG(log, "NVIDIAGPU::Halt(). {}", error_string);
     status.FromErrorString(error_string.c_str());
   }
   return status;
@@ -167,7 +167,7 @@ Status NVIDIAGPU::Halt() {
 
 void NVIDIAGPU::ChangeStateToStopped() {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::ChangeStateToStopped(). Pre-stop state: {0}",
+  LLDB_LOG(log, "NVIDIAGPU::ChangeStateToStopped(). Pre-stop state: {}",
            StateToString(GetState()));
 
   for (ThreadNVIDIAGPU &thread : GPUThreads()) {
@@ -271,9 +271,8 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
   llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
       llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
   if (!elf_or_err) {
-    logAndReportFatalError(
-        "GetLoadSectionsForCubin(). Failed to parse ELF: {0}",
-        llvm::toString(elf_or_err.takeError()));
+    logAndReportFatalError("GetLoadSectionsForCubin(). Failed to parse ELF: {}",
+                           llvm::toString(elf_or_err.takeError()));
   }
 
   const llvm::object::ELF64LEFile &elf_file = elf_or_err->getELFFile();
@@ -281,7 +280,7 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
       elf_file.sections();
   if (!sections_or_err) {
     logAndReportFatalError(
-        "GetLoadSectionsForCubin(). Failed to get sections: {0}",
+        "GetLoadSectionsForCubin(). Failed to get sections: {}",
         llvm::toString(sections_or_err.takeError()));
   }
 
@@ -292,8 +291,7 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
         elf_file.getSectionName(section);
 
     if (!name_or_err) {
-      LLDB_LOG(log,
-               "GetLoadSectionsForCubin(). Failed to get section name: {0}",
+      LLDB_LOG(log, "GetLoadSectionsForCubin(). Failed to get section name: {}",
                llvm::toString(name_or_err.takeError()));
       continue;
     }
@@ -304,7 +302,7 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
 
     // For NVIDIA cubin images, section virtual addresses are encoded as
     // absolute addresses
-    LLDB_LOGV(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
+    LLDB_LOGV(log, "  Section: {}, Virtual Address: {1:x}, Size: {}",
               *name_or_err, section.sh_addr, section.sh_size);
 
     // Add the section to the loaded sections list
@@ -327,8 +325,8 @@ void NVIDIAGPU::OnElfImageLoaded(
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(
       log,
-      "LLDBServerPluginNVIDIAGPU::OnElfImageLoaded() dev_id: {0}, context_id: "
-      "{1}, module_id: {2}, elf_image_size: {3}, handle: {4}, properties: {5}",
+      "LLDBServerPluginNVIDIAGPU::OnElfImageLoaded() dev_id: {}, context_id: "
+      "{}, module_id: {}, elf_image_size: {}, handle: {}, properties: {}",
       dev_id, context_id, module_id, elf_image_size, handle, properties);
 
   // Obtain the elf image
@@ -339,7 +337,7 @@ void NVIDIAGPU::OnElfImageLoaded(
       data_buffer->getBufferStart(), elf_image_size);
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError(
-        "NVIDIAGPU::OnElfImageLoaded(). Failed to get elf image: {0}",
+        "NVIDIAGPU::OnElfImageLoaded(). Failed to get elf image: {}",
         cudbgGetErrorString(res));
     return;
   }
@@ -450,7 +448,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
                                       NativeThreadProtocol *thread, void *buf,
                                       size_t size, size_t &bytes_readn) {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::ReadMemoryWithSpace(). addr: {0}, size: {1}", addr,
+  LLDB_LOG(log, "NVIDIAGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr,
            size);
 
   auto GetPhysicalCoords = [&thread]() -> PhysicalCoords {
@@ -460,7 +458,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   CUDBGResult res;
 
   switch (addr_space) {
-  case AddressSpace::ConstStorage: 
+  case AddressSpace::ConstStorage:
   case AddressSpace::GlobalStorage: {
     // Const storage can be read as global storage.
     res = GetCudaAPI().readGlobalMemory(addr, buf, size);
@@ -493,7 +491,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
     break;
   }
   default:
-    return Status::FromErrorStringWithFormatv("Invalid address space '{0}'",
+    return Status::FromErrorStringWithFormatv("Invalid address space '{}'",
                                               addr_space);
   }
 
@@ -509,7 +507,7 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
 Status NVIDIAGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                              size_t &bytes_read) {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVIDIAGPU::ReadMemory(). addr: {0}, size: {1}", addr, size);
-  return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage, /*thread=*/nullptr, buf,
-                             size, bytes_read);
+  LLDB_LOG(log, "NVIDIAGPU::ReadMemory(). addr: {}, size: {}", addr, size);
+  return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage,
+                             /*thread=*/nullptr, buf, size, bytes_read);
 }
