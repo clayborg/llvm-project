@@ -1,4 +1,4 @@
-//===-- ThreadNVIDIAGPU.cpp -----------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -60,7 +60,7 @@ void ThreadNVIDIAGPU::SetStoppedByException(ExceptionInfo exception_info) {
 
   m_stop_info.reason = lldb::eStopReasonException;
   m_stop_description =
-      llvm::formatv("CUDA Exception({0}): {1}", exception_info.exception,
+      llvm::formatv("CUDA Exception({}): {}", exception_info.exception,
                     CudaExceptionToString(exception_info.exception));
   if (std::optional<int64_t> error_pc = m_reg_context.ReadErrorPC())
     m_stop_description += llvm::formatv(" at {0:x}", *error_pc);

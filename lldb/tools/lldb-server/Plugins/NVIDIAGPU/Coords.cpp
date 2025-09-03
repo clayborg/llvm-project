@@ -1,4 +1,4 @@
-//===-- Coords.cpp -------------------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -39,11 +39,11 @@ bool PhysicalCoords::IsValid() const {
 
 std::string PhysicalCoords::AsThreadName() const {
   if (IsValid())
-    return llvm::formatv("GPU Thread ({0}, {1}, {2})", sm_id, warp_id, lane_id);
+    return llvm::formatv("GPU Thread ({}, {}, {})", sm_id, warp_id, lane_id);
   return "NVIDIA GPU";
 }
 
 std::string PhysicalCoords::Dump() const {
-  return llvm::formatv("dev_id = {0} sm_id = {1} warp_id = {2} lane_id = {3}",
+  return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} lane_id = {}",
                        dev_id, sm_id, warp_id, lane_id);
 }
