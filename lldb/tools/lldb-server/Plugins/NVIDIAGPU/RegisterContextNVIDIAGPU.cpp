@@ -1,4 +1,4 @@
-//===-- RegisterContextNVIDIAGPU.cpp //------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,9 +8,9 @@
 
 #include "RegisterContextNVIDIAGPU.h"
 
+#include "../Utils/Utils.h"
 #include "NVIDIAGPU.h"
 #include "ThreadNVIDIAGPU.h"
-#include "Utils.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
@@ -295,7 +295,7 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
 
   if (res != CUDBG_SUCCESS) {
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
-                           "readRegisterRange failed: {0}",
+                           "readRegisterRange failed: {}",
                            cudbgGetErrorString(res));
   }
 
@@ -352,11 +352,11 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
     int r_index = reg_num - LLDB_R0;
 
     if (r_index < 0 || r_index >= (int)kNumRRegs)
-      return Status::FromErrorStringWithFormatv("unknown R{0} register",
+      return Status::FromErrorStringWithFormatv("unknown R{} register",
                                                 r_index);
 
     if (!regs.is_valid.R[r_index])
-      return Status::FromErrorStringWithFormatv("R{0} register is invalid",
+      return Status::FromErrorStringWithFormatv("R{} register is invalid",
                                                 r_index);
   }
 
