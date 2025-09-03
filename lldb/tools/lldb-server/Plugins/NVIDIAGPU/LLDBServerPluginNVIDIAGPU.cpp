@@ -1,4 +1,4 @@
-//===-- LLDBServerPluginNVIDIAGPU.cpp -------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,10 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLDBServerPluginNVIDIAGPU.h"
+#include "../Utils/Utils.h"
 #include "NVIDIAGPU.h"
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "Utils.h"
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/Log.h"
@@ -49,9 +49,9 @@ static constexpr uint32_t kGpuInitializationBreakpoint = 1;
 static void SetEnvVar(const char *env_var_name, const char *value, Log *log) {
   if (!sys::Process::GetEnv(env_var_name)) {
     setenv(env_var_name, value, 1);
-    LLDB_LOG(log, "Set {0}={1}", env_var_name, value);
+    LLDB_LOG(log, "Set {}={}", env_var_name, value);
   } else {
-    LLDB_LOG(log, "Using existing {0} from environment", env_var_name);
+    LLDB_LOG(log, "Using existing {} from environment", env_var_name);
   }
 }
 
@@ -98,7 +98,7 @@ LLDBServerPluginNVIDIAGPU::LLDBServerPluginNVIDIAGPU(
   // The GPU process is fake and shouldn't fail to launch. Let's abort if we see
   // an error.
   if (error.Fail())
-    logAndReportFatalError("Failed to launch the GPU process. {0}", error);
+    logAndReportFatalError("Failed to launch the GPU process. {}", error);
 }
 
 llvm::StringRef LLDBServerPluginNVIDIAGPU::GetPluginName() {
@@ -123,7 +123,7 @@ void LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread(
     if (error.Fail())
       logAndReportFatalError(
           "LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread error "
-          "returned from Accept(): {0}",
+          "returned from Accept(): {}",
           error);
     m_is_connected = true;
   }
@@ -143,7 +143,7 @@ void LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread(
   if (m_main_loop_status.Fail()) {
     logAndReportFatalError(
         "LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread main loop "
-        "exited with an error: {0}",
+        "exited with an error: {}",
         m_main_loop_status);
   }
   // Protect access to m_is_connected.
@@ -181,7 +181,7 @@ LLDBServerPluginNVIDIAGPU::CreateConnection() {
           .value_or("localhost");
 
   std::string listen_to_host_and_port =
-      llvm::formatv("{0}:{1}", listen_to_host, listen_to_port);
+      llvm::formatv("{}:{}", listen_to_host, listen_to_port);
   llvm::Expected<std::unique_ptr<TCPSocket>> sock =
       Socket::TcpListen(listen_to_host_and_port, 5);
   if (sock) {
@@ -190,9 +190,8 @@ LLDBServerPluginNVIDIAGPU::CreateConnection() {
     connection_info.triple = "nvptx-nvidia-cuda";
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
     connection_info.connect_url =
-        llvm::formatv("connect://{0}:{1}", remote_host, listen_port);
-    LLDB_LOG(log,
-             "LLDBServerPluginNVIDIAGPU::CreateConnection listening to {0}",
+        llvm::formatv("connect://{}:{}", remote_host, listen_port);
+    LLDB_LOG(log, "LLDBServerPluginNVIDIAGPU::CreateConnection listening to {}",
              listen_port);
     std::thread t(&LLDBServerPluginNVIDIAGPU::AcceptAndMainLoopThread, this,
                   std::move(*sock));
@@ -202,7 +201,7 @@ LLDBServerPluginNVIDIAGPU::CreateConnection() {
   m_is_listening = false;
   return createStringErrorFmt(
       "LLDBServerPluginNVIDIAGPU::CreateConnection error: "
-      "failed to listen to localhost:0: {0}",
+      "failed to listen to localhost:0: {}",
       llvm::toString(sock.takeError()));
 }
 
@@ -242,7 +241,7 @@ LLDBServerPluginNVIDIAGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
                             this);
   if (res != CUDBG_SUCCESS)
     return createStringError(
-        "Failed to set the event callback for the CUDA Debugger API. {0}",
+        "Failed to set the event callback for the CUDA Debugger API. {}",
         cudbgGetErrorString(res));
 
   GPUPluginBreakpointHitResponse response(GetPluginName(), kGpuInitializationBreakpoint);
@@ -277,14 +276,13 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
     // We shouldn't be getting spurious calls to this function, so all
     // invocations should have a corresponding event.
     logAndReportFatalError(
-        "We didnt' get an event from the CUDA Debugger API queue. {0}",
+        "We didnt' get an event from the CUDA Debugger API queue. {}",
         cudbgGetErrorString(res));
   }
 
   if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError(
-        "Failed to get the next CUDA Debugger API event. {0}",
-        cudbgGetErrorString(res));
+    logAndReportFatalError("Failed to get the next CUDA Debugger API event. {}",
+                           cudbgGetErrorString(res));
   }
 
   switch (event.kind) {
@@ -361,7 +359,7 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
     break;
   }
   default:
-    LLDB_LOG(log, "Unknown event kind: {0}", event.kind);
+    LLDB_LOG(log, "Unknown event kind: {}", event.kind);
     break;
   }
 
@@ -370,8 +368,7 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
   // Handled all pending events. Acknowledge them.
   res = cuda_api->acknowledgeSyncEvents();
   if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError(
-        "Failed to acknowledge CUDA Debugger API events. {0}",
-        cudbgGetErrorString(res));
+    logAndReportFatalError("Failed to acknowledge CUDA Debugger API events. {}",
+                           cudbgGetErrorString(res));
   }
 }
