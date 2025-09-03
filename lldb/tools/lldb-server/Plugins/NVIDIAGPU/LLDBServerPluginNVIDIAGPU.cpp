@@ -30,6 +30,9 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
+/// Internal identifier for the gpu initialization breakpoint.
+static constexpr uint32_t kGpuInitializationBreakpoint = 1;
+
 /// Helper function to set environment variables with logging.
 ///
 /// Checks if the environment variable already exists and either uses the
@@ -242,7 +245,7 @@ LLDBServerPluginNVIDIAGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         "Failed to set the event callback for the CUDA Debugger API. {0}",
         cudbgGetErrorString(res));
 
-  GPUPluginBreakpointHitResponse response(GetPluginName());
+  GPUPluginBreakpointHitResponse response(GetPluginName(), kGpuInitializationBreakpoint);
 
   Expected<GPUPluginConnectionInfo> connection_info = CreateConnection();
   if (!connection_info)
