@@ -1,4 +1,4 @@
-//===-- MainLoopFDNotifier.cpp --------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MainLoopEventNotifier.h"
-#include "Utils.h"
+#include "../Utils/Utils.h"
 #include "lldb/Host/File.h"
 
 using namespace lldb_private;
@@ -35,7 +35,7 @@ void MainLoopEventNotifier::InvokeCallback() {
 
   // We crash if we can't read the file descriptor, as this would be a
   // terrible bug in the plugin implementation.
-  logAndReportFatalError("Couldn't read the {0} file descriptor", m_name);
+  logAndReportFatalError("Couldn't read the {} file descriptor", m_name);
 }
 
 llvm::Expected<MainLoopEventNotifierUP>
@@ -52,8 +52,8 @@ MainLoopEventNotifier::CreateForEventCallback(llvm::StringRef name,
       error);
 
   if (error.Fail())
-    return createStringErrorFmt(
-        "Failed to register the {0} file descriptor. {1}", name, error);
+    return createStringErrorFmt("Failed to register the {} file descriptor. {}",
+                                name, error);
   return notifier;
 }
 
@@ -72,6 +72,6 @@ void MainLoopEventNotifier::FireEvent() {
   if (m_fds[1] == -1)
     return;
   if (write(m_fds[1], "1", 1) != 1)
-    logAndReportFatalError("Failed to send data to the {0} file descriptor",
+    logAndReportFatalError("Failed to send data to the {} file descriptor",
                            m_name);
 }
