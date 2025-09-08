@@ -46,51 +46,45 @@ const NVIDIAGPU &ThreadNVIDIAGPU::GetGPU() const {
 
 void ThreadNVIDIAGPU::SetStoppedBySignal(int signo) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedBySignal()");
-  SetStopped();
-  m_stop_info.reason = lldb::eStopReasonSignal;
-  m_stop_info.signo = signo;
+  SetStopped(lldb::eStopReasonSignal, /*description=*/std::nullopt, signo);
 }
 
 void ThreadNVIDIAGPU::SetStoppedByDynamicLoader() {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByDynamicLoader()");
-  SetStopped();
-
-  m_stop_info.reason = lldb::eStopReasonDynamicLoader;
-  m_stop_description = "NVIDIA GPU Thread Stopped by Dynamic Loader";
+  SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU Thread Stopped by Dynamic Loader");
 }
 
 void ThreadNVIDIAGPU::SetStoppedByException(
     const ExceptionInfo &exception_info) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStoppedByException()");
-  SetStopped();
-
-  m_stop_info.reason = lldb::eStopReasonException;
-  m_stop_description =
-      llvm::formatv("CUDA Exception({}): {}", exception_info.exception,
-                    exception_info.ToString());
+  SetStopped(lldb::eStopReasonException,
+             llvm::formatv("CUDA Exception({}): {}", exception_info.exception,
+                           exception_info.ToString())
+                 .str());
 }
 
 void ThreadNVIDIAGPU::SetStoppedByInitialization() {
   LLDB_LOG(GetLog(GDBRLog::Plugin),
            "ThreadNVIDIAGPU::SetStoppedByInitialization()");
-  SetStopped();
-
-  m_stop_info.reason = lldb::eStopReasonDynamicLoader;
-  m_stop_description = "NVIDIA GPU is initializing";
+  SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU is initializing");
 }
 
-void ThreadNVIDIAGPU::SetStopped() {
-  if (m_state == lldb::eStateStopped)
-    return;
-
+void ThreadNVIDIAGPU::SetStopped(lldb::StopReason reason,
+                                 std::optional<llvm::StringRef> description,
+                                 uint32_t signo) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStopped()");
 
   // On every stop, clear any cached information.
   GetRegisterContext().InvalidateAllRegisters();
 
   m_state = lldb::eStateStopped;
-  m_stop_description.clear();
-  m_stop_info.signo = 0;
+  if (description)
+    m_stop_description = *description;
+  else
+    m_stop_description.clear();
+
+  m_stop_info.reason = reason;
+  m_stop_info.signo = signo;
 }
 
 void ThreadNVIDIAGPU::SetRunning() {
