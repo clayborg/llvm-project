@@ -338,10 +338,10 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
 
   m_regs.emplace();
   ThreadRegistersWithValidity &regs = *m_regs;
+  ThreadNVIDIAGPU &thread = GetGPUThread();
+  const ThreadState *thread_state = thread.GetThreadState();
 
-  PhysicalCoords physical_coords = GetGPUThread().GetPhysicalCoords();
-
-  if (!physical_coords.IsValid()) {
+  if (!thread_state) {
     // We need to send always a PC to the client upon stop events, otherwise the
     // client will be in a borked state.
     regs.val.PC = 0;
@@ -350,26 +350,17 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   }
 
   CUDBGAPI api = GetDebuggerAPI();
+  const PhysicalCoords &physical_coords = thread_state->GetPhysicalCoords();
 
   {
-    uint64_t pc = 0;
-    CUDBGResult res = api->readVirtualPC(
-        physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-        physical_coords.thread_id, &pc);
-    if (res == CUDBG_SUCCESS) {
-      regs.val.PC = pc;
-      regs.is_valid.PC = true;
-    }
+    regs.val.PC = thread_state->GetPC();
+    regs.is_valid.PC = true;
   }
 
   {
-    uint64_t error_pc = 0;
-    bool error_pc_valid = false;
-    CUDBGResult res =
-        api->readErrorPC(physical_coords.dev_id, physical_coords.sm_id,
-                         physical_coords.warp_id, &error_pc, &error_pc_valid);
-    if (res == CUDBG_SUCCESS && error_pc_valid) {
-      regs.val.errorPC = error_pc;
+    if (std::optional<ExceptionInfo> exception = thread_state->GetException();
+        exception->errorPC.has_value()) {
+      regs.val.errorPC = *exception->errorPC;
       regs.is_valid.errorPC = true;
     }
   }
