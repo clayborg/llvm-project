@@ -24,7 +24,7 @@ class NativeProcessLinux;
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
   ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
-                  PhysicalCoords physical_coords, const CuDim3 &thread_idx);
+                  const ThreadState *thread_state);
 
   std::string GetName() override;
 
@@ -60,8 +60,9 @@ public:
   /// \return the process that this thread belongs to.
   const NVIDIAGPU &GetGPU() const;
 
-  /// \return the physical coordinates of this thread.
-  PhysicalCoords GetPhysicalCoords() const { return m_physical_coords; }
+  /// \return the ThreadState object associated with this thread. It might be
+  /// null.
+  const ThreadState *GetThreadState() const { return m_thread_state; }
 
   /// Change the state of this thread and update its stop info accordingly.
   void SetStoppedByDynamicLoader();
@@ -85,10 +86,8 @@ private:
   friend class NVIDIAGPU;
 
   /// Set the physical coordinates and thread index of the thread within its block.
-  void SetCoords(const PhysicalCoords &physical_coords,
-                 const CuDim3 &thread_idx) {
-    m_thread_idx = thread_idx;
-    m_physical_coords = physical_coords;
+  void SetThreadState(const ThreadState *thread_state) {
+    m_thread_state = thread_state;
   }
 
   /// The current state of the thread.
@@ -103,11 +102,9 @@ private:
   /// The register context of the thread.
   RegisterContextNVIDIAGPU m_reg_context;
 
-  /// The physical coordinates of the thread.
-  PhysicalCoords m_physical_coords;
-
-  /// The thread index of the thread within its block.
-  CuDim3 m_thread_idx;
+  /// The raw state of this thread. It is null during initialization, as there
+  /// are no threads yet.
+  const ThreadState *m_thread_state = nullptr;
 };
 } // namespace lldb_private::lldb_server
 
