@@ -206,7 +206,12 @@ lldb::addr_t NVIDIAGPU::GetSharedLibraryInfoAddress() {
   return LLDB_INVALID_ADDRESS;
 }
 
-size_t NVIDIAGPU::UpdateThreads() { return m_threads.size(); }
+size_t NVIDIAGPU::UpdateThreads() {
+  // The NVIDIAGPU threads are always up to date with
+  // respect to thread state and they keep the thread list populated properly.
+  // All this method needs to do is return the thread count.
+  return m_threads.size();
+}
 
 const ArchSpec &NVIDIAGPU::GetArchitecture() const { return m_arch; }
 
@@ -383,20 +388,46 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
 
   m_devices.BatchUpdate();
-  LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
+  LLDB_LOG(log, "Device info dump:\n{}", m_devices.Dump());
 
-  const ThreadState *thread_info = m_devices.FindSomeThreadWithException();
-  if (thread_info) {
-    // We don't yet handle multiple threads, so we use the only one we have.
-    ThreadNVIDIAGPU &thread = *GPUThreads().begin();
-    thread.SetThreadState(thread_info);
-    thread.SetStoppedByException(*thread_info->GetException());
-    ChangeStateToStopped();
-    return;
+  m_threads.clear();
+  std::optional<lldb::tid_t> exception_thread_id;
+
+  for (const DeviceState &device : m_devices.GetDevices()) {
+    for (const SMState &sm : device.GetActiveSMs()) {
+      for (const WarpState &warp : sm.GetValidWarps()) {
+        for (const ThreadState &thread_state : warp.GetValidThreads()) {
+          // This is a tad inneficient because we allocate all over again
+          // ThreadNVIDIAGPU objects. At some point this should be optimized.
+          auto thread = std::make_unique<ThreadNVIDIAGPU>(
+              *this, thread_state.GetThreadID(), &thread_state);
+
+          if (const ExceptionInfo *exception_info =
+                  thread_state.GetException()) {
+            thread->SetStoppedByException(*exception_info);
+            if (!exception_thread_id)
+              exception_thread_id = thread->GetID();
+          } else {
+            thread->SetStopped();
+          }
+
+          m_threads.push_back(std::move(thread));
+        }
+      }
+    }
   }
 
-  logAndReportFatalError(
-      "NVIDIAGPU::OnAllDevicesSuspended(). Non-exception stop unsupported");
+  // We need to report a fake thread in case no actual threads are found, as the
+  // client doesn't support empty thread lists.
+  if (m_threads.empty()) {
+    auto thread =
+        std::make_unique<ThreadNVIDIAGPU>(*this, 1, /*thread_state=*/nullptr);
+    thread->SetStopped(lldb::eStopReasonNone, "No threads found");
+    m_threads.push_back(std::move(thread));
+  }
+
+  SetCurrentThreadID(exception_thread_id.value_or(m_threads.front()->GetID()));
+  ChangeStateToStopped();
 }
 
 NVIDIAGPU::Extension NVIDIAGPU::Manager::GetSupportedExtensions() const {
