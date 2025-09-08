@@ -14,15 +14,17 @@ using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
 ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
-                                 PhysicalCoords physical_coords,
-                                 const CuDim3 &thread_idx)
+                                 const ThreadState *thread_state)
     : NativeThreadProtocol(gpu, tid), m_state(lldb::eStateInvalid),
-      m_stop_info(), m_reg_context(*this), m_physical_coords(physical_coords),
-      m_thread_idx(thread_idx) {}
+      m_stop_info(), m_reg_context(*this), m_thread_state(thread_state) {}
 
 std::string ThreadNVIDIAGPU::GetName() {
-  return llvm::formatv("threadIdx(x={} y={} z={})", m_thread_idx.x,
-                       m_thread_idx.y, m_thread_idx.z);
+  if (!m_thread_state)
+    return "Invalid thread";
+
+  const CuDim3 &thread_idx = m_thread_state->GetThreadIdx();
+  return llvm::formatv("threadIdx(x={} y={} z={})", thread_idx.x, thread_idx.y,
+                       thread_idx.z);
 }
 
 lldb::StateType ThreadNVIDIAGPU::GetState() { return m_state; }
