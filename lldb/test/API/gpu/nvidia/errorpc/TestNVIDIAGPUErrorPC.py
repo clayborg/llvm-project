@@ -20,8 +20,9 @@ class TestNVIDIAGPUErrorPC(NvidiaGpuTestCaseBase):
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
-        self.assertIn("CUDA Exception(6): Warp - Misaligned address at 0x", str(self.gpu_process.thread[0]))
+        some_thread_with_exception = self.find_thread_by_stop_reason(lldb.eStopReasonException)
+        self.assertIn("CUDA Exception(6): Warp - Misaligned address at 0x", str(some_thread_with_exception))
 
-        errorpc = self.gpu_process.thread[0].frame[0].FindRegister("errorpc").GetValueAsAddress()
+        errorpc = some_thread_with_exception.frame[0].FindRegister("errorpc").GetValueAsAddress()
         self.assertNotEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
         self.assertNotEqual(errorpc, 0)
