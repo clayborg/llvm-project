@@ -74,7 +74,9 @@ public:
   void SetStoppedBySignal(int signo);
 
   /// Set the thread to stopped state.
-  void SetStopped();
+  void SetStopped(lldb::StopReason reason = lldb::eStopReasonNone,
+                  std::optional<llvm::StringRef> description = std::nullopt,
+                  uint32_t signo = 0);
 
   /// Set the thread to stopped state by initialization.
   void SetStoppedByInitialization();
