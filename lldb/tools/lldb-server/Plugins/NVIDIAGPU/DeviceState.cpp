@@ -99,6 +99,12 @@ std::string ExceptionInfo::ToString() const {
   return result;
 }
 
+ThreadState::ThreadState(const PhysicalCoords &physical_coords)
+    : m_physical_coords(physical_coords) {
+  static lldb::tid_t g_thread_id = 1;
+  m_thread_id = g_thread_id++;
+}
+
 void ThreadState::Dump(Stream &s) {
   s.Indent();
   s.Format("x = {}, y = {}, z = {}\n", m_thread_idx.x, m_thread_idx.y,
