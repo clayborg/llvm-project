@@ -65,8 +65,7 @@ public:
   /// Construct a thread state with physical coordinates.
   /// \param[in] physical_coords
   ///     This physical coordinates won't change for the lifetime of this object.
-  ThreadState(const PhysicalCoords &physical_coords)
-      : m_physical_coords(physical_coords) {}
+  ThreadState(const PhysicalCoords &physical_coords);
 
   /// Decode thread information from a buffer received from CUDA debugger API.
   ///
@@ -89,7 +88,7 @@ public:
                                 const CUDBGDeviceInfo &device_info,
                                 const CUDBGDeviceInfoSizes &device_info_sizes,
                                 bool thread_attributes_present,
-                                std::optional<ExceptionInfo> warp_exception,
+                                const ExceptionInfo *warp_exception,
                                 CuDim3 thread_idx);
 
   /// \return
@@ -111,18 +110,21 @@ public:
   const CuDim3 &GetThreadIdx() const { return m_thread_idx; }
 
   /// \return
-  ///     Optional exception information of this thread, or nullopt if no exception occurred.
-  const std::optional<ExceptionInfo> &GetException() const {
-    return m_exception;
-  }
+  ///     Exception information of this thread, or nullptr if no exception
+  ///     occurred.
+  const ExceptionInfo *GetException() const { return m_exception; }
 
   /// \return
   ///     True if the thread has an exception, false otherwise.
-  bool HasException() const { return m_exception.has_value(); }
+  bool HasException() const { return m_exception != nullptr; }
 
   /// \return
   ///     The program counter value for this thread.
   uint64_t GetPC() const { return m_pc; }
+
+  /// \return
+  ///     The unique sequential ID for this thread.
+  lldb::tid_t GetThreadID() const { return m_thread_id; }
 
 private:
   /// Whether this thread is valid in the GPU.
@@ -132,13 +134,16 @@ private:
   uint64_t m_pc = 0;
 
   /// Exception information if the parent warp encountered an exception.
-  std::optional<ExceptionInfo> m_exception;
+  const ExceptionInfo *m_exception = nullptr;
 
   /// The 3D thread index within the thread block.
   CuDim3 m_thread_idx;
 
   /// The physical coordinates of this thread on the device.
   PhysicalCoords m_physical_coords;
+
+  /// Unique sequential ID for this thread.
+  lldb::tid_t m_thread_id;
 };
 
 /// Represents the state of a CUDA warp.
@@ -194,6 +199,17 @@ public:
   /// \return
   ///     Pointer to a thread state with an exception, or nullptr if none found.
   const ThreadState *FindSomeThreadWithException() const;
+
+  /// \return
+  ///     A reference to the collection of threads.
+  llvm::ArrayRef<ThreadState> GetThreads() const { return m_threads; }
+
+  /// \return
+  ///     An iterator to the collection of valid threads.
+  auto GetValidThreads() const {
+    return llvm::make_filter_range(
+        m_threads, [](const ThreadState &thread) { return thread.IsValid(); });
+  }
 
 private:
   /// Whether this warp is valid in the GPU.
@@ -256,6 +272,17 @@ public:
   ///     Pointer to a thread state with an exception, or nullptr if none found.
   const ThreadState *FindSomeThreadWithException() const;
 
+  /// \return
+  ///     A reference to the collection of warps.
+  llvm::ArrayRef<WarpState> GetWarps() const { return m_warps; }
+
+  /// \return
+  ///     An iterator to the collection of valid warps.
+  auto GetValidWarps() const {
+    return llvm::make_filter_range(
+        m_warps, [](const WarpState &warp) { return warp.IsValid(); });
+  }
+
 private:
   /// Whether this SM is currently active in the GPU.
   bool m_is_active;
@@ -304,6 +331,21 @@ public:
   /// \return
   ///     Pointer to a thread state with an exception, or nullptr if none found.
   const ThreadState *FindSomeThreadWithException() const;
+
+  /// \return
+  ///     A reference to the collection of SM states.
+  llvm::ArrayRef<SMState> GetSMs() const { return m_sms; }
+
+  /// \return
+  ///     An iterator to the collection of active SMs.
+  auto GetActiveSMs() const {
+    return llvm::make_filter_range(
+        m_sms, [](const SMState &sm) { return sm.IsActive(); });
+  }
+
+  /// \return
+  ///     The maximum number of threads on this device.
+  size_t GetMaxNumThreads() const;
 
 private:
   /// Decode device information from a buffer received from CUDA debugger API.
@@ -399,6 +441,10 @@ public:
   /// \return
   ///     A reference to the DeviceState at the specified index.
   DeviceState &operator[](size_t index) { return m_devices[index]; }
+
+  /// \return
+  ///     A reference to the collection of device states.
+  llvm::ArrayRef<DeviceState> GetDevices() { return m_devices; }
 
 private:
   /// Collection of device states for all CUDA devices in the system.
