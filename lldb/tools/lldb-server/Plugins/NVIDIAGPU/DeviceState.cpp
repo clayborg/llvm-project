@@ -40,6 +40,7 @@ std::string PhysicalCoords::Dump() const {
                        dev_id, sm_id, warp_id, thread_id);
 }
 
+
 llvm::StringRef static ExceptionToString(CUDBGException_t exception) {
   switch (exception) {
   case CUDBG_EXCEPTION_WARP_ILLEGAL_INSTRUCTION:

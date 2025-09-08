@@ -27,14 +27,9 @@ struct PhysicalCoords {
   int64_t warp_id;
   int64_t thread_id;
 
-  PhysicalCoords();
-
   PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
-                 int64_t thread_id);
-
-  /// \return \b
-  //    true if the coordinates correspond to a valid HW thread.
-  bool IsValid() const;
+                 int64_t thread_id)
+      : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), thread_id(thread_id) {}
 
   /// \return
   //    A string representation of the coordinates used for logging.
