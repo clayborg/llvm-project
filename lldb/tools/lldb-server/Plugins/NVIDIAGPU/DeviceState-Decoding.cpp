@@ -50,7 +50,7 @@ static CuDim3 CalculateThreadIdx(uint64_t flat_thread_idx,
 size_t ThreadState::DecodeThreadInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
-    bool thread_attributes_present, std::optional<ExceptionInfo> warp_exception,
+    bool thread_attributes_present, const ExceptionInfo *warp_exception,
     CuDim3 thread_idx) {
   Log *log = GetLog(GDBRLog::Plugin);
 
@@ -177,7 +177,7 @@ size_t WarpState::DecodeWarpInfoBuffer(
 
     buffer_offset += m_threads[thread_id].DecodeThreadInfoBuffer(
         buffer + buffer_offset, device_info, device_info_sizes,
-        thread_attributes_present, m_exception,
+        thread_attributes_present, m_exception ? &m_exception.value() : nullptr,
         CalculateThreadIdx(flat_thread_idx + thread_id, grid_info.blockDim));
   }
 

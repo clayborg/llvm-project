@@ -358,8 +358,8 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   }
 
   {
-    if (std::optional<ExceptionInfo> exception = thread_state->GetException();
-        exception->errorPC.has_value()) {
+    if (const ExceptionInfo *exception = thread_state->GetException();
+        exception && exception->errorPC.has_value()) {
       regs.val.errorPC = *exception->errorPC;
       regs.is_valid.errorPC = true;
     }
