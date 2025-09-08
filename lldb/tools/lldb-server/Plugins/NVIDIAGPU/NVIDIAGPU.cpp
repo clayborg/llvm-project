@@ -108,8 +108,8 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
   // initial state to stopped, which requires sending some thread to the client.
   // Because of that, we create a fake thread with stopped state.
   lldb::tid_t tid = 1;
-  auto thread = std::make_unique<ThreadNVIDIAGPU>(*this, tid, PhysicalCoords{},
-                                                  CuDim3{0, 0, 0});
+  auto thread =
+      std::make_unique<ThreadNVIDIAGPU>(*this, tid, /*thread_state=*/nullptr);
   thread->SetStoppedByInitialization();
   m_threads.push_back(std::move(thread));
   SetCurrentThreadID(tid);
@@ -389,8 +389,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   if (thread_info) {
     // We don't yet handle multiple threads, so we use the only one we have.
     ThreadNVIDIAGPU &thread = *GPUThreads().begin();
-    thread.SetCoords(thread_info->GetPhysicalCoords(),
-                     thread_info->GetThreadIdx());
+    thread.SetThreadState(thread_info);
     thread.SetStoppedByException(*thread_info->GetException());
     ChangeStateToStopped();
     return;
@@ -455,9 +454,13 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   LLDB_LOG(log, "NVIDIAGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr,
            size);
 
-  auto GetPhysicalCoords = [&thread]() -> PhysicalCoords {
+  auto GetPhysicalCoords = [&thread]() -> const PhysicalCoords & {
     ThreadNVIDIAGPU &nv_thread = *static_cast<ThreadNVIDIAGPU *>(thread);
-    return nv_thread.GetPhysicalCoords();
+    const ThreadState *thread_state = nv_thread.GetThreadState();
+    if (!thread_state)
+      logAndReportFatalError(
+          "NVIDIAGPU::ReadMemoryWithSpace(). ThreadState is null");
+    return thread_state->GetPhysicalCoords();
   };
   CUDBGResult res;
 
@@ -469,26 +472,26 @@ Status NVIDIAGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
     break;
   }
   case AddressSpace::LocalStorage: {
-    PhysicalCoords coords = GetPhysicalCoords();
+    const PhysicalCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readLocalMemory(coords.dev_id, coords.sm_id,
                                        coords.warp_id, coords.thread_id, addr,
                                        buf, size);
     break;
   }
   case AddressSpace::ParamStorage: {
-    PhysicalCoords coords = GetPhysicalCoords();
+    const PhysicalCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readParamMemory(coords.dev_id, coords.sm_id,
                                        coords.warp_id, addr, buf, size);
     break;
   }
   case AddressSpace::SharedStorage: {
-    PhysicalCoords coords = GetPhysicalCoords();
+    const PhysicalCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readSharedMemory(coords.dev_id, coords.sm_id,
                                         coords.warp_id, addr, buf, size);
     break;
   }
   case AddressSpace::GenericStorage: {
-    PhysicalCoords coords = GetPhysicalCoords();
+    const PhysicalCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readGenericMemory(coords.dev_id, coords.sm_id,
                                          coords.warp_id, coords.thread_id, addr,
                                          buf, size);
