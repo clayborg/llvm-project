@@ -322,11 +322,13 @@ static const CoreDefinition g_core_definitions[] = {
     AMD_GPU_CORE_DEF_GCN(GFX11_GENERIC),
     AMD_GPU_CORE_DEF_GCN(GFX12_GENERIC),
     AMD_GPU_CORE_DEF_GCN(unknown),
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx, 
-      ArchSpec::eCore_nvidia_nvptx,"nvptx"},
-    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64, 
-      ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
-  };
+    // NVPTX is always 64-bit during execution as SASS, which makes NVPTX and
+    // NVPTX64 interchangeable for lldb.
+    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx,
+     ArchSpec::eCore_nvidia_nvptx, "nvptx"},
+    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64,
+     ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
+};
 
 // Ensure that we have an entry in the g_core_definitions for each core. If you
 // comment out an entry above, you will need to comment out the corresponding

@@ -307,6 +307,7 @@ public:
     eCore_amd_gpu_gcn_GFX12_GENERIC,
     eCore_amd_gpu_gcn_unknown,
 
+    // NVPTX and NVPTX64 are interchangeable for lldb.
     eCore_nvidia_nvptx,
     eCore_nvidia_nvptx64,
 
