@@ -17,13 +17,26 @@ namespace lldb_private::lldb_server {
 
 class ThreadNVIDIAGPU;
 
-static constexpr size_t kNumRRegs = 32;
+// SASS supports up to 255 general purpose registers (R0-R254)
+static constexpr size_t kNumRRegs = 255;
+// SASS supports up to 255 uniform registers (UR0-UR254)
+static constexpr size_t kNumURRegs = 255;
+// SASS supports 8 predicate registers (P0-P7)
+static constexpr size_t kNumPRegs = 8;
+// SASS supports 8 uniform predicate registers (UP0-UP7)
+static constexpr size_t kNumUPRegs = 8;
 
 /// Store all the registers for a single thread.
 struct ThreadRegistersValues {
   uint64_t PC;
   uint64_t errorPC;
   uint32_t R[kNumRRegs];
+  uint32_t RZ;             // R255 - zero register
+  uint8_t P[kNumPRegs];    // Predicate registers (1-bit each, stored in bytes)
+  uint32_t UR[kNumURRegs]; // Uniform registers
+  uint32_t URZ;            // UR255 - uniform zero register
+  uint8_t UP[kNumUPRegs];  // Uniform predicate registers (1-bit each, stored in
+                           // bytes)
 };
 
 /// Store the validity of the registers.
@@ -31,6 +44,11 @@ struct ThreadRegisterValidity {
   bool PC;
   bool errorPC;
   bool R[kNumRRegs];
+  bool RZ;             // R255 validity
+  bool P[kNumPRegs];   // Predicate register validity
+  bool UR[kNumURRegs]; // Uniform register validity
+  bool URZ;            // UR255 validity
+  bool UP[kNumUPRegs]; // Uniform predicate register validity
 
   ThreadRegisterValidity();
 };
