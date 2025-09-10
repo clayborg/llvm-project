@@ -19,32 +19,52 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace llvm;
 
+// Include cudadebugger.h for register class definitions
+#include "SASSRegisterNumbers.h"
+#include "cudadebugger.h"
+
 #define REG_OFFSET(Reg) offsetof(ThreadRegistersValues, Reg)
 
 #define R_REG_OFFSET(Index)                                                    \
   offsetof(ThreadRegistersValues, R) +                                         \
       Index * sizeof(ThreadRegistersValues::R[0])
 
-// The number of elements in this list must match kNumRRegs.
-#define EXPAND_R_REGISTERS(PREFIX)                                             \
-  PREFIX##_R0, PREFIX##_R1, PREFIX##_R2, PREFIX##_R3, PREFIX##_R4, PREFIX##_R5,      \
-      PREFIX##_R6, PREFIX##_R7, PREFIX##_R8, PREFIX##_R9, PREFIX##_R10,             \
-      PREFIX##_R11, PREFIX##_R12, PREFIX##_R13, PREFIX##_R14, PREFIX##_R15,         \
-      PREFIX##_R16, PREFIX##_R17, PREFIX##_R18, PREFIX##_R19, PREFIX##_R20,         \
-      PREFIX##_R21, PREFIX##_R22, PREFIX##_R23, PREFIX##_R24, PREFIX##_R25,         \
-      PREFIX##_R26, PREFIX##_R27, PREFIX##_R28, PREFIX##_R29, PREFIX##_R30,         \
-      PREFIX##_R31
+#define P_REG_OFFSET(Index)                                                    \
+  offsetof(ThreadRegistersValues, P) +                                         \
+      Index * sizeof(ThreadRegistersValues::P[0])
+
+#define UR_REG_OFFSET(Index)                                                   \
+  offsetof(ThreadRegistersValues, UR) +                                        \
+      Index * sizeof(ThreadRegistersValues::UR[0])
+
+#define UP_REG_OFFSET(Index)                                                   \
+  offsetof(ThreadRegistersValues, UP) +                                        \
+      Index * sizeof(ThreadRegistersValues::UP[0])
+
+// Include generated register definitions for all SASS registers
+#include "RegisterDefinitionsSASS.inc"
+
+// Use the 255-register versions
+#define EXPAND_R_REGISTERS(PREFIX) EXPAND_R_REGISTERS_255(PREFIX)
+#define EXPAND_UR_REGISTERS(PREFIX) EXPAND_UR_REGISTERS_255(PREFIX)
+#define EXPAND_P_REGISTERS(PREFIX) EXPAND_P_REGISTERS_8(PREFIX)
+#define EXPAND_UP_REGISTERS(PREFIX) EXPAND_UP_REGISTERS_8(PREFIX)
 
 /// LLDB register numbers must start at 0 and be contiguous with no gaps.
 /// See
 /// https://github.com/NVIDIA/cuda-gdb/blob/nvidia-gdb-13.2/gdb/cuda/cuda-tdep.h#L111
 enum LLDBRegNum : uint32_t {
-  LLDB_PC = 0,
-  LLDB_ERROR_PC,
-  LLDB_SP,
-  LLDB_FP,
-  LLDB_RA,
+  LLDB_PC = sass::LLDB_PC,
+  LLDB_ERROR_PC = sass::LLDB_ERROR_PC,
+  LLDB_SP = sass::LLDB_SP,
+  LLDB_FP = sass::LLDB_FP,
+  LLDB_RA = sass::LLDB_RA,
   EXPAND_R_REGISTERS(LLDB),
+  LLDB_RZ,                   // R255 - zero register
+  EXPAND_P_REGISTERS(LLDB),  // Predicate registers
+  EXPAND_UR_REGISTERS(LLDB), // Uniform registers
+  LLDB_URZ,                  // UR255 - uniform zero register
+  EXPAND_UP_REGISTERS(LLDB), // Uniform predicate registers
   kNumRegs,
 };
 
@@ -53,13 +73,59 @@ enum LLDBRegNum : uint32_t {
 /// be in increasing order or consective, there can be gaps. The compiler has
 /// dedicated register numbers for any DWARF that references registers, like
 /// location expressions and .debug_frame unwind info.
+///
+/// For SASS/NVPTX, the compiler uses CUDA-encoded DWARF numbers where the
+/// register class is encoded in the top 8 bits and register number in lower 24.
+///
+/// SASS Register ABI Layout:
+/// - r0: Scratch (caller-save)
+/// - r1: Stack Pointer (SP) - Special, preserved
+/// - r2: Frame Pointer (FP) when required - Preserved (callee-save)
+/// - r3: Scratch (caller-save)
+/// - r4-r15: Scratch (caller-save) - Used for parameter passing and return
+/// values
+/// - r16-r31: Preserved (callee-save) - Note: r20-r21 store 64-bit return
+/// address
+/// - r32-r35: Scratch (caller-save)
+/// - r36-r39: Preserved (callee-save)
+/// - r40-r43: Scratch (caller-save)
+/// - r44-r47: Preserved (callee-save)
+/// - r48-r51: Scratch (caller-save)
+/// - r52-r55: Preserved (callee-save)
+/// - r56-r59: Scratch (caller-save)
+/// - r60-r62: Preserved (callee-save)
+/// - r64-r254: Alternating groups of 4 (scratch: r64-r67, r72-r75, etc.;
+///              preserved: r68-r71, r76-r79, etc.)
+/// - r255: Zero register (RZ) - Special, always zero
+
+// Use pseudo-DWARF register numbers from shared header for PC and ErrorPC
+
 enum DWARFRegNum : uint32_t {
-  DWARF_PC = 128,
-  DWARF_ERROR_PC,
-  DWARF_SP,
-  DWARF_FP,
-  DWARF_RA,
-  EXPAND_R_REGISTERS(DWARF),
+  DWARF_PC = sass::DWARF_PSEUDO_PC, // Pseudo-DWARF number for PC
+  DWARF_ERROR_PC =
+      sass::DWARF_PSEUDO_ERROR_PC, // Pseudo-DWARF number for ErrorPC
+  DWARF_SP =
+      sass::GetDWARFEncodedRegister(REG_CLASS_REG_FULL,
+                                    sass::SASS_SP_REG), // R1 (Stack Pointer)
+  DWARF_FP =
+      sass::GetDWARFEncodedRegister(REG_CLASS_REG_FULL,
+                                    sass::SASS_FP_REG), // R2 (Frame Pointer)
+  // Note: No DWARF_RA because return address spans R20-R21 (64-bit).
+  // DWARF cannot represent multi-register values.
+  // R registers use CUDA encoding - all 255 registers
+  GENERATE_DWARF_R_DEFS(),
+  // R255 - zero register
+  DWARF_RZ =
+      sass::GetDWARFEncodedRegister(REG_CLASS_REG_FULL, sass::SASS_ZERO_REG),
+  // Predicate registers use CUDA encoding
+  GENERATE_DWARF_P_DEFS(),
+  // Uniform registers use CUDA encoding - all 255 uniform registers
+  GENERATE_DWARF_UR_DEFS(),
+  // UR255 - uniform zero register
+  DWARF_URZ =
+      sass::GetDWARFEncodedRegister(REG_CLASS_UREG_FULL, sass::SASS_ZERO_REG),
+  // Uniform predicate registers use CUDA encoding
+  GENERATE_DWARF_UP_DEFS()
 };
 
 /// Compiler registers should match the register numbers that the compiler
@@ -75,25 +141,31 @@ enum CompilerRegNum : uint32_t {
   EH_FRAME_FP,
   EH_FRAME_RA,
   EXPAND_R_REGISTERS(EH_FRAME),
+  EH_FRAME_RZ = 2500,            // R255 - zero register
+  EXPAND_P_REGISTERS(EH_FRAME),  // Predicate registers
+  EXPAND_UR_REGISTERS(EH_FRAME), // Uniform registers
+  EH_FRAME_URZ = 2501,           // UR255 - uniform zero register
+  EXPAND_UP_REGISTERS(EH_FRAME), // Uniform predicate registers
 };
 
 static uint32_t g_gpr_regnums[] = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
                                    LLDB_RA};
+// All 255 R registers
 static uint32_t g_r_regnums[] = {EXPAND_R_REGISTERS(LLDB)};
+// All 8 predicate registers
+static uint32_t g_p_regnums[] = {EXPAND_P_REGISTERS(LLDB)};
+// All 255 uniform registers
+static uint32_t g_ur_regnums[] = {EXPAND_UR_REGISTERS(LLDB)};
+// All 8 uniform predicate registers
+static uint32_t g_up_regnums[] = {EXPAND_UP_REGISTERS(LLDB)};
 
 static const RegisterSet g_reg_sets[] = {
     {"General Purpose Registers", "gpr",
      sizeof(g_gpr_regnums) / sizeof(g_gpr_regnums[0]), g_gpr_regnums},
-    {"R Registers", "r", kNumRRegs, g_r_regnums}};
-
-#define GENERATE_R_REGISTER_INFO(regnum)                                       \
-  {                                                                            \
-    "R" #regnum, nullptr, 4, R_REG_OFFSET(regnum), eEncodingUint, eFormatHex,  \
-    {                                                                          \
-      EH_FRAME_R##regnum, DWARF_R##regnum, LLDB_INVALID_REGNUM,                \
-          LLDB_R##regnum, LLDB_R##regnum                                       \
-    }                                                                          \
-  }
+    {"R Registers", "r", kNumRRegs, g_r_regnums},
+    {"Predicate Registers", "p", kNumPRegs, g_p_regnums},
+    {"Uniform Registers", "ur", kNumURRegs, g_ur_regnums},
+    {"Uniform Predicate Registers", "up", kNumUPRegs, g_up_regnums}};
 
 /// Define all of the information about all registers. The register info structs
 /// are accessed by the LLDB register numbers, which are defined above.
@@ -146,7 +218,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         {
             // RegisterInfo::kinds[]
             EH_FRAME_RA,            // RegisterInfo::kinds[eRegisterKindEHFrame]
-            DWARF_RA,               // RegisterInfo::kinds[eRegisterKindDWARF]
+            LLDB_INVALID_REGNUM,    // No DWARF number - RA spans R20-R21
             LLDB_REGNUM_GENERIC_RA, // RegisterInfo::kinds[eRegisterKindGeneric]
             LLDB_RA, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
             LLDB_RA  // RegisterInfo::kinds[eRegisterKindLLDB]
@@ -157,15 +229,15 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
     },
     {
         "SP",               // RegisterInfo::name
-        "R[0]",             // RegisterInfo::alt_name
-        4,                  // RegisterInfo::byte_size
-        R_REG_OFFSET(0),    // RegisterInfo::byte_offset
+        "R[1]",             // RegisterInfo::alt_name
+        4,                  // RegisterInfo::byte_size (32-bit)
+        R_REG_OFFSET(1),    // RegisterInfo::byte_offset
         eEncodingUint,      // RegisterInfo::encoding
         eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
-            EH_FRAME_SP,            // RegisterInfo::kinds[eRegisterKindEHFrame]
-            DWARF_SP,               // RegisterInfo::kinds[eRegisterKindDWARF]
+            EH_FRAME_SP, // RegisterInfo::kinds[eRegisterKindEHFrame]
+            DWARF_R1,    // RegisterInfo::kinds[eRegisterKindDWARF] - R1
             LLDB_REGNUM_GENERIC_SP, // RegisterInfo::kinds[eRegisterKindGeneric]
             LLDB_SP, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
             LLDB_SP, // RegisterInfo::kinds[eRegisterKindLLDB]
@@ -176,15 +248,15 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
     },
     {
         "FP",               // RegisterInfo::name
-        "R[1]",             // RegisterInfo::alt_name
-        4,                  // RegisterInfo::byte_size
-        R_REG_OFFSET(1),    // RegisterInfo::byte_offset
+        "R[2]",             // RegisterInfo::alt_name
+        4,                  // RegisterInfo::byte_size (32-bit)
+        R_REG_OFFSET(2),    // RegisterInfo::byte_offset
         eEncodingUint,      // RegisterInfo::encoding
         eFormatAddressInfo, // RegisterInfo::format
         {
             // RegisterInfo::kinds[]
-            EH_FRAME_FP,            // RegisterInfo::kinds[eRegisterKindEHFrame]
-            DWARF_FP,               // RegisterInfo::kinds[eRegisterKindDWARF]
+            EH_FRAME_FP, // RegisterInfo::kinds[eRegisterKindEHFrame]
+            DWARF_R2,    // RegisterInfo::kinds[eRegisterKindDWARF] - R2
             LLDB_REGNUM_GENERIC_FP, // RegisterInfo::kinds[eRegisterKindGeneric]
             LLDB_FP, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
             LLDB_FP, // RegisterInfo::kinds[eRegisterKindLLDB]
@@ -193,40 +265,58 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
-    // The number of elements in this list must match kNumRRegs.
-    GENERATE_R_REGISTER_INFO(0),
-    GENERATE_R_REGISTER_INFO(1),
-    GENERATE_R_REGISTER_INFO(2),
-    GENERATE_R_REGISTER_INFO(3),
-    GENERATE_R_REGISTER_INFO(4),
-    GENERATE_R_REGISTER_INFO(5),
-    GENERATE_R_REGISTER_INFO(6),
-    GENERATE_R_REGISTER_INFO(7),
-    GENERATE_R_REGISTER_INFO(8),
-    GENERATE_R_REGISTER_INFO(9),
-    GENERATE_R_REGISTER_INFO(10),
-    GENERATE_R_REGISTER_INFO(11),
-    GENERATE_R_REGISTER_INFO(12),
-    GENERATE_R_REGISTER_INFO(13),
-    GENERATE_R_REGISTER_INFO(14),
-    GENERATE_R_REGISTER_INFO(15),
-    GENERATE_R_REGISTER_INFO(16),
-    GENERATE_R_REGISTER_INFO(17),
-    GENERATE_R_REGISTER_INFO(18),
-    GENERATE_R_REGISTER_INFO(19),
-    GENERATE_R_REGISTER_INFO(20),
-    GENERATE_R_REGISTER_INFO(21),
-    GENERATE_R_REGISTER_INFO(22),
-    GENERATE_R_REGISTER_INFO(23),
-    GENERATE_R_REGISTER_INFO(24),
-    GENERATE_R_REGISTER_INFO(25),
-    GENERATE_R_REGISTER_INFO(26),
-    GENERATE_R_REGISTER_INFO(27),
-    GENERATE_R_REGISTER_INFO(28),
-    GENERATE_R_REGISTER_INFO(29),
-    GENERATE_R_REGISTER_INFO(30),
-    GENERATE_R_REGISTER_INFO(31),
-};
+    // The number of elements in this list must match kNumRRegs (255).
+    GENERATE_ALL_R_REGISTER_INFO(),
+    // R255 - zero register
+    {
+        "RZ",           // RegisterInfo::name
+        "R255",         // RegisterInfo::alt_name
+        4,              // RegisterInfo::byte_size
+        REG_OFFSET(RZ), // RegisterInfo::byte_offset
+        eEncodingUint,  // RegisterInfo::encoding
+        eFormatHex,     // RegisterInfo::format
+        {
+            // RegisterInfo::kinds
+            2500, // RegisterInfo::kinds[eRegisterKindEHFrame]
+            sass::GetDWARFEncodedRegister(
+                REG_CLASS_REG_FULL,
+                sass::SASS_ZERO_REG), // RegisterInfo::kinds[eRegisterKindDWARF]
+            LLDB_INVALID_REGNUM, // RegisterInfo::kinds[eRegisterKindGeneric]
+            LLDB_RZ, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
+            LLDB_RZ, // RegisterInfo::kinds[eRegisterKindLLDB]
+        },
+        nullptr, // RegisterInfo::value_regs
+        nullptr, // RegisterInfo::invalidate_regs
+        nullptr, // RegisterInfo::flags_type
+    },
+    // Predicate registers - all 8 predicate registers (P0-P7)
+    GENERATE_ALL_P_REGISTER_INFO(),
+    // Uniform registers - all 255 uniform registers (UR0-UR254)
+    GENERATE_ALL_UR_REGISTER_INFO(),
+    // UR255 - uniform zero register
+    {
+        "URZ",           // RegisterInfo::name
+        "UR255",         // RegisterInfo::alt_name
+        4,               // RegisterInfo::byte_size
+        REG_OFFSET(URZ), // RegisterInfo::byte_offset
+        eEncodingUint,   // RegisterInfo::encoding
+        eFormatHex,      // RegisterInfo::format
+        {
+            // RegisterInfo::kinds
+            2501, // RegisterInfo::kinds[eRegisterKindEHFrame]
+            sass::GetDWARFEncodedRegister(
+                REG_CLASS_UREG_FULL,
+                sass::SASS_ZERO_REG), // RegisterInfo::kinds[eRegisterKindDWARF]
+            LLDB_INVALID_REGNUM, // RegisterInfo::kinds[eRegisterKindGeneric]
+            LLDB_URZ, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
+            LLDB_URZ, // RegisterInfo::kinds[eRegisterKindLLDB]
+        },
+        nullptr, // RegisterInfo::value_regs
+        nullptr, // RegisterInfo::invalidate_regs
+        nullptr, // RegisterInfo::flags_type
+    },
+    // Uniform predicate registers - all 8 uniform predicate registers (UP0-UP7)
+    GENERATE_ALL_UP_REGISTER_INFO()};
 
 RegisterContextNVIDIAGPU::RegisterContextNVIDIAGPU(ThreadNVIDIAGPU &thread)
     : NativeRegisterContext(thread) {}
@@ -335,9 +425,9 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
   int reg_num = reg_info->kinds[eRegisterKindLLDB];
 
   if (reg_num == LLDB_SP)
-    reg_num = LLDB_R0;
-  if (reg_num == LLDB_FP)
     reg_num = LLDB_R1;
+  if (reg_num == LLDB_FP)
+    reg_num = LLDB_R2;
 
   if (reg_num == LLDB_PC) {
     if (!regs.is_valid.PC)
@@ -346,7 +436,8 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
     if (!regs.is_valid.errorPC)
       return Status("errorPC register is invalid");
   } else if (reg_num == LLDB_RA) {
-    if (!regs.is_valid.R[20] || !regs.is_valid.R[21])
+    if (!regs.is_valid.R[sass::SASS_RA_REG_LO] ||
+        !regs.is_valid.R[sass::SASS_RA_REG_HI])
       return Status("RA register is invalid");
   } else {
     int r_index = reg_num - LLDB_R0;
@@ -408,4 +499,12 @@ ThreadRegisterValidity::ThreadRegisterValidity() {
   errorPC = false;
   for (size_t i = 0; i < kNumRRegs; ++i)
     R[i] = false;
+  RZ = false;
+  for (size_t i = 0; i < kNumPRegs; ++i)
+    P[i] = false;
+  for (size_t i = 0; i < kNumURRegs; ++i)
+    UR[i] = false;
+  URZ = false;
+  for (size_t i = 0; i < kNumUPRegs; ++i)
+    UP[i] = false;
 }
