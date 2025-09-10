@@ -441,17 +441,33 @@ public:
   llvm::Expected<lldb::addr_t> ResolveAddressInDefaultAddressSpace(
       lldb_private::Process &process) const;
 
+  /// \return
+  ///     The address value, which can be a load address, file address, or
+  ///     offset depending on how this AddressSpec was constructed.
   uint64_t GetValue() const { return m_value; }
+
+  /// \return
+  ///     A StringRef to the address space name if it was specified via the
+  ///     string-based constructor, or an empty StringRef if no name is set.
   llvm::StringRef GetSpaceName() const { 
     if (m_addr_space_name.has_value()) 
       return *m_addr_space_name;
     return llvm::StringRef();
   }
+
+  /// \return
+  ///     An optional containing the address space ID if this AddressSpec was
+  ///     constructed with a numeric address space identifier, or std::nullopt
+  ///     if no numeric ID is set.
+  std::optional<uint64_t> GetSpaceId() const { return m_addr_space_id; }
+
   llvm::Expected<AddressSpaceInfo> GetAddressSpaceInfo(
       lldb_private::Process &process) const;
+
   // Return an error if this is module specific and the module has expired, 
   // otherwise return a ModuleSP, even if it is empty.
   llvm::Expected<lldb::ModuleSP> GetModule() const;
+
   // Return an error if this is thread specific and the thread has expired, 
   // otherwise return a ThreadSP, even if it is empty.
   llvm::Expected<lldb::ThreadSP> GetThread() const;
