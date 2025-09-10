@@ -13,33 +13,10 @@
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-namespace {
-enum CoordSpecialIDs : uint32_t {
-  INVALID_ID = std::numeric_limits<uint32_t>::max(),
-};
-} // namespace
-
-PhysicalCoords::PhysicalCoords()
-    : dev_id(CoordSpecialIDs::INVALID_ID), sm_id(CoordSpecialIDs::INVALID_ID),
-      warp_id(CoordSpecialIDs::INVALID_ID),
-      thread_id(CoordSpecialIDs::INVALID_ID) {}
-
-PhysicalCoords::PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
-                               int64_t thread_id)
-    : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), thread_id(thread_id) {}
-
-bool PhysicalCoords::IsValid() const {
-  return dev_id != CoordSpecialIDs::INVALID_ID &&
-         sm_id != CoordSpecialIDs::INVALID_ID &&
-         warp_id != CoordSpecialIDs::INVALID_ID &&
-         thread_id != CoordSpecialIDs::INVALID_ID;
-}
-
 std::string PhysicalCoords::Dump() const {
   return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} thread_id = {}",
                        dev_id, sm_id, warp_id, thread_id);
 }
-
 
 llvm::StringRef static ExceptionToString(CUDBGException_t exception) {
   switch (exception) {
