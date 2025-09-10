@@ -19,6 +19,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
+#include <optional>
+
 namespace llvm {
 class Type;
 }
@@ -149,6 +151,18 @@ public:
   virtual bool GetPointerReturnRegister(const char *&name) { return false; }
 
   virtual uint64_t GetStackFrameSize() { return 512 * 1024; }
+
+  /// Get the default address space for saved registers. This allows
+  /// architectures to specify that saved registers should be read from
+  /// a specific address space.
+  ///
+  /// \return
+  ///     An optional numeric address space identifier. If no special
+  ///     address space is needed, returns std::nullopt.
+  virtual std::optional<uint64_t>
+  GetDefaultAddressSpaceForSavedRegisters() const {
+    return std::nullopt;
+  }
 
   static lldb::ABISP FindPlugin(lldb::ProcessSP process_sp, const ArchSpec &arch);
 
