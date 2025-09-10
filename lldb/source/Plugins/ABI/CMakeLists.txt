@@ -9,3 +9,8 @@ foreach(target AArch64 ARM ARC Hexagon LoongArch Mips MSP430 PowerPC RISCV Syste
     add_subdirectory(${target})
   endif()
 endforeach()
+
+# Add SASS ABI plugin for NVIDIA GPU support
+if (LLDB_ENABLE_NVIDIAGPU_PLUGIN)
+  add_subdirectory(SASS)
+endif()
