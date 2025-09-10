@@ -23,6 +23,7 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <list>
 #include <optional>
 
