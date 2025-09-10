@@ -379,7 +379,6 @@ bool ProcessProperties::TrackMemoryCacheChanges() const {
       idx, g_process_properties[idx].default_uint_value != 0);
 }
 
-
 ProcessSP Process::FindPlugin(lldb::TargetSP target_sp,
                               llvm::StringRef plugin_name,
                               ListenerSP listener_sp,
@@ -393,8 +392,8 @@ ProcessSP Process::FindPlugin(lldb::TargetSP target_sp,
     create_callback =
         PluginManager::GetProcessCreateCallbackForPluginName(plugin_name);
     if (create_callback) {
-      process_sp = create_callback(target_sp, listener_sp, crash_file_path,
-                                   can_connect);
+      process_sp =
+          create_callback(target_sp, listener_sp, crash_file_path, can_connect);
       if (process_sp) {
         if (process_sp->CanDebug(target_sp, true)) {
           process_sp->m_process_unique_id = ++g_process_unique_id;
@@ -407,8 +406,8 @@ ProcessSP Process::FindPlugin(lldb::TargetSP target_sp,
          (create_callback =
               PluginManager::GetProcessCreateCallbackAtIndex(idx)) != nullptr;
          ++idx) {
-      process_sp = create_callback(target_sp, listener_sp, crash_file_path,
-                                   can_connect);
+      process_sp =
+          create_callback(target_sp, listener_sp, crash_file_path, can_connect);
       if (process_sp) {
         if (process_sp->CanDebug(target_sp, false)) {
           process_sp->m_process_unique_id = ++g_process_unique_id;
@@ -531,8 +530,7 @@ Process::~Process() {
 ProcessProperties &Process::GetGlobalProperties() {
   // NOTE: intentional leak so we don't crash if global destructor chain gets
   // called as other threads still use the result of this function
-  static ProcessProperties *g_settings_ptr =
-      new ProcessProperties(nullptr);
+  static ProcessProperties *g_settings_ptr = new ProcessProperties(nullptr);
   return *g_settings_ptr;
 }
 
@@ -635,7 +633,7 @@ StateType Process::GetNextEvent(EventSP &event_sp) {
   StateType state = eStateInvalid;
 
   if (GetPrimaryListener()->GetEventForBroadcaster(this, event_sp,
-                                            std::chrono::seconds(0)) &&
+                                                   std::chrono::seconds(0)) &&
       event_sp)
     state = Process::ProcessEventData::GetStateFromEvent(event_sp.get());
 
@@ -733,8 +731,7 @@ StateType Process::WaitForProcessToStop(
 
 bool Process::HandleProcessStateChangedEvent(
     const EventSP &event_sp, Stream *stream,
-    SelectMostRelevant select_most_relevant,
-    bool &pop_process_io_handler) {
+    SelectMostRelevant select_most_relevant, bool &pop_process_io_handler) {
   const bool handle_pop = pop_process_io_handler;
 
   pop_process_io_handler = false;
@@ -878,8 +875,7 @@ bool Process::HandleProcessStateChangedEvent(
           process_sp->GetStatus(*stream);
           process_sp->GetThreadStatus(*stream, only_threads_with_stop_reason,
                                       start_frame, num_frames,
-                                      num_frames_with_source,
-                                      stop_format);
+                                      num_frames_with_source, stop_format);
           if (curr_thread_stop_info_sp) {
             lldb::addr_t crashing_address;
             ValueObjectSP valobj_sp = StopInfo::GetCrashingDereference(
@@ -1104,7 +1100,7 @@ bool Process::SetProcessExitStatus(
     lldb::pid_t pid, bool exited,
     int signo,      // Zero for no signal
     int exit_status // Exit value of process if signal is zero
-    ) {
+) {
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log,
             "Process::SetProcessExitStatus (pid=%" PRIu64
@@ -1304,7 +1300,7 @@ void Process::SetPublicState(StateType new_state, bool restarted) {
 
   Log *log(GetLog(LLDBLog::State | LLDBLog::Process));
   LLDB_LOGF(log, "(plugin = %s, state = %s, restarted = %i)",
-           GetPluginName().data(), StateAsCString(new_state), restarted);
+            GetPluginName().data(), StateAsCString(new_state), restarted);
   const StateType old_state = m_public_state.GetValue();
   m_public_state.SetValue(new_state);
 
@@ -1314,15 +1310,15 @@ void Process::SetPublicState(StateType new_state, bool restarted) {
   if (!StateChangedIsExternallyHijacked()) {
     if (new_state == eStateDetached) {
       LLDB_LOGF(log,
-               "(plugin = %s, state = %s) -- unlocking run lock for detach",
-               GetPluginName().data(), StateAsCString(new_state));
+                "(plugin = %s, state = %s) -- unlocking run lock for detach",
+                GetPluginName().data(), StateAsCString(new_state));
       m_public_run_lock.SetStopped();
     } else {
       const bool old_state_is_stopped = StateIsStoppedState(old_state, false);
       if ((old_state_is_stopped != new_state_is_stopped)) {
         if (new_state_is_stopped && !restarted) {
           LLDB_LOGF(log, "(plugin = %s, state = %s) -- unlocking run lock",
-                   GetPluginName().data(), StateAsCString(new_state));
+                    GetPluginName().data(), StateAsCString(new_state));
           m_public_run_lock.SetStopped();
         }
       }
@@ -1416,7 +1412,7 @@ void Process::SetPrivateState(StateType new_state) {
   bool state_changed = false;
 
   LLDB_LOGF(log, "(plugin = %s, state = %s)", GetPluginName().data(),
-           StateAsCString(new_state));
+            StateAsCString(new_state));
 
   std::lock_guard<std::recursive_mutex> thread_guard(m_thread_list.GetMutex());
   std::lock_guard<std::recursive_mutex> guard(m_private_state.GetMutex());
@@ -1458,14 +1454,14 @@ void Process::SetPrivateState(StateType new_state) {
         m_mod_id.SetStopEventForLastNaturalStopID(event_sp);
       m_memory_cache.Clear();
       LLDB_LOGF(log, "(plugin = %s, state = %s, stop_id = %u",
-               GetPluginName().data(), StateAsCString(new_state),
-               m_mod_id.GetStopID());
+                GetPluginName().data(), StateAsCString(new_state),
+                m_mod_id.GetStopID());
     }
 
     m_private_state_broadcaster.BroadcastEvent(event_sp);
   } else {
     LLDB_LOGF(log, "(plugin = %s, state = %s) state didn't change. Ignoring...",
-             GetPluginName().data(), StateAsCString(new_state));
+              GetPluginName().data(), StateAsCString(new_state));
   }
 }
 
@@ -1481,7 +1477,8 @@ addr_t Process::GetImageInfoAddress() { return LLDB_INVALID_ADDRESS; }
 
 const lldb::ABISP &Process::GetABI() {
   if (!m_abi_sp)
-    m_abi_sp = ABI::FindPlugin(shared_from_this(), GetTarget().GetArchitecture());
+    m_abi_sp =
+        ABI::FindPlugin(shared_from_this(), GetTarget().GetArchitecture());
   return m_abi_sp;
 }
 
@@ -1528,7 +1525,8 @@ LanguageRuntime *Process::GetLanguageRuntime(lldb::LanguageType language) {
     // for example, CPPLanguageRuntime will support eLanguageTypeC_plus_plus,
     // eLanguageTypeC_plus_plus_03, etc. Because of this, we should get the
     // primary language type and make sure that our runtime supports it.
-    assert(runtime->GetLanguageType() == Language::GetPrimaryLanguage(language));
+    assert(runtime->GetLanguageType() ==
+           Language::GetPrimaryLanguage(language));
 
   return runtime;
 }
@@ -1929,12 +1927,11 @@ Status Process::DisableSoftwareBreakpoint(BreakpointSite *bp_site) {
   return error;
 }
 
-
-size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf, 
-                           size_t size, Status &error) {
+size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf, size_t size,
+                           Status &error) {
   error.Clear();
   if (addr_spec.IsInDefaultAddressSpace()) {
-    llvm::Expected<lldb::addr_t> load_addr = 
+    llvm::Expected<lldb::addr_t> load_addr =
         addr_spec.ResolveAddressInDefaultAddressSpace(*this);
     if (load_addr) {
       // We were able to resolve the address to an address in the default
@@ -1955,18 +1952,17 @@ size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf,
   return 0;
 }
 
-size_t Process::DoReadMemory(const AddressSpec &addr_spec, 
-                             const AddressSpaceInfo &info, void *buf, 
+size_t Process::DoReadMemory(const AddressSpec &addr_spec,
+                             const AddressSpaceInfo &info, void *buf,
                              size_t size, Status &error) {
-  error = 
+  error =
       Status::FromErrorString("AddressSpec memory reading is not supported");
   return 0;
 }
 
-
 // Uncomment to verify memory caching works after making changes to caching
 // code
-//#define VERIFY_MEMORY_READS
+// #define VERIFY_MEMORY_READS
 
 size_t Process::ReadMemory(addr_t addr, void *buf, size_t size, Status &error) {
   if (ABISP abi_sp = GetABI())
@@ -2661,18 +2657,18 @@ Status Process::DisableWatchpoint(WatchpointSP wp_sp, bool notify) {
   return error;
 }
 
-Status Process::WaitForNextResume(const uint32_t curr_resume_id, 
-                                std::optional<uint32_t> opt_timeout_seconds) {
+Status Process::WaitForNextResume(const uint32_t curr_resume_id,
+                                  std::optional<uint32_t> opt_timeout_seconds) {
   ListenerSP listener_sp;
   {
-    // Don't let the private state change on us while we do some checking by 
+    // Don't let the private state change on us while we do some checking by
     // locking the private state mutex. The resume ID can't be bumped while we
     // hold this lock. We also need to start listening for state changed events
     // prior to letting go of this mutex to ensure there is no race condition.
     std::lock_guard<std::recursive_mutex> guard(m_private_state.GetMutex());
     if (GetResumeID() != curr_resume_id)
       return Status(); ///< Process already resumed.
-  
+
     listener_sp = Listener::MakeListener("Process::WaitForNextResume");
     listener_sp->StartListeningForEvents(this, eBroadcastBitStateChanged);
   }
@@ -2685,7 +2681,7 @@ Status Process::WaitForNextResume(const uint32_t curr_resume_id,
 
   if (!event_sp)
     return Status::FromErrorString("timeout waiting for process to resume");
-  
+
   // Don't let the private state change on us while we do some checking.
   std::lock_guard<std::recursive_mutex> guard(m_private_state.GetMutex());
   if (GetResumeID() != curr_resume_id)
@@ -3052,9 +3048,7 @@ ListenerSP ProcessAttachInfo::GetListenerForProcess(Debugger &debugger) {
     return debugger.GetListener();
 }
 
-Status Process::WillLaunch(Module *module) {
-  return DoWillLaunch(module);
-}
+Status Process::WillLaunch(Module *module) { return DoWillLaunch(module); }
 
 Status Process::WillAttachToProcessWithID(lldb::pid_t pid) {
   return DoWillAttachToProcessWithID(pid);
@@ -4013,8 +4007,8 @@ void Process::ControlPrivateStateThread(uint32_t signal) {
       while (!receipt_received) {
         // Check for a receipt for n seconds and then check if the private
         // state thread is still around.
-        receipt_received =
-          event_receipt_sp->WaitForEventReceived(GetUtilityExpressionTimeout());
+        receipt_received = event_receipt_sp->WaitForEventReceived(
+            GetUtilityExpressionTimeout());
         if (!receipt_received) {
           // Check if the private state thread is still around. If it isn't
           // then we are done waiting
@@ -5084,7 +5078,8 @@ HandleStoppedEvent(lldb::tid_t thread_id, const ThreadPlanSP &thread_plan_sp,
   StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
   if (stop_info_sp && stop_info_sp->GetStopReason() == eStopReasonBreakpoint &&
       stop_info_sp->ShouldNotify(event_sp.get())) {
-    LLDB_LOG(log, "stopped for breakpoint: {0}.", stop_info_sp->GetDescription());
+    LLDB_LOG(log, "stopped for breakpoint: {0}.",
+             stop_info_sp->GetDescription());
     if (!options.DoesIgnoreBreakpoints()) {
       // Restore the plan state and then force Private to false.  We are going
       // to stop because of this plan so we need it to become a public plan or
@@ -5342,8 +5337,8 @@ Process::RunThreadPlan(ExecutionContext &exe_ctx,
     // coalescing to cause us to lose OUR running event...
     ForceNextEventDelivery();
 
-// This while loop must exit out the bottom, there's cleanup that we need to do
-// when we are done. So don't call return anywhere within it.
+    // This while loop must exit out the bottom, there's cleanup that we need to
+    // do when we are done. So don't call return anywhere within it.
 
 #ifdef LLDB_RUN_THREAD_HALT_WITH_EVENT
     // It's pretty much impossible to write test cases for things like: One
@@ -5567,12 +5562,14 @@ Process::RunThreadPlan(ExecutionContext &exe_ctx,
               LLDB_LOG(log,
                        "Running function with one thread timeout timed out.");
             } else
-              LLDB_LOG(log, "Restarting function with all threads enabled and "
-                            "timeout: {0} timed out, abandoning execution.",
+              LLDB_LOG(log,
+                       "Restarting function with all threads enabled and "
+                       "timeout: {0} timed out, abandoning execution.",
                        timeout);
           } else
-            LLDB_LOG(log, "Running function with timeout: {0} timed out, "
-                          "abandoning execution.",
+            LLDB_LOG(log,
+                     "Running function with timeout: {0} timed out, "
+                     "abandoning execution.",
                      timeout);
         }
 
@@ -5999,14 +5996,13 @@ bool Process::RunPreResumeActions() {
 
 void Process::ClearPreResumeActions() { m_pre_resume_actions.clear(); }
 
-void Process::ClearPreResumeAction(PreResumeActionCallback callback, void *baton)
-{
-    PreResumeCallbackAndBaton element(callback, baton);
-    auto found_iter = llvm::find(m_pre_resume_actions, element);
-    if (found_iter != m_pre_resume_actions.end())
-    {
-        m_pre_resume_actions.erase(found_iter);
-    }
+void Process::ClearPreResumeAction(PreResumeActionCallback callback,
+                                   void *baton) {
+  PreResumeCallbackAndBaton element(callback, baton);
+  auto found_iter = llvm::find(m_pre_resume_actions, element);
+  if (found_iter != m_pre_resume_actions.end()) {
+    m_pre_resume_actions.erase(found_iter);
+  }
 }
 
 ProcessRunLock &Process::GetRunLock() {
@@ -6015,8 +6011,7 @@ ProcessRunLock &Process::GetRunLock() {
   return m_public_run_lock;
 }
 
-bool Process::CurrentThreadIsPrivateStateThread()
-{
+bool Process::CurrentThreadIsPrivateStateThread() {
   return m_private_state_thread.EqualsThread(Host::GetCurrentThread());
 }
 
@@ -6998,10 +6993,10 @@ AddressSpec::GetAddressSpaceInfo(lldb_private::Process &process) const {
 llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
     lldb_private::Process &process) const {
   if (!IsInDefaultAddressSpace())
-      return llvm::createStringError("address is not in the default address "
-                                    "space");
+    return llvm::createStringError("address is not in the default address "
+                                   "space");
   // This object holds a weak pointer to a module. We need to make sure the
-  // module hasn't been destroyed. 
+  // module hasn't been destroyed.
   auto exp_module = GetModule();
   if (!exp_module)
     return exp_module.takeError();
@@ -7018,7 +7013,7 @@ llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
       // TLS address via the dynamic loader.
       DynamicLoader *dyld = process.GetDynamicLoader();
       if (dyld) {
-        addr_t load_addr = 
+        addr_t load_addr =
             dyld->GetThreadLocalData(module_sp, thread_sp, m_value);
         if (load_addr != LLDB_INVALID_ADDRESS)
           return load_addr;
@@ -7026,7 +7021,7 @@ llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
             "dynamic loader was unable to resolve the thread local address");
       }
       return llvm::createStringError(
-            "no dynamic loader, unable to resolve the thread local address");
+          "no dynamic loader, unable to resolve the thread local address");
     } else {
       // m_value is a file address within a module.
       Address so_addr;
@@ -7038,19 +7033,19 @@ llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
             "section for module file address is not loaded in the target");
       }
       return llvm::createStringError(
-          "unable to resolve file address in module");      
+          "unable to resolve file address in module");
     }
   }
   // We just have a plain load address already
   return m_value;
 }
 
-llvm::Expected<AddressSpaceInfo> 
+llvm::Expected<AddressSpaceInfo>
 Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
   if (m_address_spaces.empty())
     return llvm::createStringError("process doesn't support address spaces");
 
-  for (const auto &address_space_info: m_address_spaces) {
+  for (const auto &address_space_info : m_address_spaces) {
     if (address_space_info.name == address_space_name.str())
       return address_space_info;
   }
@@ -7059,7 +7054,7 @@ Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
   error_str.append(address_space_name.str());
   error_str.append("\", address space must be one of:");
   bool first = true;
-  for (const auto &addr_space_info: m_address_spaces) {
+  for (const auto &addr_space_info : m_address_spaces) {
     if (!first)
       error_str.append(",");
     error_str.append(" \"");
@@ -7070,13 +7065,12 @@ Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
   return llvm::createStringError(error_str.c_str());
 }
 
-
-llvm::Expected<AddressSpaceInfo> 
+llvm::Expected<AddressSpaceInfo>
 Process::GetAddressSpaceInfo(uint64_t address_space_id) {
   if (m_address_spaces.empty())
     return llvm::createStringError("process doesn't support address spaces");
 
-  for (const auto &address_space_info: m_address_spaces) {
+  for (const auto &address_space_info : m_address_spaces) {
     if (address_space_info.value == address_space_id)
       return address_space_info;
   }
