@@ -1510,10 +1510,9 @@ void DAP::EventThread() {
           }
 
           // 2. Construct the main 'startDebugging' request arguments.
-          llvm::json::Object start_debugging_args;
-          start_debugging_args.try_emplace("request", "attach");
-          start_debugging_args.try_emplace("configuration",
-                                           std::move(attach_config));
+          llvm::json::Object start_debugging_args{
+              {"request", "attach"},
+              {"configuration", std::move(attach_config)}};
 
           // Send the request. Note that this is a reverse request, so you don't
           // expect a direct response in the same way as a client request.

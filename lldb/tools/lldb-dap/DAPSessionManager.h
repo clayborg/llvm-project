@@ -24,7 +24,7 @@
 namespace lldb_dap {
 
 // Forward declarations
-struct DAP; 
+struct DAP;
 
 class ManagedEventThread {
 public:
@@ -62,11 +62,11 @@ public:
   /// Wait for all sessions to finish disconnecting
   void WaitForAllSessionsToDisconnect();
 
-  /// Set the shared debugger instance for a specific target index
-  void SetSharedDebugger(uint32_t target_idx, lldb::SBDebugger debugger);
+  /// Set the shared debugger instance for a unique target ID
+  void SetSharedDebugger(uint32_t target_id, lldb::SBDebugger debugger);
 
-  /// Get the shared debugger instance for a specific target index
-  std::optional<lldb::SBDebugger> GetSharedDebugger(uint32_t target_idx);
+  /// Get the shared debugger instance for a unique target ID
+  std::optional<lldb::SBDebugger> GetSharedDebugger(uint32_t target_id);
 
   /// Get or create event thread for a specific debugger
   std::shared_ptr<ManagedEventThread>
@@ -95,13 +95,14 @@ private:
   std::condition_variable m_sessions_condition;
   std::map<lldb::IOObjectSP, DAP *> m_active_sessions;
 
-  /// Optional map from target index to shared debugger set when the native
+  /// Optional map from target ID to shared debugger set when the native
   /// process spawns a new GPU target
   std::map<uint32_t, lldb::SBDebugger> m_target_to_debugger_map;
 
   /// Map from debugger ID to its event thread used for when
   /// multiple DAP sessions are using the same debugger instance.
-  std::map<lldb::user_id_t, std::weak_ptr<ManagedEventThread>> m_debugger_event_threads;
+  std::map<lldb::user_id_t, std::weak_ptr<ManagedEventThread>>
+      m_debugger_event_threads;
 };
 
 } // namespace lldb_dap

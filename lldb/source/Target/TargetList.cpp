@@ -428,6 +428,19 @@ TargetSP TargetList::FindTargetWithProcess(Process *process) const {
   return target_sp;
 }
 
+TargetSP TargetList::FindTargetWithUniqueID(uint32_t id) const {
+  std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
+  auto it = llvm::find_if(m_target_list, [id](const TargetSP &item) {
+    auto *process_ptr = item->GetProcessSP().get();
+    return process_ptr && (process_ptr->GetUniqueID() == id);
+  });
+
+  if (it != m_target_list.end())
+    return *it;
+
+  return TargetSP();
+}
+
 TargetSP TargetList::GetTargetSP(Target *target) const {
   TargetSP target_sp;
   if (!target)
