@@ -1375,8 +1375,7 @@ void DAP::EventThread() {
       if (lldb::SBProcess::EventIsProcessEvent(event)) {
         lldb::SBProcess process = lldb::SBProcess::GetProcessFromEvent(event);
         // Find the DAP instance that owns this process's target
-        DAP *dap_instance = DAPSessionManager::GetInstance().FindDAPForTarget(
-            process.GetTarget());
+        DAP *dap_instance = DAPSessionManager::FindDAP(process.GetTarget());
         if (!dap_instance)
           continue;
 
@@ -1441,8 +1440,7 @@ void DAP::EventThread() {
           lldb::SBTarget event_target =
               lldb::SBTarget::GetTargetFromEvent(event);
           // Find the DAP instance that owns this target
-          DAP *dap_instance =
-              DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
+          DAP *dap_instance = DAPSessionManager::FindDAP(event_target);
           if (!dap_instance)
             continue;
 
@@ -1528,8 +1526,7 @@ void DAP::EventThread() {
         lldb::SBTarget event_target = bp.GetTarget();
 
         // Find the DAP instance that owns this target
-        DAP *dap_instance =
-            DAPSessionManager::GetInstance().FindDAPForTarget(event_target);
+        DAP *dap_instance = DAPSessionManager::FindDAP(event_target);
         if (!dap_instance)
           continue;
 

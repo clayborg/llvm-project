@@ -32,11 +32,9 @@ DAPSessionManager &DAPSessionManager::GetInstance() {
   // Use std::call_once for thread-safe initialization
   static std::once_flag initialized;
   static DAPSessionManager *instance = nullptr;
-  
-  std::call_once(initialized, []() {
-    instance = new DAPSessionManager();
-  });
-  
+
+  std::call_once(initialized, []() { instance = new DAPSessionManager(); });
+
   return *instance;
 }
 
@@ -95,7 +93,7 @@ DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
   // Try to use shared event thread, if it exists
   if (auto it = m_debugger_event_threads.find(debugger_id);
       it != m_debugger_event_threads.end()) {
-    if (auto thread_sp = it->second.lock()) { 
+    if (auto thread_sp = it->second.lock()) {
       return thread_sp;
     }
     // Our weak pointer has expired
