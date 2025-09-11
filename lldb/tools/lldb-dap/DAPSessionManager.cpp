@@ -110,16 +110,16 @@ DAPSessionManager::GetEventThreadForDebugger(lldb::SBDebugger debugger,
   return new_thread_sp;
 }
 
-void DAPSessionManager::SetSharedDebugger(uint32_t target_idx,
+void DAPSessionManager::SetSharedDebugger(uint32_t target_id,
                                           lldb::SBDebugger debugger) {
   std::lock_guard<std::mutex> lock(m_sessions_mutex);
-  m_target_to_debugger_map[target_idx] = debugger;
+  m_target_to_debugger_map[target_id] = debugger;
 }
 
 std::optional<lldb::SBDebugger>
-DAPSessionManager::GetSharedDebugger(uint32_t target_idx) {
+DAPSessionManager::GetSharedDebugger(uint32_t target_id) {
   std::lock_guard<std::mutex> lock(m_sessions_mutex);
-  auto pos = m_target_to_debugger_map.find(target_idx);
+  auto pos = m_target_to_debugger_map.find(target_id);
   if (pos == m_target_to_debugger_map.end())
     return std::nullopt;
   lldb::SBDebugger debugger = pos->second;

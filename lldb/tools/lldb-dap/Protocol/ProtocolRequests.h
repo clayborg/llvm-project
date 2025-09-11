@@ -345,8 +345,8 @@ struct AttachRequestArguments {
   /// Path to the core file to debug.
   std::string coreFile;
 
-  /// Index of an existing target to attach to.
-  std::optional<uint32_t> targetIdx;
+  /// Unique ID of an existing target to attach to.
+  std::optional<uint32_t> targetId;
 
   /// @}
 };
