@@ -35,22 +35,22 @@ class DAPTestCaseBase(TestBase):
             env=lldbDAPEnv,
         )
 
-    def _get_dap_server(self, child_session_index: Optional[int] = None) -> dap_server.DebugAdapterServer:
+    def _get_dap_server(self, child_session_id: Optional[int] = None) -> dap_server.DebugAdapterServer:
         """Get a specific DAP server instance.
         
         Args:
-            child_session_index: Index of child session, or None for main session
+            child_session_id: Unique id of child session, or None for main session
             
         Returns:
             The requested DAP server instance
         """
-        if child_session_index is None:
+        if child_session_id is None:
             return self.dap_server
         else:
             child_sessions = self.dap_server.get_child_sessions()
-            if child_session_index >= len(child_sessions):
-                raise IndexError(f"Child session index {child_session_index} out of range. Found {len(child_sessions)} child sessions.")
-            return child_sessions[child_session_index]
+            if child_session_id not in child_sessions:
+                raise IndexError(f"Child session id {child_session_id} not found.")
+            return child_sessions[child_session_id]
     
     def _set_source_breakpoints_impl(self, dap_server_instance, source_path, lines, data=None, wait_for_resolve=True):
         """Implementation for setting source breakpoints on any DAP server"""
@@ -114,21 +114,21 @@ class DAPTestCaseBase(TestBase):
         self.assertTrue(resp["success"], f"continue request failed: {resp}")
 
     # Multi-session methods for operating on specific sessions without switching context
-    def set_source_breakpoints_on(self, child_session_index: Optional[int], source_path, lines, data=None, wait_for_resolve=True):
+    def set_source_breakpoints_on(self, child_session_id: Optional[int], source_path, lines, data=None, wait_for_resolve=True):
         """Set source breakpoints on a specific DAP session without switching the active session."""
         return self._set_source_breakpoints_impl(
-            self._get_dap_server(child_session_index), source_path, lines, data, wait_for_resolve
+            self._get_dap_server(child_session_id), source_path, lines, data, wait_for_resolve
         )
     
-    def verify_breakpoint_hit_on(self, child_session_index: Optional[int], breakpoint_ids: list[str], timeout=DEFAULT_TIMEOUT):
+    def verify_breakpoint_hit_on(self, child_session_id: Optional[int], breakpoint_ids: list[str], timeout=DEFAULT_TIMEOUT):
         """Verify breakpoint hit on a specific DAP session without switching the active session."""
         return self._verify_breakpoint_hit_impl(
-            self._get_dap_server(child_session_index), breakpoint_ids, timeout
+            self._get_dap_server(child_session_id), breakpoint_ids, timeout
         )
     
-    def do_continue_on(self, child_session_index: Optional[int]):
+    def do_continue_on(self, child_session_id: Optional[int]):
         """Continue execution on a specific DAP session without switching the active session."""
-        return self._do_continue_impl(self._get_dap_server(child_session_index))
+        return self._do_continue_impl(self._get_dap_server(child_session_id))
     
     def start_server(self, connection):
         """

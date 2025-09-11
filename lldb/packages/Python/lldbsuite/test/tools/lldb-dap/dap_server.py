@@ -12,7 +12,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, Optional, Union, BinaryIO, TextIO
+from typing import Any, Dict, Optional, Union, BinaryIO, TextIO
 
 ## DAP type references
 Event = dict[str, Any]
@@ -331,7 +331,7 @@ class DebugCommunication(object):
     def _handle_startDebugging_request(self, packet):
         response = {
             "type": "response",
-            "request_seq": packet.get("seq", 0),
+            "request_seq": packet["seq"],
             "success": True,
             "command": "startDebugging",
             "body": {}
@@ -690,7 +690,7 @@ class DebugCommunication(object):
         sourceMap: Optional[Union[list[tuple[str, str]], dict[str, str]]] = None,
         gdbRemotePort: Optional[int] = None,
         gdbRemoteHostname: Optional[str] = None,
-        targetIdx: Optional[int] = None,
+        targetId: Optional[int] = None,
     ):
         args_dict = {}
         if pid is not None:
@@ -724,8 +724,8 @@ class DebugCommunication(object):
             args_dict["gdb-remote-port"] = gdbRemotePort
         if gdbRemoteHostname is not None:
             args_dict["gdb-remote-hostname"] = gdbRemoteHostname
-        if targetIdx is not None:
-            args_dict["targetIdx"] = targetIdx
+        if targetId is not None:
+            args_dict["targetId"] = targetId
         command_dict = {"command": "attach", "type": "request", "arguments": args_dict}
         return self.send_recv(command_dict)
 
@@ -1356,7 +1356,7 @@ class DebugAdapterServer(DebugCommunication):
     ):
         self.process = None
         self.connection = None
-        self.child_dap_sessions: list["DebugAdapterServer"] = []  # Track child sessions for cleanup
+        self.child_dap_sessions: Dict[int, "DebugAdapterServer"] = {}  # Track child sessions for cleanup
         
         if executable is not None:
             process, connection = DebugAdapterServer.launch(
@@ -1440,7 +1440,7 @@ class DebugAdapterServer(DebugCommunication):
             return self.process.pid
         return -1
     
-    def get_child_sessions(self) -> list["DebugAdapterServer"]:
+    def get_child_sessions(self) -> Dict[int, "DebugAdapterServer"]:
         return self.child_dap_sessions
     
     def _handle_startDebugging_request(self, packet):
@@ -1457,22 +1457,21 @@ class DebugAdapterServer(DebugCommunication):
                 log_file=self.log_file
             )
             
-            # Track the child session for proper cleanup
-            self.child_dap_sessions.append(child_dap)
-            
-            # Initialize the child DAP session
-            child_dap.request_initialize()
-            
             # Configure the child session based on the request type and configuration
             if request_type == 'attach':
+                # Initialize the child DAP session
+                child_dap.request_initialize()
+
                 # Extract attach-specific parameters
                 attach_commands = configuration.get('attachCommands', [])
-                target_idx = configuration.get('targetIdx', None)
+                target_id = configuration.get('targetId', None)
+                # Track the child session for proper cleanup
+                self.child_dap_sessions[target_id] = child_dap
                 
                 # Send attach request to the child DAP
                 child_dap.request_attach(
                     attachCommands=attach_commands,
-                    targetIdx=target_idx,
+                    targetId=target_id,
                 )
             else:
                 raise ValueError(f"Unsupported startDebugging request type: {request_type}")
