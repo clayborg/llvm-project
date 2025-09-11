@@ -75,6 +75,11 @@ public:
   /// Find the DAP instance that owns the given target
   DAP *FindDAPForTarget(lldb::SBTarget target);
 
+  /// Static convenience method for FindDAPForTarget
+  static DAP *FindDAP(lldb::SBTarget target) {
+    return GetInstance().FindDAPForTarget(target);
+  }
+
   /// Clean up shared resources when the last session exits
   void CleanupSharedResources();
 
