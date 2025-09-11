@@ -147,6 +147,10 @@ LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() { CloseFDs(); }
 
 llvm::StringRef LLDBServerPluginAMDGPU::GetPluginName() { return "amd-gpu"; }
 
+llvm::StringRef LLDBServerPluginAMDGPU::GetDAPSessionName() {
+  return "AMD GPU Session";
+}
+
 void LLDBServerPluginAMDGPU::CloseFDs() {
   if (m_fds[0] != -1) {
     close(m_fds[0]);
@@ -415,7 +419,8 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                        "launched successfully");
       }
       actions.connect_info = CreateConnection();
-      actions.connect_info->synchronous = true; 
+      actions.connect_info->synchronous = true;
+      actions.dap_session_name = GetDAPSessionName();
     }
     return actions;
   } else {
