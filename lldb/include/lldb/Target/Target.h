@@ -558,6 +558,13 @@ public:
     TargetEventData(const lldb::TargetSP &target_sp,
                     const ModuleList &module_list);
 
+    TargetEventData(const lldb::TargetSP &target_sp,
+                    std::string dap_session_name);
+
+    TargetEventData(const lldb::TargetSP &target_sp,
+                    const ModuleList &module_list,
+                    std::string dap_session_name);
+
     ~TargetEventData() override;
 
     static llvm::StringRef GetFlavorString();
@@ -565,6 +572,8 @@ public:
     llvm::StringRef GetFlavor() const override {
       return TargetEventData::GetFlavorString();
     }
+
+    static llvm::StringRef GetDAPSessionNameFromEvent(const Event *event_ptr);
 
     void Dump(Stream *s) const override;
 
@@ -581,6 +590,7 @@ public:
   private:
     lldb::TargetSP m_target_sp;
     ModuleList m_module_list;
+    std::string m_dap_session_name = "";
 
     TargetEventData(const TargetEventData &) = delete;
     const TargetEventData &operator=(const TargetEventData &) = delete;

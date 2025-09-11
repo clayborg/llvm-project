@@ -5145,13 +5145,22 @@ void TargetProperties::SetDebugUtilityExpression(bool debug) {
 }
 
 // Target::TargetEventData
-
 Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp)
-    : EventData(), m_target_sp(target_sp), m_module_list() {}
+    : TargetEventData(target_sp, ModuleList(), "") {}
 
 Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
                                          const ModuleList &module_list)
-    : EventData(), m_target_sp(target_sp), m_module_list(module_list) {}
+    : TargetEventData(target_sp, module_list, "") {}
+
+Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
+                                         std::string dap_session_name)
+    : TargetEventData(target_sp, ModuleList(), std::move(dap_session_name)) {}
+
+Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
+                                         const ModuleList &module_list,
+                                         std::string dap_session_name)
+    : EventData(), m_target_sp(target_sp), m_module_list(module_list),
+      m_dap_session_name(std::move(dap_session_name)) {}
 
 Target::TargetEventData::~TargetEventData() = default;
 
@@ -5185,6 +5194,14 @@ TargetSP Target::TargetEventData::GetTargetFromEvent(const Event *event_ptr) {
   if (event_data)
     target_sp = event_data->m_target_sp;
   return target_sp;
+}
+
+llvm::StringRef
+Target::TargetEventData::GetDAPSessionNameFromEvent(const Event *event_ptr) {
+  const TargetEventData *event_data = GetEventDataFromEvent(event_ptr);
+  if (event_data)
+    return event_data->m_dap_session_name;
+  return llvm::StringRef();
 }
 
 ModuleList
