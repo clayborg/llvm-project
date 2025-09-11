@@ -790,7 +790,7 @@ void DAP::SetTarget(const lldb::SBTarget target) {
             lldb::SBTarget::eBroadcastBitModulesUnloaded |
             lldb::SBTarget::eBroadcastBitSymbolsLoaded |
             lldb::SBTarget::eBroadcastBitSymbolsChanged |
-            lldb::SBTarget::eBroadcastBitNewTargetSpawned);
+            lldb::SBTarget::eBroadcastBitNewTargetCreated);
     listener.StartListeningForEvents(this->broadcaster,
                                      eBroadcastBitStopEventThread);
   }
@@ -1231,15 +1231,15 @@ llvm::Error DAP::StartEventThreads() {
   return llvm::Error::success();
 }
 
-llvm::Error DAP::InitializeDebugger(std::optional<uint32_t> target_idx) {
+llvm::Error DAP::InitializeDebugger(std::optional<uint32_t> target_id) {
   // Initialize debugger instance (shared or individual)
-  if (target_idx) {
+  if (target_id) {
     auto shared_debugger =
-        DAPSessionManager::GetInstance().GetSharedDebugger(*target_idx);
+        DAPSessionManager::GetInstance().GetSharedDebugger(*target_id);
     if (!shared_debugger) {
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
-          "Unable to find existing debugger for target");
+          "Unable to find existing debugger for target ID");
     }
     debugger = shared_debugger.value();
     return StartEventThreads();
@@ -1481,32 +1481,33 @@ void DAP::EventThread() {
                                             ModuleEventBody::eReasonNew}});
             }
           }
-        } else if (event_mask & lldb::SBTarget::eBroadcastBitNewTargetSpawned) {
+        } else if (event_mask & lldb::SBTarget::eBroadcastBitNewTargetCreated) {
           auto target = lldb::SBTarget::GetTargetFromEvent(event);
-          auto target_index = debugger.GetIndexOfTarget(target);
 
-          // Set the shared debugger for GPU processes
-          DAPSessionManager::GetInstance().SetSharedDebugger(target_index,
+          // Generate unique target ID and set the shared debugger
+          uint32_t target_id = target.GetProcess().GetUniqueID();
+          DAPSessionManager::GetInstance().SetSharedDebugger(target_id,
                                                              debugger);
 
-          // We create "attachCommands" that will select the target that already
-          // exists in LLDB. The DAP instance will attach to this already
-          // existing target and the debug session will be ready to go.
+          // We create an attach config that will select the unique
+          // target ID of the created target. The DAP instance will attach to
+          // this existing target and the debug session will be ready to go.
           llvm::json::Object attach_config;
           llvm::json::Array attach_commands;
 
-          attach_commands.push_back(llvm::formatv("target list").str());
-          attach_commands.push_back(
-              llvm::formatv("target select {0}", target_index).str());
-
           // If we have a process name, add command to attach to the same
           // process name
-
           attach_config.try_emplace("type", "lldb");
-          attach_config.try_emplace("name", "GPU Session");
-          attach_config.try_emplace("attachCommands",
-                                    std::move(attach_commands));
-          attach_config.try_emplace("targetIdx", target_index);
+          attach_config.try_emplace("targetId", target_id);
+          const char *session_name =
+              lldb::SBTarget::GetDAPSessionNameFromEvent(event);
+          if (session_name && *session_name) {
+            attach_config.try_emplace("name", session_name);
+          } else {
+            std::string default_name =
+                llvm::formatv("Session {0}", target_id).str();
+            attach_config.try_emplace("name", default_name);
+          }
 
           // 2. Construct the main 'startDebugging' request arguments.
           llvm::json::Object start_debugging_args;

@@ -191,7 +191,7 @@ Target::Target(Debugger &debugger, const ArchSpec &target_arch,
   SetEventName(eBroadcastBitModulesUnloaded, "modules-unloaded");
   SetEventName(eBroadcastBitWatchpointChanged, "watchpoint-changed");
   SetEventName(eBroadcastBitSymbolsLoaded, "symbols-loaded");
-  SetEventName(eBroadcastBitNewTargetSpawned, "new-target-spawned");
+  SetEventName(eBroadcastBitNewTargetCreated, "new-target-spawned");
 
   CheckInWithManager();
 

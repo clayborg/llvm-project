@@ -44,7 +44,7 @@ public:
     eBroadcastBitWatchpointChanged = (1 << 3),
     eBroadcastBitSymbolsLoaded = (1 << 4),
     eBroadcastBitSymbolsChanged = (1 << 5),
-    eBroadcastBitNewTargetSpawned = (1 << 6),
+    eBroadcastBitNewTargetCreated = (1 << 6),
   };
 
   // Constructors
