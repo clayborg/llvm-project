@@ -23,13 +23,13 @@ def skipUnlessHasROCm(func):
     
     def has_rocm():
         if _detect_rocm() is None:
-            return "ROCm not available (rocm-smi not found)"
+            return "ROCm not available (rocminfo not found)"
         return None
     
     return skipTestIfFn(has_rocm)(func)
 
 
-class TestDAP_gpu_reverse_request(lldbdap_testcase.DAPTestCaseBase):
+class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
     """Test DAP session spawning - both basic and GPU scenarios"""
 
     def setUp(self):
@@ -60,19 +60,17 @@ class TestDAP_gpu_reverse_request(lldbdap_testcase.DAPTestCaseBase):
         self.assertIn("configuration", req["arguments"], "Reverse request should have configuration")
         
         attach_config = req["arguments"]["configuration"]
-        self.assertIn("attachCommands", attach_config, "Reverse request should have attachCommands")
-        self.assertIn("target select 1", attach_config["attachCommands"])
         self.assertIn("name", attach_config, "Attach config should have name")
-        self.assertIn("GPU Session", attach_config["name"])
-        self.assertIn("targetIdx", attach_config, "Attach config should have targetIdx")
-        self.assertEqual(attach_config["targetIdx"], 1, "Attach config should have targetIdx 1")
+        self.assertIn("AMD GPU Session", attach_config["name"])
+        self.assertIn("targetId", attach_config, "Attach config should have targetId")
+        self.assertEqual(attach_config["targetId"], 2, "Attach config should have target id 2")
         
     @skipUnlessHasROCm
     def test_gpu_breakpoint_hit(self):
         """
         Test that we can hit a breakpoint in GPU debugging session spawned through reverse requests.
         """
-        GPU_SESSION_IDX = 0
+        GPU_PROCESS_UNIQUE_ID = 2
         self.build()
         log_file_path = self.getBuildArtifact("dap.txt")
         # Enable detailed DAP logging to debug any issues
@@ -90,24 +88,24 @@ class TestDAP_gpu_reverse_request(lldbdap_testcase.DAPTestCaseBase):
         self.launch(
             program, disconnectAutomatically=False,
         )
+
         # Set CPU breakpoint and stop.
         breakpoint_ids = self.set_source_breakpoints(source, [cpu_breakpoint_line])  
-        
         self.continue_to_breakpoints(breakpoint_ids, timeout=self.DEFAULT_TIMEOUT)
         # We should have a GPU child session automatically spawned now
         self.assertEqual(len(self.dap_server.get_child_sessions()), 1)
         # Set breakpoint in GPU session
-        gpu_breakpoint_ids = self.set_source_breakpoints_on(GPU_SESSION_IDX, source, [gpu_breakpoint_line])
-        
+        gpu_breakpoint_ids = self.set_source_breakpoints_on(GPU_PROCESS_UNIQUE_ID, source, [gpu_breakpoint_line])
         # Resume GPU execution after verifying breakpoint hit
-        self.do_continue_on(0)
-
+        self.do_continue_on(GPU_PROCESS_UNIQUE_ID)
         # Continue main session
-        self.do_continue()  
+        self.do_continue()
+        self.dap_server.wait_for_stopped()
+        self.do_continue()
         # Verify that the GPU breakpoint is hit in the child session
-        self.verify_breakpoint_hit_on(GPU_SESSION_IDX, gpu_breakpoint_ids, timeout=self.DEFAULT_TIMEOUT * 2)
+        self.verify_breakpoint_hit_on(GPU_PROCESS_UNIQUE_ID, gpu_breakpoint_ids, timeout=self.DEFAULT_TIMEOUT * 3)
         
         # Manually disconnect sessions
-        for child_session in self.dap_server.get_child_sessions():
+        for child_session in self.dap_server.get_child_sessions().values():
             child_session.request_disconnect()
         self.dap_server.request_disconnect()

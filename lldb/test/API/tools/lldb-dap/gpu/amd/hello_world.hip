@@ -1,7 +1,9 @@
 #include <hip/hip_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 constexpr int error_exit_code = -1;
+
 #define HIP_CHECK(condition)                                              \
   {                                                                       \
     const hipError_t error = (condition);                                 \
@@ -11,10 +13,12 @@ constexpr int error_exit_code = -1;
       exit(error_exit_code);                                              \
     }                                                                     \
   }
+
 __global__ void add_one(int *data) {
     int idx = threadIdx.x;
     data[idx] = idx + 1; // GPU BREAKPOINT
 }
+
 int main() {
     const int n = 4;
     int host_data[n] = {0, 0, 0, 0};
