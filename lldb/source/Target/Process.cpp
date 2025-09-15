@@ -1941,10 +1941,7 @@ size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf,
   }
   // We have an address that can't be resolved in the default address space, so
   // we need to call the overload that knows how to read from an address space.
-  // Check if we have a numeric address space ID first.
-  llvm::Expected<AddressSpaceInfo> info =
-      addr_spec.GetSpaceId() ? GetAddressSpaceInfo(*addr_spec.GetSpaceId())
-                             : GetAddressSpaceInfo(addr_spec.GetSpaceName());
+  llvm::Expected<AddressSpaceInfo> info = addr_spec.GetAddressSpaceInfo(*this);
 
   if (info)
     return DoReadMemory(addr_spec, *info, buf, size, error);
