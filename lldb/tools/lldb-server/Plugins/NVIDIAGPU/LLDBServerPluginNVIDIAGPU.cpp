@@ -372,3 +372,9 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
                            cudbgGetErrorString(res));
   }
 }
+
+void LLDBServerPluginNVIDIAGPU::NativeProcessDidExit(
+    const WaitStatus &exit_status) {
+  if (m_gpu)
+    m_gpu->OnNativeProcessExit(exit_status);
+}
