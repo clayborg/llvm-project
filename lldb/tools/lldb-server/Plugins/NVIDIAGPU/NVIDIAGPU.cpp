@@ -549,3 +549,11 @@ Status NVIDIAGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
   return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage,
                              /*thread=*/nullptr, buf, size, bytes_read);
 }
+
+void NVIDIAGPU::OnNativeProcessExit(const WaitStatus &exit_status) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVIDIAGPU::OnNativeProcessExit(). exit_status: {}",
+           exit_status);
+  // Set our exit status to match the native process and notify delegates.
+  SetExitStatus(exit_status, /*bNotifyStateChange=*/true);
+}

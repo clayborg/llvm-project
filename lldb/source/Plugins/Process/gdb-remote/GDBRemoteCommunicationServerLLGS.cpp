@@ -878,7 +878,7 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
   return threads_array;
 }
 
-StreamGDBRemote 
+StreamGDBRemote
 GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     NativeThreadProtocol &thread) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
@@ -1140,7 +1140,7 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Exited(
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log, "GDBRemoteCommunicationServerLLGS::%s called", __FUNCTION__);
 
-  // Notify GPU plugins that the native process has exited
+  // Notify server plugins that the native process has exited
   std::optional<WaitStatus> exit_status = process->GetExitStatus();
   if (exit_status.has_value())
     for (std::unique_ptr<lldb_server::LLDBServerPlugin> &plugin_up : m_plugins)
