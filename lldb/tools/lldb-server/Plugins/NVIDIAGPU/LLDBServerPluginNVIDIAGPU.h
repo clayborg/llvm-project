@@ -73,6 +73,8 @@ public:
   ///     the stop process, or nullopt if no actions are required.
   std::optional<GPUActions> NativeProcessIsStopping() override;
 
+  void NativeProcessDidExit(const WaitStatus &exit_status) override;
+
 private:
   /// Create a connection to the GPU process that the client can use.
   ///
