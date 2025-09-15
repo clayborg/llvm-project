@@ -301,6 +301,12 @@ public:
                              NativeThreadProtocol *thread, void *buf,
                              size_t size, size_t &bytes_readn) override;
 
+  /// Handle the native process exit event.
+  ///
+  /// \param[in] exit_status
+  ///     The exit status of the native process.
+  void OnNativeProcessExit(const WaitStatus &exit_status);
+
 private:
   friend class Manager;
 
