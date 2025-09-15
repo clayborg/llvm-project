@@ -3,43 +3,59 @@
 
 // Helper macro to generate regular register info
 #define GENERATE_R_REGISTER_INFO(regnum)                                       \
-  {                                                                            \
-    "R" #regnum, nullptr, 4, R_REG_OFFSET(regnum), eEncodingUint, eFormatHex,  \
-    {                                                                          \
-      EH_FRAME_R##regnum, DWARF_R##regnum, LLDB_INVALID_REGNUM,                \
-          LLDB_R##regnum, LLDB_R##regnum                                       \
-    }                                                                          \
-  }
+  {"R" #regnum,                                                                \
+   nullptr,                                                                    \
+   4,                                                                          \
+   R_REG_OFFSET(regnum),                                                       \
+   eEncodingUint,                                                              \
+   eFormatHex,                                                                 \
+   {EH_FRAME_R##regnum, DWARF_R##regnum, LLDB_INVALID_REGNUM, LLDB_R##regnum,  \
+    LLDB_R##regnum},                                                           \
+   nullptr,                                                                    \
+   nullptr,                                                                    \
+   nullptr}
 
 // Helper macro to generate uniform register info
 #define GENERATE_UR_REGISTER_INFO(regnum)                                      \
-  {                                                                            \
-    "UR" #regnum, nullptr, 4, UR_REG_OFFSET(regnum), eEncodingUint,            \
-        eFormatHex, {                                                          \
-      EH_FRAME_UR##regnum, DWARF_UR##regnum, LLDB_INVALID_REGNUM,              \
-          LLDB_UR##regnum, LLDB_UR##regnum                                     \
-    }                                                                          \
-  }
+  {"UR" #regnum,                                                               \
+   nullptr,                                                                    \
+   4,                                                                          \
+   UR_REG_OFFSET(regnum),                                                      \
+   eEncodingUint,                                                              \
+   eFormatHex,                                                                 \
+   {EH_FRAME_UR##regnum, DWARF_UR##regnum, LLDB_INVALID_REGNUM,                \
+    LLDB_UR##regnum, LLDB_UR##regnum},                                         \
+   nullptr,                                                                    \
+   nullptr,                                                                    \
+   nullptr}
 
 // Helper macro to generate predicate register info
 #define GENERATE_P_REGISTER_INFO(regnum)                                       \
-  {                                                                            \
-    "P" #regnum, nullptr, 1, P_REG_OFFSET(regnum), eEncodingUint,              \
-        eFormatBinary, {                                                       \
-      EH_FRAME_P##regnum, DWARF_P##regnum, LLDB_INVALID_REGNUM,                \
-          LLDB_P##regnum, LLDB_P##regnum                                       \
-    }                                                                          \
-  }
+  {"P" #regnum,                                                                \
+   nullptr,                                                                    \
+   1,                                                                          \
+   P_REG_OFFSET(regnum),                                                       \
+   eEncodingUint,                                                              \
+   eFormatBinary,                                                              \
+   {EH_FRAME_P##regnum, DWARF_P##regnum, LLDB_INVALID_REGNUM, LLDB_P##regnum,  \
+    LLDB_P##regnum},                                                           \
+   nullptr,                                                                    \
+   nullptr,                                                                    \
+   nullptr}
 
 // Helper macro to generate uniform predicate register info
 #define GENERATE_UP_REGISTER_INFO(regnum)                                      \
-  {                                                                            \
-    "UP" #regnum, nullptr, 1, UP_REG_OFFSET(regnum), eEncodingUint,            \
-        eFormatBinary, {                                                       \
-      EH_FRAME_UP##regnum, DWARF_UP##regnum, LLDB_INVALID_REGNUM,              \
-          LLDB_UP##regnum, LLDB_UP##regnum                                     \
-    }                                                                          \
-  }
+  {"UP" #regnum,                                                               \
+   nullptr,                                                                    \
+   1,                                                                          \
+   UP_REG_OFFSET(regnum),                                                      \
+   eEncodingUint,                                                              \
+   eFormatBinary,                                                              \
+   {EH_FRAME_UP##regnum, DWARF_UP##regnum, LLDB_INVALID_REGNUM,                \
+    LLDB_UP##regnum, LLDB_UP##regnum},                                         \
+   nullptr,                                                                    \
+   nullptr,                                                                    \
+   nullptr}
 
 // For EXPAND_R_REGISTERS macro - generates R0 through R254
 #define EXPAND_R_REGISTERS_255(PREFIX) \
