@@ -496,6 +496,16 @@ bool StringExtractorGDBRemote::IsErrorResponse() const {
          isxdigit(m_packet[2]);
 }
 
+bool StringExtractorGDBRemote::IsStopReply() const {
+  if (!IsNormalResponse())
+    return false;
+
+  char first_char = m_packet.empty() ? '\0' : m_packet[0];
+  return first_char == 'T' || first_char == 'S' || first_char == 'W' ||
+         first_char == 'X' || first_char == 'w' || first_char == 'N' ||
+         first_char == 'O' || first_char == 'F';
+}
+
 uint8_t StringExtractorGDBRemote::GetError() {
   if (GetResponseType() == eError) {
     SetFilePos(1);

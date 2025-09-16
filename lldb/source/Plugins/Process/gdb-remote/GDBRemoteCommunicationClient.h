@@ -96,7 +96,8 @@ public:
   ///
   /// \param[in] args
   ///     A list of program arguments. The first entry is the program being run.
-  llvm::Error LaunchProcess(const Args &args);
+  llvm::Error LaunchProcess(const Args &args,
+                            StringExtractorGDBRemote &response);
 
   /// Sends a "QEnvironment:NAME=VALUE" packet that will build up the
   /// environment that will get used when launching an application

@@ -25,11 +25,12 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
 enum {
-  BreakpointIDInitialize = 1,
-  BreakpointIDShlibLoad = 2,
-  BreakpointIDThirdStop = 3,
-  BreakpointIDResumeAndWaitForResume = 4,
-  BreakpointIDWaitForStop = 5
+  BreakpointIDFirstStop = 1,
+  BreakpointIDInitialize = 2,
+  BreakpointIDShlibLoad = 3,
+  BreakpointIDThirdStop = 4,
+  BreakpointIDResumeAndWaitForResume = 5,
+  BreakpointIDWaitForStop = 6
 };
 
 LLDBServerPluginMockGPU::LLDBServerPluginMockGPU(
@@ -152,6 +153,19 @@ std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection
 
 std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
   NativeProcessProtocol *native_process = m_native_process.GetCurrentProcess();
+  static bool first_time = true;
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%d stop id ", native_process->GetStopID());
+  if (first_time) {
+    first_time = false;
+    GPUActions actions;
+    actions.plugin_name = GetPluginName();
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDThirdStop;
+    bp.name_info = {"a.out", "gpu_first_stop"};
+    actions.breakpoints.emplace_back(std::move(bp));
+    return actions;
+  }
   // Show that we can return a valid GPUActions object from a stop event.
   if (native_process->GetStopID() == 3) {
     GPUActions actions = GetNewGPUAction();

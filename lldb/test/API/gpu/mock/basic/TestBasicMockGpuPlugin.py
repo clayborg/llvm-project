@@ -151,3 +151,16 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+    def test_mock_gpu_first_breakpoint_hit(self):
+        """
+        Test that we can hit the first breakpoint on the cpu target,
+        Making sure we handle the GPUActions on the first stop-reply.
+        """
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+        self.select_cpu()
+        self.expect(
+            "breakpoint list --internal",
+            patterns=[r"name = 'gpu_first_stop'.*hit count = 1"],
+        )
