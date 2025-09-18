@@ -536,6 +536,11 @@ void CommandInterpreter::Initialize() {
   if (cmd_obj_sp) {
     AddAlias("h", cmd_obj_sp);
   }
+
+  cmd_obj_sp = GetCommandSPExact("target switch");
+  if (cmd_obj_sp) {
+    AddAlias("ts", cmd_obj_sp);
+  }
 }
 
 void CommandInterpreter::Clear() { m_command_io_handler_sp.reset(); }
