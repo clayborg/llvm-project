@@ -150,3 +150,12 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("ts mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
