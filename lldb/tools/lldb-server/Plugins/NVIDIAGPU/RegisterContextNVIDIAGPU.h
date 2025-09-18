@@ -32,10 +32,10 @@ struct ThreadRegistersValues {
   uint64_t errorPC;
   uint32_t R[kNumRRegs];
   uint32_t RZ;             // R255 - zero register
-  uint8_t P[kNumPRegs];    // Predicate registers (1-bit each, stored in bytes)
+  uint32_t P[kNumPRegs];   // Predicate registers (1-bit each, stored in bytes)
   uint32_t UR[kNumURRegs]; // Uniform registers
   uint32_t URZ;            // UR255 - uniform zero register
-  uint8_t UP[kNumUPRegs];  // Uniform predicate registers (1-bit each, stored in
+  uint32_t UP[kNumUPRegs]; // Uniform predicate registers (1-bit each, stored in
                            // bytes)
 };
 
