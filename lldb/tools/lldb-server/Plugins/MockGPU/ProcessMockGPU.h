@@ -107,7 +107,7 @@ class Manager : public NativeProcessProtocol::Manager {
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
 
   /// Called when the native process exits to set the GPU process exit status
-  void HandleNativeProcessExit(const WaitStatus &exit_status) override;
+  void HandleNativeProcessExit(const WaitStatus &exit_status);
 };
 
 

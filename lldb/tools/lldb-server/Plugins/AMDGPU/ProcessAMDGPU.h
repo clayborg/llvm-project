@@ -87,7 +87,7 @@ public:
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   /// Called when the native process exits to exit the GPU process
-  void HandleNativeProcessExit(const WaitStatus &exit_status) override;
+  void HandleNativeProcessExit(const WaitStatus &exit_status);
 
   bool handleWaveStop(amd_dbgapi_event_id_t eventId);
 
