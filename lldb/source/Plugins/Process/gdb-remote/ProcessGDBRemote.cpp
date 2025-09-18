@@ -2809,7 +2809,22 @@ void ProcessGDBRemote::RefreshStateAfterStop() {
   UpdateThreadListIfNeeded();
 
   if (m_last_stop_packet)
-    SetThreadStopInfo(*m_last_stop_packet);
+    std::string packet_str = m_last_stop_packet->GetStringRef().str();
+    size_t gpu_actions_pos = packet_str.find(";gpu-actions:");
+    if (gpu_actions_pos != std::string::npos) {
+      // Find the end of the gpu-actions value.
+      size_t end_pos = packet_str.find(';', gpu_actions_pos + 1);
+      if (end_pos == std::string::npos) {
+        end_pos = packet_str.length();
+      }
+      // Remove the gpu-actions key-value pair
+      packet_str.erase(gpu_actions_pos, end_pos - gpu_actions_pos);
+    }
+
+    // Process the modified packet without gpu-actions.
+    StringExtractorGDBRemote modified_packet(packet_str);
+    SetThreadStopInfo(modified_packet);
+  }
   m_last_stop_packet.reset();
 
   // If we have queried for a default thread id
