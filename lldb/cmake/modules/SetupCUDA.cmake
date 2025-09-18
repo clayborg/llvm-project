@@ -97,7 +97,13 @@ function(lldb_apply_cuda_env_definitions target_name)
       CMAKE_NVIDIAGPU_CUDA_DEVICE_ORDER="${NVIDIAGPU_CUDA_DEVICE_ORDER}")
   endif()
   if(NVIDIAGPU_CUDA_LAUNCH_BLOCKING)
-    target_compile_definitions(${target_name} PRIVATE 
+    target_compile_definitions(${target_name} PRIVATE
       CMAKE_NVIDIAGPU_CUDA_LAUNCH_BLOCKING="${NVIDIAGPU_CUDA_LAUNCH_BLOCKING}")
   endif()
+
+  if(NOT NVIDIAGPU_INITIALIZATION_SYMBOL)
+    set(NVIDIAGPU_INITIALIZATION_SYMBOL "cuInit")
+  endif()
+  target_compile_definitions(${target_name} PRIVATE
+    CMAKE_NVIDIAGPU_INITIALIZATION_SYMBOL="${NVIDIAGPU_INITIALIZATION_SYMBOL}")
 endfunction()
