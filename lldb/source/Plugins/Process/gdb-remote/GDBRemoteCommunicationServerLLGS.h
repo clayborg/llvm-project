@@ -26,7 +26,7 @@ class StringExtractorGDBRemote;
 namespace lldb_private {
 
 namespace lldb_server {
-  class LLDBServerPlugin;
+class LLDBServerPlugin;
 }
 
 namespace process_gdb_remote {
@@ -97,7 +97,7 @@ public:
 
   GDBRemoteCommunication::PacketResult
   SendStructuredDataPacket(const llvm::json::Value &value);
-  
+
   void InstallPlugin(std::unique_ptr<lldb_server::LLDBServerPlugin> plugin_up);
 
   void SetPlugin(lldb_server::LLDBServerPlugin *plugin) {
@@ -115,9 +115,7 @@ public:
     Flag flags;
   };
 
-  NativeProcessProtocol *GetCurrentProcess() {
-    return m_current_process;
-  }
+  NativeProcessProtocol *GetCurrentProcess() { return m_current_process; }
 
 protected:
   MainLoop &m_mainloop;
@@ -146,11 +144,11 @@ protected:
 
   NativeProcessProtocol::Extension m_extensions_supported = {};
 
-  /// If this GDB server has LLDBServerPlugins, then this will list all 
+  /// If this GDB server has LLDBServerPlugins, then this will list all
   /// installed LLDBServerPlugin instances.
   std::vector<std::unique_ptr<lldb_server::LLDBServerPlugin>> m_plugins;
 
-  /// If this GDB server is a LLDBServerPlugin, then this will point to the 
+  /// If this GDB server is a LLDBServerPlugin, then this will point to the
   /// LLDBServerPlugin instance.
   lldb_server::LLDBServerPlugin *m_plugin_instance = nullptr;
 
@@ -302,13 +300,13 @@ protected:
   PacketResult Handle_QMemTags(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_qMemRead(StringExtractorGDBRemote &packet);
-  
+
   PacketResult Handle_jAddressSpacesInfo(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_T(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginInitialize(StringExtractorGDBRemote &packet);
-  
+
   PacketResult Handle_jGPUPluginBreakpointHit(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
