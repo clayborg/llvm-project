@@ -26,7 +26,7 @@ class StringExtractorGDBRemote;
 namespace lldb_private {
 
 namespace lldb_server {
-  class LLDBServerPlugin;
+class LLDBServerPlugin;
 }
 
 namespace process_gdb_remote {
@@ -97,6 +97,9 @@ public:
 
   void InstallPlugin(std::unique_ptr<lldb_server::LLDBServerPlugin> plugin_up);
 
+  GDBRemoteCommunication::PacketResult
+  SendStructuredDataPacket(const llvm::json::Value &value);
+
   struct DebuggedProcess {
     enum class Flag {
       vkilled = (1u << 0),
@@ -108,9 +111,7 @@ public:
     Flag flags;
   };
 
-  NativeProcessProtocol *GetCurrentProcess() {
-    return m_current_process;
-  }
+  NativeProcessProtocol *GetCurrentProcess() { return m_current_process; }
 
 protected:
   MainLoop &m_mainloop;
@@ -202,6 +203,8 @@ protected:
 
   PacketResult Handle_qsThreadInfo(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_qStructuredDataPlugins(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_p(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_P(StringExtractorGDBRemote &packet);
@@ -287,13 +290,13 @@ protected:
   PacketResult Handle_QMemTags(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_qMemRead(StringExtractorGDBRemote &packet);
-  
+
   PacketResult Handle_jAddressSpacesInfo(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_T(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginInitialize(StringExtractorGDBRemote &packet);
-  
+
   PacketResult Handle_jGPUPluginBreakpointHit(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
