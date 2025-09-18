@@ -33,7 +33,7 @@
 #define GENERATE_P_REGISTER_INFO(regnum)                                       \
   {"P" #regnum,                                                                \
    nullptr,                                                                    \
-   1,                                                                          \
+   4,                                                                          \
    P_REG_OFFSET(regnum),                                                       \
    eEncodingUint,                                                              \
    eFormatBinary,                                                              \
