@@ -39,6 +39,8 @@ CMake variables
 - `NVIDIAGPU_CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches to be
   synchronous. Can also be set at runtime. See Environment variables section
   for more details.
+- `NVIDIAGPU_INITIALIZATION_SYMBOL`: an optional CPU symbol to use to identify
+  that the CUDA runtime is being initialized.
 
 Environment variables
 ^^^^^^^^^^^^^^^^^^^^^
