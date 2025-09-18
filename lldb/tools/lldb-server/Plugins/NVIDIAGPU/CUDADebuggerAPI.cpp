@@ -36,7 +36,8 @@ static std::string CUDBG_DEBUGGER_CAPABILITIES =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_CAPABILITIES);
 static std::string CUDBG_INJECTION_PATH = "cudbgInjectionPath";
 static std::string CUDBG_GET_API = "cudbgGetAPI";
-static std::string CUDBG_CUINIT = "cuInit";
+static std::string CUDA_INITIALIZATION_SYMBOL =
+    CMAKE_NVIDIAGPU_INITIALIZATION_SYMBOL;
 } // namespace Symbols
 
 namespace lldb_private::lldb_server {
@@ -272,7 +273,7 @@ CUDADebuggerAPI::Initialize(const GPUPluginBreakpointHitArgs &args,
 
 GPUBreakpointInfo CUDADebuggerAPI::GetInitializationBreakpointInfo() {
   GPUBreakpointInfo bp;
-  bp.name_info = {CUDA_API_LIBRARY_NAME, Symbols::CUDBG_CUINIT};
+  bp.name_info = {CUDA_API_LIBRARY_NAME, Symbols::CUDA_INITIALIZATION_SYMBOL};
   bp.symbol_names.push_back(Symbols::CUDBG_IPC_FLAG_NAME);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_PID);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_REVISION);
