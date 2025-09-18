@@ -232,6 +232,56 @@ DeviceState::DeviceState(const CUDBGAPI_st &api, uint32_t device_id)
                        sm_id);
 }
 
+size_t DeviceState::GetNumPredicateRegisters() {
+  if (m_num_predicate_registers)
+    return *m_num_predicate_registers;
+
+  uint32_t num_predicate_registers = 0;
+  CUDBGResult res =
+      m_api->getNumPredicates(m_device_id, &num_predicate_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::GetNumPredicateRegisters(). "
+                           "getNumPredicates failed: {}",
+                           cudbgGetErrorString(res));
+  }
+  m_num_predicate_registers = static_cast<size_t>(num_predicate_registers);
+  return *m_num_predicate_registers;
+}
+
+size_t DeviceState::GetNumUniformPredicateRegisters() {
+  if (m_num_uniform_predicate_registers)
+    return *m_num_uniform_predicate_registers;
+
+  uint32_t num_uniform_predicate_registers = 0;
+  CUDBGResult res = m_api->getNumUniformPredicates(
+      m_device_id, &num_uniform_predicate_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError(
+        "DeviceInformation::GetNumUniformPredicateRegisters(). "
+        "getNumUniformPredicates failed: {}",
+        cudbgGetErrorString(res));
+  }
+  m_num_uniform_predicate_registers =
+      static_cast<size_t>(num_uniform_predicate_registers);
+  return *m_num_uniform_predicate_registers;
+}
+
+size_t DeviceState::GetNumUniformRegisters() {
+  if (m_num_uniform_registers)
+    return *m_num_uniform_registers;
+
+  uint32_t num_uniform_registers = 0;
+  CUDBGResult res =
+      m_api->getNumUniformRegisters(m_device_id, &num_uniform_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::GetNumUniformRegisters(). "
+                           "getNumUniformRegisters failed: {}",
+                           cudbgGetErrorString(res));
+  }
+  m_num_uniform_registers = static_cast<size_t>(num_uniform_registers);
+  return *m_num_uniform_registers;
+}
+
 size_t DeviceState::GetNumRRegisters() {
   if (m_num_r_registers)
     return *m_num_r_registers;
