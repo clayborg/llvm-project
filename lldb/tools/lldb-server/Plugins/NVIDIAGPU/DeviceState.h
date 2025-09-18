@@ -308,6 +308,12 @@ public:
   ///     The number of R registers for the device.
   size_t GetNumRRegisters();
 
+  size_t GetNumPredicateRegisters();
+
+  size_t GetNumUniformRegisters();
+
+  size_t GetNumUniformPredicateRegisters();
+
   /// Update all device state information from the CUDA debugger API.
   ///
   /// This method performs a batch update of all dynamic state information
@@ -366,6 +372,12 @@ private:
 
   /// The number of R registers available on this device (cached).
   std::optional<size_t> m_num_r_registers;
+
+  std::optional<size_t> m_num_predicate_registers;
+
+  std::optional<size_t> m_num_uniform_registers;
+
+  std::optional<size_t> m_num_uniform_predicate_registers;
 
   /// The total number of streaming multiprocessors on this device.
   uint32_t m_num_sms;
