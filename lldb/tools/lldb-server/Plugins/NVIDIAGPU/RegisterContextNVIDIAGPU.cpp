@@ -331,6 +331,89 @@ CUDBGAPI RegisterContextNVIDIAGPU::GetDebuggerAPI() {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
+static void ReadRRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                     const PhysicalCoords &physical_coords,
+                                     ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumRRegisters();
+
+  CUDBGResult res = api->readRegisterRange(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
+      physical_coords.thread_id, 0, num_regs, regs.val.R);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readRegisterRange failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i)
+    regs.is_valid.R[i] = true;
+}
+
+static void
+ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                 const PhysicalCoords &physical_coords,
+                                 ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumPredicateRegisters();
+  if (num_regs == 0)
+    return;
+
+  CUDBGResult res = api->readPredicates(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
+      physical_coords.thread_id, num_regs, regs.val.P);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readPredicates failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i)
+    regs.is_valid.P[i] = true;
+}
+
+static void
+ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                               const PhysicalCoords &physical_coords,
+                               ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumUniformRegisters();
+  if (num_regs == 0)
+    return;
+
+  CUDBGResult res = api->readUniformRegisterRange(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id, 0,
+      num_regs, regs.val.UR);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readUniformRegisterRange failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i)
+    regs.is_valid.UR[i] = true;
+}
+
+static void
+ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                        const PhysicalCoords &physical_coords,
+                                        ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumUniformPredicateRegisters();
+  if (num_regs == 0)
+    return;
+
+  CUDBGResult res = api->readUniformPredicates(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
+      num_regs, regs.val.UP);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readUniformPredicates failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i) {
+    regs.val.UP[i] = regs.val.UP[i] & 0x1;
+    regs.is_valid.UP[i] = true;
+  }
+}
+
 const ThreadRegistersWithValidity &
 RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   if (m_regs)
@@ -365,25 +448,25 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
     }
   }
 
-  DeviceState &device_info =
-      GetGPUThread().GetGPU().GetAllDevices()[physical_coords.dev_id];
-  size_t num_regs = device_info.GetNumRRegisters();
-  num_regs = std::min(num_regs, kNumRRegs);
+    DeviceState &device_info =
+        GetGPUThread().GetGPU().GetAllDevices()[physical_coords.dev_id];
 
-  CUDBGResult res = api->readRegisterRange(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      physical_coords.thread_id, 0, num_regs, regs.val.R);
+    ReadRRegistersFromDevice(device_info, api, physical_coords, regs);
+    ReadPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
+    ReadUniformRegistersFromDevice(device_info, api, physical_coords, regs);
+    ReadUniformPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
 
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
-                           "readRegisterRange failed: {}",
-                           cudbgGetErrorString(res));
-  }
+    {
+      regs.val.RZ = 0;
+      regs.is_valid.RZ = true;
+    }
 
-  for (size_t i = 0; i < num_regs; ++i)
-    regs.is_valid.R[i] = true;
+    {
+      regs.val.URZ = 0;
+      regs.is_valid.URZ = true;
+    }
 
-  return regs;
+    return regs;
 }
 
 uint32_t RegisterContextNVIDIAGPU::GetRegisterSetCount() const {
@@ -430,13 +513,21 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
     if (!regs.is_valid.R[sass::SASS_RA_REG_LO] ||
         !regs.is_valid.R[sass::SASS_RA_REG_HI])
       return Status("RA register is invalid");
-  } else {
-    int r_index = reg_num - LLDB_R0;
-
-    if (r_index < 0 || r_index >= (int)kNumRRegs)
-      return Status::FromErrorStringWithFormatv("unknown R{} register",
-                                                r_index);
-
+  } else if (reg_num >= static_cast<int>(kNumRegs)) {
+    return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
+  } else if (int up_index = reg_num - LLDB_UP0; up_index >= 0) {
+    if (!regs.is_valid.UP[up_index])
+      return Status::FromErrorStringWithFormatv("UP{} register is invalid",
+                                                up_index);
+  } else if (int p_index = reg_num - LLDB_P0; p_index >= 0) {
+    if (!regs.is_valid.P[p_index])
+      return Status::FromErrorStringWithFormatv("P{} register is invalid",
+                                                p_index);
+  } else if (int ur_index = reg_num - LLDB_UR0; ur_index >= 0) {
+    if (!regs.is_valid.UR[ur_index])
+      return Status::FromErrorStringWithFormatv("UR{} register is invalid",
+                                                ur_index);
+  } else if (int r_index = reg_num - LLDB_R0; r_index >= 0) {
     if (!regs.is_valid.R[r_index])
       return Status::FromErrorStringWithFormatv("R{} register is invalid",
                                                 r_index);
