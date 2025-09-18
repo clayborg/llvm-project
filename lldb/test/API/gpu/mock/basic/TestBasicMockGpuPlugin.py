@@ -151,6 +151,16 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("ts mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,
