@@ -86,10 +86,10 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
   if (error.Fail())
     return ToError(error);
   dap.SetTarget(target);
-
   // Run any pre run LLDB commands the user specified in the launch.json
-  if (Error err = dap.RunPreRunCommands())
+  if (Error err = dap.RunPreRunCommands()) {
     return err;
+  }
 
   if ((args.pid == LLDB_INVALID_PROCESS_ID ||
        args.gdbRemotePort == LLDB_DAP_INVALID_PORT) &&
@@ -131,7 +131,7 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
       connect_url += std::to_string(args.gdbRemotePort);
       dap.target.ConnectRemote(listener, connect_url.c_str(), "gdb-remote",
                                error);
-    } else {
+    } else if (!target_id.has_value()) {
       // Attach by pid or process name.
       lldb::SBAttachInfo attach_info;
       if (args.pid != LLDB_INVALID_PROCESS_ID)

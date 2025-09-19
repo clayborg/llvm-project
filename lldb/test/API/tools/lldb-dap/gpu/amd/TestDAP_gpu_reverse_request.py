@@ -100,8 +100,6 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         self.do_continue_on(GPU_PROCESS_UNIQUE_ID)
         # Continue main session
         self.do_continue()
-        self.dap_server.wait_for_stopped()
-        self.do_continue()
         # Verify that the GPU breakpoint is hit in the child session
         self.verify_breakpoint_hit_on(GPU_PROCESS_UNIQUE_ID, gpu_breakpoint_ids, timeout=self.DEFAULT_TIMEOUT * 3)
         
