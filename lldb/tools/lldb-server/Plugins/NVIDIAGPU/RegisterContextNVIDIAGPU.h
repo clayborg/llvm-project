@@ -30,25 +30,26 @@ static constexpr size_t kNumUPRegs = 8;
 struct ThreadRegistersValues {
   uint64_t PC;
   uint64_t errorPC;
-  uint32_t R[kNumRRegs];
-  uint32_t RZ;             // R255 - zero register
-  uint32_t P[kNumPRegs];   // Predicate registers (1-bit each, stored in bytes)
-  uint32_t UR[kNumURRegs]; // Uniform registers
-  uint32_t URZ;            // UR255 - uniform zero register
-  uint32_t UP[kNumUPRegs]; // Uniform predicate registers (1-bit each, stored in
-                           // bytes)
+  uint32_t regular[kNumRRegs];
+  uint32_t regular_zero; // R255 - zero register
+  uint32_t
+      predicate[kNumPRegs]; // Predicate registers (1-bit each, stored in bytes)
+  uint32_t uniform[kNumURRegs];           // Uniform registers
+  uint32_t uniform_zero;                  // UR255 - uniform zero register
+  uint32_t uniform_predicate[kNumUPRegs]; // Uniform predicate registers (1-bit
+                                          // each, stored in bytes)
 };
 
 /// Store the validity of the registers.
 struct ThreadRegisterValidity {
   bool PC;
   bool errorPC;
-  bool R[kNumRRegs];
-  bool RZ;             // R255 validity
-  bool P[kNumPRegs];   // Predicate register validity
-  bool UR[kNumURRegs]; // Uniform register validity
-  bool URZ;            // UR255 validity
-  bool UP[kNumUPRegs]; // Uniform predicate register validity
+  bool regular[kNumRRegs];
+  bool regular_zero;                  // R255 validity
+  bool predicate[kNumPRegs];          // Predicate register validity
+  bool uniform[kNumURRegs];           // Uniform register validity
+  bool uniform_zero;                  // UR255 validity
+  bool uniform_predicate[kNumUPRegs]; // Uniform predicate register validity
 
   ThreadRegisterValidity();
 };
