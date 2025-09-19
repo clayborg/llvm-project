@@ -5153,14 +5153,14 @@ Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
     : TargetEventData(target_sp, module_list, "") {}
 
 Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
-                                         std::string dap_session_name)
-    : TargetEventData(target_sp, ModuleList(), std::move(dap_session_name)) {}
+                                         std::string session_name)
+    : TargetEventData(target_sp, ModuleList(), std::move(session_name)) {}
 
 Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
                                          const ModuleList &module_list,
-                                         std::string dap_session_name)
+                                         std::string session_name)
     : EventData(), m_target_sp(target_sp), m_module_list(module_list),
-      m_dap_session_name(std::move(dap_session_name)) {}
+      m_session_name(std::move(session_name)) {}
 
 Target::TargetEventData::~TargetEventData() = default;
 
@@ -5197,10 +5197,10 @@ TargetSP Target::TargetEventData::GetTargetFromEvent(const Event *event_ptr) {
 }
 
 llvm::StringRef
-Target::TargetEventData::GetDAPSessionNameFromEvent(const Event *event_ptr) {
+Target::TargetEventData::GetSessionNameFromEvent(const Event *event_ptr) {
   const TargetEventData *event_data = GetEventDataFromEvent(event_ptr);
   if (event_data)
-    return event_data->m_dap_session_name;
+    return event_data->m_session_name;
   return llvm::StringRef();
 }
 

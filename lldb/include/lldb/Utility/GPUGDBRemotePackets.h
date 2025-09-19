@@ -228,7 +228,7 @@ struct GPUActions {
   /// The name of the plugin.
   std::string plugin_name;
   /// The name to give a DAP session
-  std::string dap_session_name;
+  std::string session_name;
   /// Unique identifier for every GPU action.
   uint32_t identifier = 0;
   /// The stop ID in the process that this action is associated with. If the

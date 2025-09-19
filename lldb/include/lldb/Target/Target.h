@@ -558,12 +558,10 @@ public:
     TargetEventData(const lldb::TargetSP &target_sp,
                     const ModuleList &module_list);
 
-    TargetEventData(const lldb::TargetSP &target_sp,
-                    std::string dap_session_name);
+    TargetEventData(const lldb::TargetSP &target_sp, std::string session_name);
 
     TargetEventData(const lldb::TargetSP &target_sp,
-                    const ModuleList &module_list,
-                    std::string dap_session_name);
+                    const ModuleList &module_list, std::string session_name);
 
     ~TargetEventData() override;
 
@@ -573,7 +571,7 @@ public:
       return TargetEventData::GetFlavorString();
     }
 
-    static llvm::StringRef GetDAPSessionNameFromEvent(const Event *event_ptr);
+    static llvm::StringRef GetSessionNameFromEvent(const Event *event_ptr);
 
     void Dump(Stream *s) const override;
 
@@ -590,7 +588,7 @@ public:
   private:
     lldb::TargetSP m_target_sp;
     ModuleList m_module_list;
-    std::string m_dap_session_name = "";
+    std::string m_session_name = "";
 
     TargetEventData(const TargetEventData &) = delete;
     const TargetEventData &operator=(const TargetEventData &) = delete;
@@ -611,6 +609,12 @@ public:
   static void SetDefaultArchitecture(const ArchSpec &arch);
 
   bool IsDummyTarget() const { return m_is_dummy_target; }
+
+  /// Get the unique ID for this target.
+  ///
+  /// \return
+  ///     The unique ID for this target, or 0 if no ID has been assigned.
+  uint32_t GetUniqueID() const { return m_target_unique_id; }
 
   const std::string &GetLabel() const { return m_label; }
 
@@ -1700,6 +1704,7 @@ protected:
   bool m_suppress_stop_hooks; /// Used to not run stop hooks for expressions
   bool m_is_dummy_target;
   unsigned m_next_persistent_variable_index = 0;
+  uint32_t m_target_unique_id = 0; /// The unique ID assigned to this target
   /// An optional \a lldb_private::Trace object containing processor trace
   /// information of this target.
   lldb::TraceSP m_trace_sp;

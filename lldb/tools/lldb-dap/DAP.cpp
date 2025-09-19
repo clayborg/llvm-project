@@ -1498,7 +1498,7 @@ void DAP::EventThread() {
           attach_config.try_emplace("type", "lldb");
           attach_config.try_emplace("targetId", target_id);
           const char *session_name =
-              lldb::SBTarget::GetDAPSessionNameFromEvent(event);
+              lldb::SBTarget::GetSessionNameFromEvent(event);
           if (session_name && *session_name) {
             attach_config.try_emplace("name", session_name);
           } else {

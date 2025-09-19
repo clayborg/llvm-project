@@ -164,7 +164,7 @@ LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() { }
 
 llvm::StringRef LLDBServerPluginAMDGPU::GetPluginName() { return "amd-gpu"; }
 
-llvm::StringRef LLDBServerPluginAMDGPU::GetDAPSessionName() {
+llvm::StringRef LLDBServerPluginAMDGPU::GetSessionName() {
   return "AMD GPU Session";
 }
 
@@ -467,7 +467,7 @@ bool LLDBServerPluginAMDGPU::ReadyToSetGpuLoaderBreakpointByAddress() {
 GPUActions LLDBServerPluginAMDGPU::SetConnectionInfo() {
   GPUActions actions = GetNewGPUAction();
   actions.connect_info = CreateConnection();
-  actions.dap_session_name = GetDAPSessionName();
+  actions.session_name = GetSessionName();
   return actions;
 }
 
