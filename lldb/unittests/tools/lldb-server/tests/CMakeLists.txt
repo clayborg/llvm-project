@@ -19,3 +19,5 @@ add_lldb_unittest(LLDBServerTests
   )
 
 add_dependencies(LLDBServerTests lldb-server ${ALL_LLDB_TEST_EXECUTABLES})
+
+add_subdirectory(Plugins)

@@ -525,6 +525,10 @@ public:
 
   uint32_t GetMachOCPUSubType() const;
 
+  uint32_t GetElfCPUType() const;
+
+  uint32_t GetElfCPUSubType() const;
+
   /// Architecture data byte width accessor
   ///
   /// \return the size in 8-bit (host) bytes of a minimum addressable unit

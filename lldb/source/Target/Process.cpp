@@ -1941,8 +1941,8 @@ size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf,
   }
   // We have an address that can't be resolved in the default address space, so
   // we need to call the overload that knows how to read from an address space.
-  llvm::Expected<AddressSpaceInfo> info = 
-      GetAddressSpaceInfo(addr_spec.GetSpaceName());
+  llvm::Expected<AddressSpaceInfo> info = addr_spec.GetAddressSpaceInfo(*this);
+
   if (info)
     return DoReadMemory(addr_spec, *info, buf, size, error);
   error = Status::FromError(info.takeError());
@@ -6895,13 +6895,13 @@ llvm::Expected<lldb::ThreadSP> AddressSpec::GetThread() const {
   return m_thread_wp.lock();
 }
 
-llvm::Expected<uint64_t>
-AddressSpec::GetSpaceIndex(lldb_private::Process &process) const {
-  llvm::Expected<AddressSpaceInfo> info = 
-      process.GetAddressSpaceInfo(GetSpaceName());
-  if (info)
-    return info->value;
-  return info.takeError();
+llvm::Expected<AddressSpaceInfo>
+AddressSpec::GetAddressSpaceInfo(lldb_private::Process &process) const {
+  if (m_addr_space_id.has_value())
+    return process.GetAddressSpaceInfo(*m_addr_space_id);
+  if (m_addr_space_name.has_value())
+    return process.GetAddressSpaceInfo(GetSpaceName());
+  return llvm::createStringError("AddressSpec has no address space info");
 }
 
 llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
@@ -6977,4 +6977,17 @@ Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
     first = false;
   }
   return llvm::createStringError(error_str.c_str());
+}
+
+
+llvm::Expected<AddressSpaceInfo> 
+Process::GetAddressSpaceInfo(uint64_t address_space_id) {
+  if (m_address_spaces.empty())
+    return llvm::createStringError("process doesn't support address spaces");
+
+  for (const auto &address_space_info: m_address_spaces) {
+    if (address_space_info.value == address_space_id)
+      return address_space_info;
+  }
+  return llvm::createStringError("invalid address space id");
 }

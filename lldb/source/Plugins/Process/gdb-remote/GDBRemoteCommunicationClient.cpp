@@ -2359,7 +2359,14 @@ bool GDBRemoteCommunicationClient::GetCurrentProcessInfo(bool allow_lazy) {
 
       // Set the ArchSpec from the triple if we have it.
       if (!triple.empty()) {
-        m_process_arch.SetTriple(triple.c_str());
+        llvm::Triple llvm_triple(triple);
+        if (llvm_triple.isAMDGPU() && cpu != LLDB_INVALID_CPUTYPE &&
+            llvm_triple.getObjectFormat() == llvm::Triple::ELF) {
+          m_process_arch.SetArchitecture(eArchTypeELF, cpu, sub);
+          m_process_arch.MergeFrom(ArchSpec(llvm_triple));
+        } else {
+          m_process_arch.SetTriple(triple.c_str());
+        }
         m_process_arch.SetFlags(elf_abi);
         if (pointer_byte_size) {
           assert(pointer_byte_size == m_process_arch.GetAddressByteSize());

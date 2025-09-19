@@ -10,11 +10,14 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Expression/DWARFExpression.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/ExecutionContext.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
 #include "lldb/Utility/RegisterValue.h"
@@ -337,15 +340,31 @@ Status RegisterContext::ReadRegisterValueFromMemory(
   if (process_sp) {
     RegisterValue::BytesContainer src(src_len);
 
-    // Read the memory
-    const uint32_t bytes_read =
-        process_sp->ReadMemory(src_addr, src.data(), src_len, error);
+    // Check if the ABI specifies a default address space for saved registers
+    size_t bytes_read = 0;
+    if (ABI *abi = process_sp->GetABI().get()) {
+      if (std::optional<uint64_t> default_addr_space =
+              abi->GetDefaultAddressSpaceForSavedRegisters()) {
+        // Use the ABI-specified address space
+        ThreadSP thread_sp = m_thread.shared_from_this();
+        AddressSpec addr_spec(src_addr, *default_addr_space, thread_sp);
+        bytes_read =
+            process_sp->ReadMemory(addr_spec, src.data(), src_len, error);
+      } else {
+        // Standard memory read for architectures without special address spaces
+        bytes_read =
+            process_sp->ReadMemory(src_addr, src.data(), src_len, error);
+      }
+    } else {
+      // No ABI available, use standard memory read
+      bytes_read = process_sp->ReadMemory(src_addr, src.data(), src_len, error);
+    }
 
     // Make sure the memory read succeeded...
     if (bytes_read != src_len) {
       if (error.Success()) {
         // This might happen if we read _some_ bytes but not all
-        return Status::FromErrorStringWithFormat("read %u of %u bytes",
+        return Status::FromErrorStringWithFormat("read %zu of %u bytes",
                                                  bytes_read, src_len);
       }
       return error;
@@ -440,10 +459,7 @@ ThreadSP RegisterContext::CalculateThread() {
 }
 
 StackFrameSP RegisterContext::CalculateStackFrame() {
-  // Register contexts might belong to many frames if we have inlined functions
-  // inside a frame since all inlined functions share the same registers, so we
-  // can't definitively say which frame we come from...
-  return StackFrameSP();
+  return m_thread.GetStackFrameAtIndex(m_concrete_frame_idx);
 }
 
 void RegisterContext::CalculateExecutionContext(ExecutionContext &exe_ctx) {
@@ -464,4 +480,35 @@ bool RegisterContext::ConvertBetweenRegisterKinds(lldb::RegisterKind source_rk,
     }
   }
   return false;
+}
+
+llvm::Error RegisterContext::ReadRegister(lldb::RegisterKind kind, 
+                                          lldb::regnum64_t num, 
+                                          RegisterValue &reg_value) {
+  auto create_default_error = [kind, num]() {
+    return llvm::createStringError(
+        "unable to read register kind=%u reg_num=%u", kind, num);
+  };
+
+  const uint32_t native_reg = ConvertRegisterKindToRegisterNumber(kind, num);
+  if (native_reg != LLDB_INVALID_REGNUM) {
+    const RegisterInfo *reg_info = GetRegisterInfoAtIndex(native_reg);
+    if (ReadRegister(reg_info, reg_value))
+      return llvm::Error::success();
+    return create_default_error();
+  }
+
+  TargetSP target_sp = CalculateTarget();
+  if (!target_sp)
+    return create_default_error();
+  PlatformSP platform_sp(target_sp->GetPlatform());
+  if (!platform_sp)
+    return create_default_error();
+  std::optional<llvm::Error> error = 
+      platform_sp->ReadVirtualRegister(CalculateStackFrame(), kind, num, 
+                                       reg_value);
+  if (error.has_value())
+    return std::move(*error); // The platform supports virtual registers.
+  // The platform doesn't support virtual registers.  
+  return create_default_error(); 
 }

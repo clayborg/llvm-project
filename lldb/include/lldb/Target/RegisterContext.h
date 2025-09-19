@@ -37,6 +37,19 @@ public:
 
   virtual lldb::ByteOrder GetByteOrder();
 
+  /// Read a register from the register context by kind and a kind specific 
+  /// register number.
+  ///
+  /// This function will read a register from the register context by kind and
+  /// a kind specific register number.  If the kind + num can be converted back
+  /// into a LLDB register number, this function will call ReadRegister with
+  /// the appropriate RegisterInfo. Otherwise this function will check if the
+  /// platform supports virtual register numbers for the specified kind and 
+  /// attempt to resolve the virtual register value through the platform.
+  virtual llvm::Error ReadRegister(lldb::RegisterKind kind, 
+                                   lldb::regnum64_t num,
+                                   RegisterValue &reg_value);
+
   virtual bool ReadRegister(const RegisterInfo *reg_info,
                             RegisterValue &reg_value) = 0;
 

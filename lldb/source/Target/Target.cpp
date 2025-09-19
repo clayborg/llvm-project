@@ -185,6 +185,7 @@ Target::Target(Debugger &debugger, const ArchSpec &target_arch,
       m_is_dummy_target(is_dummy_target),
       m_frame_recognizer_manager_up(
           std::make_unique<StackFrameRecognizerManager>()) {
+  UpdateArchitecture(target_arch);
   SetEventName(eBroadcastBitBreakpointChanged, "breakpoint-changed");
   SetEventName(eBroadcastBitModulesLoaded, "modules-loaded");
   SetEventName(eBroadcastBitModulesUnloaded, "modules-unloaded");
@@ -1599,7 +1600,7 @@ void Target::SetExecutableModule(ModuleSP &executable_sp,
     // If we haven't set an architecture yet, reset our architecture based on
     // what we found in the executable module.
     if (!m_arch.GetSpec().IsValid()) {
-      m_arch = executable_sp->GetArchitecture();
+      UpdateArchitecture(executable_sp->GetArchitecture());
       LLDB_LOG(log,
                "Target::SetExecutableModule setting architecture to {0} ({1}) "
                "based on executable file",
@@ -1739,7 +1740,7 @@ bool Target::SetArchitecture(const ArchSpec &arch_spec, bool set_platform,
     // update the architecture, unless the one we already have is more
     // specified
     if (replace_local_arch)
-      m_arch = other;
+      UpdateArchitecture(other);
     LLDB_LOG(log,
              "Target::SetArchitecture merging compatible arch; arch "
              "is now {0} ({1})",
@@ -1757,7 +1758,7 @@ bool Target::SetArchitecture(const ArchSpec &arch_spec, bool set_platform,
       arch_spec.GetTriple().getTriple().c_str(),
       m_arch.GetSpec().GetArchitectureName(),
       m_arch.GetSpec().GetTriple().getTriple().c_str());
-  m_arch = other;
+  UpdateArchitecture(other);
   ModuleSP executable_sp = GetExecutableModule();
 
   ClearModules(true);
@@ -1805,6 +1806,16 @@ bool Target::MergeArchitecture(const ArchSpec &arch_spec) {
     }
   }
   return false;
+}
+
+void Target::UpdateArchitecture(const ArchSpec &arch_spec) {
+  m_arch = arch_spec;
+
+  if (!GetDisassemblyCPU()) {
+    const std::string cpu = arch_spec.GetClangTargetCPU();
+    if (!cpu.empty())
+      SetDisassemblyCPU(cpu);
+  }
 }
 
 void Target::NotifyWillClearList(const ModuleList &module_list) {}
@@ -4559,6 +4570,11 @@ const char *TargetProperties::GetDisassemblyCPU() const {
   llvm::StringRef str = GetPropertyAtIndexAs<llvm::StringRef>(
       idx, g_target_properties[idx].default_cstr_value);
   return str.empty() ? nullptr : str.data();
+}
+
+void TargetProperties::SetDisassemblyCPU(llvm::StringRef cpu) {
+  const uint32_t idx = ePropertyDisassemblyCPU;
+  SetPropertyAtIndex(idx, cpu);
 }
 
 const char *TargetProperties::GetDisassemblyFeatures() const {

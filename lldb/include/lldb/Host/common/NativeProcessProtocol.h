@@ -245,6 +245,10 @@ public:
 
   uint32_t GetStopID() const;
 
+  // Return the next stop ID. If the state is running, it will return the next
+  // stop ID, else if it is stopped, it will return the current stop ID.
+  uint32_t GetNextStopID() const;
+
   // Callbacks for low-level process state changes
   class NativeDelegate {
   public:

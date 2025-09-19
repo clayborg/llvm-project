@@ -94,36 +94,35 @@ void DWARFExpression::SetRegisterKind(RegisterKind reg_kind) {
 llvm::Error
 DWARFExpression::ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
                                            lldb::RegisterKind reg_kind,
-                                           uint32_t reg_num, Value &value) {
+                                           lldb::regnum64_t reg_num, 
+                                           Value &value) {
   if (reg_ctx == nullptr)
     return llvm::createStringError("no register context in frame");
 
-  const uint32_t native_reg =
-      reg_ctx->ConvertRegisterKindToRegisterNumber(reg_kind, reg_num);
-  if (native_reg == LLDB_INVALID_REGNUM)
-    return llvm::createStringError(
-        "unable to convert register kind=%u reg_num=%u to a native "
-        "register number",
-        reg_kind, reg_num);
-
-  const RegisterInfo *reg_info = reg_ctx->GetRegisterInfoAtIndex(native_reg);
+  // Read the register kind + number via the register context to allow virtual
+  // register support.
   RegisterValue reg_value;
-  if (reg_ctx->ReadRegister(reg_info, reg_value)) {
-    if (reg_value.GetScalarValue(value.GetScalar())) {
-      value.SetValueType(Value::ValueType::Scalar);
+  llvm::Error error = reg_ctx->ReadRegister(reg_kind, reg_num, reg_value);
+  if (error)
+    return error;
+                                            
+  const RegisterInfo *reg_info = reg_ctx->GetRegisterInfo(reg_kind, reg_num);
+  if (reg_value.GetScalarValue(value.GetScalar())) {
+    value.SetValueType(Value::ValueType::Scalar);
+    if (reg_info)
       value.SetContext(Value::ContextType::RegisterInfo,
-                       const_cast<RegisterInfo *>(reg_info));
-      return llvm::Error::success();
-    }
-
-    // If we get this error, then we need to implement a value buffer in
-    // the dwarf expression evaluation function...
-    return llvm::createStringError(
-        "register %s can't be converted to a scalar value", reg_info->name);
+                       const_cast<RegisterInfo *>(reg_info));                       
+    return llvm::Error::success();
   }
 
-  return llvm::createStringError("register %s is not available",
-                                 reg_info->name);
+  // If we get this error, then we need to implement a value buffer in
+  // the dwarf expression evaluation function...
+  if (reg_info)
+    return llvm::createStringError(
+        "register %s can't be converted to a scalar value", reg_info->name);
+  else
+    return llvm::createStringError(
+        "register can't be converted to a scalar value");
 }
 
 /// Return the length in bytes of the set of operands for \p op. No guarantees
@@ -971,7 +970,7 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
 
   lldb::offset_t offset = 0;
   Value tmp;
-  uint32_t reg_num;
+  lldb::regnum64_t reg_num;
 
   /// Insertion point for evaluating multi-piece expression.
   uint64_t op_piece_offset = 0;
@@ -2386,10 +2385,10 @@ bool DWARFExpression::MatchesOperand(
     offset = opcodes.GetSLEB128(&op_offset);
     reg = reg_ctx_sp->GetRegisterInfo(m_reg_kind, opcode - DW_OP_breg0);
   } else if (opcode == DW_OP_regx) {
-    uint32_t reg_num = static_cast<uint32_t>(opcodes.GetULEB128(&op_offset));
+    lldb::regnum64_t reg_num = opcodes.GetULEB128(&op_offset);
     reg = reg_ctx_sp->GetRegisterInfo(m_reg_kind, reg_num);
   } else if (opcode == DW_OP_bregx) {
-    uint32_t reg_num = static_cast<uint32_t>(opcodes.GetULEB128(&op_offset));
+    lldb::regnum64_t reg_num = opcodes.GetULEB128(&op_offset);
     offset = opcodes.GetSLEB128(&op_offset);
     reg = reg_ctx_sp->GetRegisterInfo(m_reg_kind, reg_num);
   } else {

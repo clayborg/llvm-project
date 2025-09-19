@@ -37,10 +37,19 @@ int gpu_shlib_load() {
 int gpu_third_stop() {
   return puts(__FUNCTION__);
 }
+int gpu_resume_and_wait_for_resume() {
+  return puts(__FUNCTION__);
+}
+int gpu_wait_for_stop() {
+  return puts(__FUNCTION__);
+}
 int main(int argc, const char **argv) {
   gpu_initialize();
   gpu_shlib_load();
   gpu_third_stop();
+  gpu_shlib_load();
+  gpu_resume_and_wait_for_resume();
+  gpu_wait_for_stop();
   gpu_shlib_load();
   return 0; // Break here
 }

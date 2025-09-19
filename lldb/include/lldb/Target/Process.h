@@ -362,7 +362,9 @@ class AddressSpec {
   /// a constructor was called that failed to resolve.
   lldb::addr_t m_value; 
   /// The name of the address space to read from if the value is not empty.
-  std::string m_addr_space;
+  std::optional<std::string> m_addr_space_name;
+  /// The address space integer if this has a value.
+  std::optional<uint64_t> m_addr_space_id;
   /// A module might be required for thread local data for a module, or for
   /// address spaces that are thread specific.
   lldb::ModuleWP m_module_wp;
@@ -374,12 +376,30 @@ public:
   /// Construct an AddressSpec from a load address.
   explicit AddressSpec(lldb::addr_t load_addr) : m_value(load_addr) {}
 
+  /// Construct an AddressSpec from an address and address space integer
+  /// idenentifier and an optional thread.
+  ///
+  /// This method should be used by clients that parse debug info or runtime
+  /// information that contains the address space integer identifier in the
+  /// serialized format.
+  explicit AddressSpec(lldb::addr_t load_addr, uint64_t addr_space_id,
+                       lldb::ThreadSP thread_sp = {}) : 
+      m_value(load_addr), 
+      m_addr_space_id(addr_space_id), 
+      m_thread_wp(thread_sp) {}
+
   /// Construct an AddressSpec from an address and address space and an 
   /// optional thread.
+  ///
+  /// This method should be used by users when specifying options or address
+  /// spaces by name as the users should not know about the numbering schemes
+  /// for address spaces.
   AddressSpec(lldb::addr_t addr, 
               llvm::StringRef addr_space,
               lldb::ThreadSP thread_sp = {}) : 
-      m_value(addr), m_addr_space(addr_space.str()), m_thread_wp(thread_sp) {}
+      m_value(addr), 
+      m_addr_space_name(addr_space.str()), 
+      m_thread_wp(thread_sp) {}
 
   /// Construct an AddressSpec from a file address and its module.
   AddressSpec(lldb::addr_t file_addr, 
@@ -400,7 +420,7 @@ public:
   bool IsInDefaultAddressSpace() const {
     // If we have an address space, then this address can't be in the default
     // address space.
-    return m_addr_space.empty();
+    return !(m_addr_space_name.has_value() || m_addr_space_id.has_value());
   }
 
   /// See if this address spec can be converted a load adderess in the default
@@ -421,13 +441,33 @@ public:
   llvm::Expected<lldb::addr_t> ResolveAddressInDefaultAddressSpace(
       lldb_private::Process &process) const;
 
+  /// \return
+  ///     The address value, which can be a load address, file address, or
+  ///     offset depending on how this AddressSpec was constructed.
   uint64_t GetValue() const { return m_value; }
-  llvm::StringRef GetSpaceName() const { return m_addr_space; }
-  // Convert
-  llvm::Expected<uint64_t> GetSpaceIndex(lldb_private::Process &process) const;
+
+  /// \return
+  ///     A StringRef to the address space name if it was specified via the
+  ///     string-based constructor, or an empty StringRef if no name is set.
+  llvm::StringRef GetSpaceName() const { 
+    if (m_addr_space_name.has_value()) 
+      return *m_addr_space_name;
+    return llvm::StringRef();
+  }
+
+  /// \return
+  ///     An optional containing the address space ID if this AddressSpec was
+  ///     constructed with a numeric address space identifier, or std::nullopt
+  ///     if no numeric ID is set.
+  std::optional<uint64_t> GetSpaceId() const { return m_addr_space_id; }
+
+  llvm::Expected<AddressSpaceInfo> GetAddressSpaceInfo(
+      lldb_private::Process &process) const;
+
   // Return an error if this is module specific and the module has expired, 
   // otherwise return a ModuleSP, even if it is empty.
   llvm::Expected<lldb::ModuleSP> GetModule() const;
+
   // Return an error if this is thread specific and the thread has expired, 
   // otherwise return a ThreadSP, even if it is empty.
   llvm::Expected<lldb::ThreadSP> GetThread() const;
@@ -2867,9 +2907,13 @@ void PruneThreadPlans();
     return m_address_spaces; 
   }
 
-  /// Get the address space number from a address space name.
+  /// Get the address space info from a address space name.
   llvm::Expected<AddressSpaceInfo> 
   GetAddressSpaceInfo(llvm::StringRef address_space_name);
+
+  /// Get the address space info from a address space integer identifier.
+  llvm::Expected<AddressSpaceInfo> 
+  GetAddressSpaceInfo(uint64_t address_space_id);
 
 protected:
   friend class Trace;

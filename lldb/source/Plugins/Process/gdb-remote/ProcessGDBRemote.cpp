@@ -277,7 +277,8 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
       m_addr_to_mmap_size(), m_thread_create_bp_sp(),
       m_waiting_for_attach(false), m_command_sp(), m_breakpoint_pc_offset(0),
       m_initial_tid(LLDB_INVALID_THREAD_ID), m_allow_flash_writes(false),
-      m_erased_flash_ranges(), m_vfork_in_progress_count(0) {
+      m_erased_flash_ranges(), m_vfork_in_progress_count(0),
+      m_sync_state(*this) {
   m_async_broadcaster.SetEventName(eBroadcastBitAsyncThreadShouldExit,
                                    "async thread should exit");
   m_async_broadcaster.SetEventName(eBroadcastBitAsyncContinue,
@@ -919,6 +920,8 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
 Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   // GPUActions need to always be handled by the CPU process. So check if this
   // process is a GPU process by getting its native target.
+  Log *log = GetLog(GDBRLog::Plugin);
+
   TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU();
   if (cpu_target_sp) {
     // This is a GPU process and we need to handle the GPUActions on the CPU
@@ -930,7 +933,7 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
     return Status::FromErrorString("failed to get CPU process from GPU process");
   }
 
-  // This is already the GPU process.
+  // This is the CPU process.
   Status error;
   if (!gpu_action.breakpoints.empty())
     HandleGPUBreakpoints(gpu_action);
@@ -949,7 +952,9 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   //    using stale information, as the GPU target hasn't finished processing
   //    its internal metadata. It's worth mentioning that there are multiple
   //    threads operating on the GPU target.
-  if (!(gpu_action.load_libraries || gpu_action.resume_gpu_process ||
+  if (!(gpu_action.wait_for_gpu_process_to_stop ||
+        gpu_action.load_libraries ||
+        gpu_action.resume_gpu_process ||
         gpu_action.wait_for_gpu_process_to_resume))
     return error;
   lldb::TargetSP gpu_target_sp =
@@ -959,22 +964,60 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   lldb::ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
   if (!gpu_process_sp)
     return error;
-  // Save the resume ID in case we need to wait for the process to resume below.
-  const uint32_t gpu_process_resume_id = gpu_process_sp->GetResumeID();
+  ProcessGDBRemote *gpu_process = (ProcessGDBRemote *)gpu_process_sp.get();
+
+  LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) process = {}",
+           gpu_process->GetID());
+  if (gpu_action.wait_for_gpu_process_to_stop) {
+    if (gpu_action.stop_id.has_value()) {
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) "
+               "gpu_action.wait_for_gpu_process_to_stop");
+      gpu_process->GetSyncState().WaitForStop(*gpu_action.stop_id);
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) process "
+                    "stopped");
+    }
+    else
+      return Status::FromErrorString("GPUActions asked to wait for the GPU "
+                                     "process to stop, but no "
+                                     "GPUActions.stop_id value was set.");
+  }
   if (gpu_action.load_libraries) {
-    llvm::Error error = gpu_process_sp->LoadModules();
+    LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) "
+             "gpu_action.load_libraries");
+    llvm::Error error = gpu_process->LoadModules();
     if (error)
       return Status::FromError(std::move(error));
   }
   if (gpu_action.resume_gpu_process) {
-    error = gpu_process_sp->Resume();
-    if (error.Fail())
+    LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) "
+             "gpu_action.resume_gpu_process");
+    error = gpu_process->Resume();
+    if (error.Fail()) {
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) GPU process "
+               "failed to resume {0}", error);
       return error;
+    } else {
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) GPU process "
+               "resumed successfully");
+    }
   }
   if (gpu_action.wait_for_gpu_process_to_resume) {
-    error = gpu_process_sp->WaitForNextResume(gpu_process_resume_id, 5);
-    if (error.Fail())
+    LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) "
+             "gpu_action.wait_for_gpu_process_to_resume");
+    // The most reliable way to ensure we can sync with the GPU process is if
+    // the GPUActions has a valid stop_id.
+    if (gpu_action.stop_id.has_value()) {
+      gpu_process->GetSyncState().WaitForResume(*gpu_action.stop_id);
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) process "
+               "resumed...");
+    } else {
+      error = Status::FromErrorString("GPUActions asked to wait for the GPU "
+                                      "process to resume, but no "
+                                      "GPUActions.stop_id value was set.");
+      LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) error: {0}",
+               error);
       return error;
+    }
   }
   return Status();
 }
@@ -1723,6 +1766,8 @@ Status ProcessGDBRemote::DoResume(RunDirection direction) {
       auto data_sp =
           std::make_shared<EventDataBytes>(continue_packet.GetString());
       m_async_broadcaster.BroadcastEvent(eBroadcastBitAsyncContinue, data_sp);
+
+      m_sync_state.DidResume();
 
       if (!listener_sp->GetEvent(event_sp, ResumeTimeout())) {
         error = Status::FromErrorString("Resume timed out.");
@@ -2679,6 +2724,13 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         if (!value.getAsInteger(0, addressing_bits)) {
           addressable_bits.SetHighmemAddressableBits(addressing_bits);
         }
+      } else if (key.compare("stop_id") == 0) {
+        // If we get the stop ID from the GDB server, it can help us
+        // to synchronize things between two instaces of ProcessGDBRemote. This
+        // is currently used for GPU plug-ins.
+        uint32_t lldb_server_stop_id = 0;
+        if (!value.getAsInteger(0, lldb_server_stop_id))
+          m_sync_state.SetStateStopped(lldb_server_stop_id);
       } else if (key.compare("gpu-actions") == 0) {
         StringExtractorGDBRemote extractor(value);
         if (std::optional<GPUActions> gpu_actions =
@@ -6335,3 +6387,80 @@ void ProcessGDBRemote::DidExec() {
   }
   Process::DidExec();
 }
+
+#define LOG_HELPER(SUFFIX) LLDB_LOG(log, "pid = {}, SyncState::{}(stop_id={}) "\
+    "m_stop_id = {}, m_state = {} {}", m_process.GetID(), __FUNCTION__, \
+    stop_id, m_stop_id, StateAsCString(m_state.value_or(lldb::eStateInvalid)),\
+    SUFFIX)
+
+void ProcessGDBRemote::SyncState::SetStateStopped(uint64_t stop_id) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  SetStateImpl(stop_id, lldb::eStateStopped);
+  LOG_HELPER("");
+}
+
+void ProcessGDBRemote::SyncState::DidResume() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  SetStateImpl(m_stop_id, lldb::eStateRunning);
+  LLDB_LOG(log, "pid = {}, SyncState::{}() m_stop_id = {}, m_state = {}", 
+           m_process.GetID(), __FUNCTION__,  m_stop_id, 
+           StateAsCString(m_state.value_or(lldb::eStateInvalid)));
+}
+
+
+void ProcessGDBRemote::SyncState::WaitForStop(uint64_t stop_id) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  std::unique_lock<std::mutex> ulock(m_mutex);
+  LOG_HELPER("entering");
+  // Wait for the stop_id to be greater or equal to the contained stop ID.
+  // The stop ID will only be in greater or equal to the contained stop ID
+  // if we have already stopped.
+  m_cv.wait(ulock, [this, stop_id, log]{
+    LOG_HELPER("predicate");
+    if (m_stop_id.has_value()) {
+      if (*m_stop_id >= stop_id) {
+        LOG_HELPER("predicate returning true (m_stop_id >= stop_id)");
+        return true;
+      } else {
+        LOG_HELPER("predicate returning false (m_stop_id < stop_id)");
+      }
+    } else {
+      LOG_HELPER("predicate returning false (m_stop_id has no value)");
+    }
+    return false;
+  });
+  LOG_HELPER("process stopped");
+}
+
+void ProcessGDBRemote::SyncState::WaitForResume(uint64_t stop_id) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  std::unique_lock<std::mutex> ulock(m_mutex);
+  LOG_HELPER("entering");
+  // Wait for the stop_id to be in the map to and for the state to be 
+  // eStateRunning.
+  m_cv.wait(ulock, [this, stop_id, log]{
+    if (m_stop_id.has_value()) {
+      // Check if we are already past the stop_id, if so we can return.
+      if (m_stop_id.value_or(0) > stop_id) {
+        LOG_HELPER("predicate: returning true (m_stop_id > stop_id)");
+        return true;
+      }
+      if (m_stop_id == stop_id) {
+        if (m_state == lldb::eStateRunning) {
+          LOG_HELPER("predicate: returning true (stop ids match and state is "
+                     "running)");
+          return true;
+        }
+        LOG_HELPER("predicate: returning false (stop ids match but state is "
+                     "not running)");
+      } else {
+        LOG_HELPER("predicate: returning false (m_stop_id < stop_id) ");
+      }
+    } else {
+      LOG_HELPER("predicate: returning false (predicate m_stop_id is invalid)");
+    }
+    return false; // Keep waiting
+  });
+  LOG_HELPER("process resumed, success");
+}
+#undef LOG_HELPER

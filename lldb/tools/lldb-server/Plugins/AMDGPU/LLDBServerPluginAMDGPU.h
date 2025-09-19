@@ -10,10 +10,12 @@
 #define LLDB_TOOLS_LLDB_SERVER_LLDBSERVERPLUGINAMDGPU_H
 
 #include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
+#include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/Status.h"
 
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "ProcessAMDGPU.h"
+#include "llvm/ADT/StringRef.h"
 #include <amd-dbgapi/amd-dbgapi.h>
 
 namespace lldb_private {
@@ -53,7 +55,6 @@ public:
                          MainLoop &main_loop);
   ~LLDBServerPluginAMDGPU() override;
   llvm::StringRef GetPluginName() override;
-  int GetEventFileDescriptorAtIndex(size_t idx) override;
   bool HandleEventFileDescriptorEvent(int fd) override;
   GPUActions GetInitializeActions() override;
   std::optional<struct GPUActions> NativeProcessIsStopping() override;
@@ -67,8 +68,13 @@ public:
     return (ProcessAMDGPU *)m_gdb_server->GetCurrentProcess();
   }
 
+  // Free the memory using the matching callback provided to the debug library.
+  void FreeDbgApiClientMemory(void *mem);
+
   bool CreateGPUBreakpoint(uint64_t addr);
   llvm::StringRef GetSessionName();
+
+  void GpuRuntimeDidLoad();
 
   // TODO: make this private
   struct GPUInternalBreakpoinInfo {
@@ -80,21 +86,27 @@ public:
   amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
 
 private:
+  Status InitializeAmdDbgApi();
+  Status AttachAmdDbgApi();
+  Status DetachAmdDbgApi();
+  Status InstallAmdDbgApiNotifierOnMainLoop();
+  Status CreateGpuProcess();
   std::optional<GPUPluginConnectionInfo> CreateConnection();
-  void CloseFDs();
-  void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
+  GPUActions SetGpuLoaderBreakpointByAddress();
+  GPUActions SetConnectionInfo();
+  Status HandleAmdDbgApiAttachError(llvm::StringRef error_msg,
+                                    amd_dbgapi_status_t status);
 
-  bool initRocm();
-  bool HandleGPUInternalBreakpointHit(const GPUInternalBreakpoinInfo &bp,
-                                      bool &has_new_libraries);
+  bool HandleGPUInternalBreakpointHit(const GPUInternalBreakpoinInfo &bp);
   amd_dbgapi_event_id_t
   process_event_queue(amd_dbgapi_event_kind_t until_event_kind);
   bool processGPUEvent();
   bool SetGPUBreakpoint(uint64_t addr, const uint8_t *bp_instruction,
                         size_t size);
+  bool ReadyToAttachDebugLibrary();
+  bool ReadyToSendConnectionRequest();
+  bool ReadyToSetGpuLoaderBreakpointByAddress();
 
-  // Used with a socketpair to get events on the native ptrace event queue.
-  int m_fds[2] = {-1, -1};
   Status m_main_loop_status;
   MainLoopBase::ReadHandleUP m_gpu_event_read_up;
   std::vector<MainLoopBase::ReadHandleUP> m_read_handles;
@@ -102,7 +114,17 @@ private:
   std::shared_ptr<GPUIOObject> m_gpu_event_io_obj_sp;
 
   amd_dbgapi_process_id_t m_gpu_pid = AMD_DBGAPI_PROCESS_NONE;
-  int m_notifier_fd = -1;
+  static constexpr int INVALID_NOTIFIER_ID = -1;
+  int m_notifier_fd = INVALID_NOTIFIER_ID;
+  enum class AmdDbgApiState {
+    Uninitialized,
+    Initialized,
+    Attached,
+    RuntimeLoaded,
+    Detached,
+    Error,
+  };
+  AmdDbgApiState m_amd_dbg_api_state = AmdDbgApiState::Uninitialized;
 };
 
 } // namespace lldb_server

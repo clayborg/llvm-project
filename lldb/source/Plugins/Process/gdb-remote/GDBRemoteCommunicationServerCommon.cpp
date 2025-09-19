@@ -1267,6 +1267,16 @@ void GDBRemoteCommunicationServerCommon::
     response.PutCString("triple:");
     response.PutStringAsRawHex8(proc_triple.getTriple());
     response.PutChar(';');
+    if (proc_arch.GetTriple().isAMDGPU() &&
+        proc_arch.GetTriple().getObjectFormat() == llvm::Triple::ELF) {
+      const uint32_t cpu_type = proc_arch.GetElfCPUType();
+      if (cpu_type != 0)
+        response.Printf("cputype:%" PRIx32 ";", cpu_type);
+
+      const uint32_t cpu_subtype = proc_arch.GetElfCPUSubType();
+      if (cpu_subtype != 0)
+        response.Printf("cpusubtype:%" PRIx32 ";", cpu_subtype);
+    }
 #endif
     std::string ostype = std::string(proc_triple.getOSName());
     // Adjust so ostype reports ios for Apple/ARM and Apple/ARM64.

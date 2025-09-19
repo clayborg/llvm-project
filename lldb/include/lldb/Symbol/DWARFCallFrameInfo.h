@@ -80,7 +80,7 @@ public:
       const std::function<bool(lldb::addr_t, uint32_t, dw_offset_t)> &callback);
 
 private:
-  enum { CFI_AUG_MAX_SIZE = 8, CFI_HEADER_SIZE = 8 };
+  enum { CFI_AUG_MAX_SIZE = 12, CFI_HEADER_SIZE = 8 };
   enum CFIVersion {
     CFI_VERSION1 = 1, // DWARF v.2
     CFI_VERSION3 = 3, // DWARF v.3
@@ -173,6 +173,7 @@ private:
   lldb::RegisterKind GetRegisterKind() const {
     return m_type == EH ? lldb::eRegisterKindEHFrame : lldb::eRegisterKindDWARF;
   }
+  friend class DWARFCallFrameInfoTest;
 };
 
 } // namespace lldb_private

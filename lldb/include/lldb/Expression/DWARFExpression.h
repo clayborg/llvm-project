@@ -165,7 +165,8 @@ public:
 
   static llvm::Error ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
                                                lldb::RegisterKind reg_kind,
-                                               uint32_t reg_num, Value &value);
+                                               lldb::regnum64_t reg_num, 
+                                               Value &value);
 
 private:
   /// A data extractor capable of reading opcode bytes

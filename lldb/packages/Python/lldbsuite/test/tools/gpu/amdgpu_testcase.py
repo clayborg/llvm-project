@@ -25,6 +25,7 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
         self.assertEqual(cpu_target, self.cpu_target)
 
         # Switch to the GPU target so we can set a breakpoint.
+        self.assertTrue(self.gpu_target.IsValid())
         self.select_gpu()
 
         # Set a breakpoint in the GPU source.

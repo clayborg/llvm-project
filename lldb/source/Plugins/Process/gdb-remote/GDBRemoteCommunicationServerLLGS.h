@@ -150,17 +150,15 @@ protected:
 
   PacketResult SendWResponse(NativeProcessProtocol *process);
 
-  StreamString PrepareStopReplyPacketForThread(NativeThreadProtocol &thread);
+  StreamGDBRemote PrepareStopReplyPacketForThread(NativeThreadProtocol &thread);
 
   PacketResult SendStopReplyPacketForThread(NativeProcessProtocol &process,
                                             lldb::tid_t tid,
-                                            bool force_synchronous,
-                                            llvm::StringRef extra_stop_reply_args = {});
+                                            bool force_synchronous);
 
   PacketResult SendStopReasonForState(NativeProcessProtocol &process,
                                       lldb::StateType process_state,
-                                      bool force_synchronous, 
-                                      llvm::StringRef extra_stop_reply_args = {});
+                                      bool force_synchronous);
 
   void EnqueueStopReplyPackets(lldb::tid_t thread_to_skip);
 

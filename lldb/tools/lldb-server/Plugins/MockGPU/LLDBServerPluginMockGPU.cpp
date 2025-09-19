@@ -24,6 +24,14 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
+enum {
+  BreakpointIDInitialize = 1,
+  BreakpointIDShlibLoad = 2,
+  BreakpointIDThirdStop = 3,
+  BreakpointIDResumeAndWaitForResume = 4,
+  BreakpointIDWaitForStop = 5
+};
+
 LLDBServerPluginMockGPU::LLDBServerPluginMockGPU(
   LLDBServerPlugin::GDBServer &native_process, MainLoop &main_loop)
     : LLDBServerPlugin(native_process, main_loop) {
@@ -148,7 +156,7 @@ std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
     GPUActions actions;
     actions.plugin_name = GetPluginName();
     GPUBreakpointInfo bp;
-    bp.identifier = "3rd stop breakpoint";
+    bp.identifier = BreakpointIDThirdStop;
     bp.name_info = {"a.out", "gpu_third_stop"};
     actions.breakpoints.emplace_back(std::move(bp));
     return actions;
@@ -158,20 +166,22 @@ std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
 
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
+  const auto bp_identifier = args.breakpoint.identifier;
   Log *log = GetLog(GDBRLog::Plugin);
-  std::string json_string;
-  std::string &bp_identifier = args.breakpoint.identifier;
-  llvm::raw_string_ostream os(json_string);
-  os << toJSON(args);
-  LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(\"%s\"):\nJSON:\n%s", 
-            bp_identifier.c_str(), json_string.c_str());
-
-  GPUPluginBreakpointHitResponse response;
-  response.actions.plugin_name = GetPluginName();
-  if (bp_identifier == "gpu_initialize") {
+  if (log) {
+    std::string json_string;
+    llvm::raw_string_ostream os(json_string);
+    os << toJSON(args);
+    LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(%u):\nJSON:\n%s", 
+              bp_identifier, json_string.c_str());
+  }
+  NativeProcessProtocol *gpu_process = m_gdb_server->GetCurrentProcess();
+  GPUPluginBreakpointHitResponse response(GetPluginName(), 
+                                          gpu_process->GetStopID());
+  if (bp_identifier == BreakpointIDInitialize) {
     response.disable_bp = true;
-    LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(\"%s\") disabling breakpoint", 
-              bp_identifier.c_str());
+    LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(%u) disabling breakpoint", 
+              bp_identifier);
     response.actions.connect_info = CreateConnection();
     response.actions.session_name = "Mock GPU Session";
 
@@ -182,27 +192,58 @@ LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         args.GetSymbolValue("gpu_shlib_load");
     if (gpu_shlib_load_addr) {
       GPUBreakpointInfo bp;
-      bp.identifier = "gpu_shlib_load";
+      bp.identifier = BreakpointIDShlibLoad;
       bp.addr_info = {*gpu_shlib_load_addr};
       bp.symbol_names.push_back("g_shlib_list");
       bp.symbol_names.push_back("invalid_symbol");
       response.actions.breakpoints.emplace_back(std::move(bp));
     }
-  } else if (bp_identifier == "gpu_shlib_load") {
+  } else if (bp_identifier == BreakpointIDShlibLoad) {
     // Tell the native process to tell the GPU process to load libraries.
     response.actions.load_libraries = true;
+  } else if (bp_identifier == BreakpointIDThirdStop) {
+    // Tell the native process to tell the GPU process to load libraries.
+    response.actions.load_libraries = true;
+  } else if (bp_identifier == BreakpointIDResumeAndWaitForResume) {
+    response.actions.resume_gpu_process = true;
+    response.actions.wait_for_gpu_process_to_resume = true;
+  } else if (bp_identifier == BreakpointIDWaitForStop) {
+    // Update the stop ID to make sure it reflects the fact that we will need
+    // to stop at the next stop ID.
+    response.actions.stop_id = gpu_process->GetNextStopID();
+    response.actions.wait_for_gpu_process_to_stop = true;
+    // Simulate a long wait for the GPU process to stop.
+    std::thread resume_after_delay_thread([gpu_process]{
+      sleep(5);
+      gpu_process->Halt();
+    });
+    resume_after_delay_thread.detach();
   }
+
   return response;
 }
 
 GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
   GPUActions init_actions;
   init_actions.plugin_name = GetPluginName();
-  
-  GPUBreakpointInfo bp1;
-  bp1.identifier = "gpu_initialize";
-  bp1.name_info = {"a.out", "gpu_initialize"};  
-  bp1.symbol_names.push_back("gpu_shlib_load");
-  init_actions.breakpoints.emplace_back(std::move(bp1));
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDInitialize;
+    bp.name_info = {"a.out", "gpu_initialize"};  
+    bp.symbol_names.push_back("gpu_shlib_load");
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDResumeAndWaitForResume;
+    bp.name_info = {"a.out", "gpu_resume_and_wait_for_resume"};
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDWaitForStop;
+    bp.name_info = {"a.out", "gpu_wait_for_stop"};
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
   return init_actions;
 }

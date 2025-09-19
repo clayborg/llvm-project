@@ -878,7 +878,8 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
   return threads_array;
 }
 
-StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
+StreamGDBRemote 
+GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     NativeThreadProtocol &thread) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
 
@@ -888,7 +889,7 @@ StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
            thread.GetID());
 
   // Grab the reason this thread stopped.
-  StreamString response;
+  StreamGDBRemote response;
   struct ThreadStopInfo tid_stop_info;
   std::string description;
   if (!thread.GetStopReason(tid_stop_info, description))
@@ -1082,19 +1083,29 @@ StreamString GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
 
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
-    NativeProcessProtocol &process, lldb::tid_t tid, bool force_synchronous,
-    llvm::StringRef extra_stop_reply_args) {
+    NativeProcessProtocol &process, lldb::tid_t tid, bool force_synchronous) {
   // Ensure we can get info on the given thread.
   NativeThreadProtocol *thread = process.GetThreadByID(tid);
   if (!thread)
     return SendErrorResponse(51);
 
-  StreamString response = PrepareStopReplyPacketForThread(*thread);
+  StreamGDBRemote response = PrepareStopReplyPacketForThread(*thread);
   if (response.Empty())
     return SendErrorResponse(42);
 
-  if (!extra_stop_reply_args.empty())
-    response.PutCString(extra_stop_reply_args);
+  // Append the lldb-server stop ID so we can use that in LLDB if needed.
+  response.Printf("stop_id:%" PRIu32 ";", process.GetStopID());
+
+  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply
+  // packet.
+  for (auto &plugin_up : m_plugins) {
+    if (std::optional<GPUActions> gpu_actions =
+            plugin_up->NativeProcessIsStopping()) {
+      response.PutCString("gpu-actions:");
+      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+      response.PutChar(';');
+    }
+  }
 
   if (m_non_stop && !force_synchronous) {
     PacketResult ret = SendNotificationPacketNoLock(
@@ -1114,7 +1125,8 @@ void GDBRemoteCommunicationServerLLGS::EnqueueStopReplyPackets(
 
   for (NativeThreadProtocol &listed_thread : m_current_process->Threads()) {
     if (listed_thread.GetID() != thread_to_skip) {
-      StreamString stop_reply = PrepareStopReplyPacketForThread(listed_thread);
+      StreamGDBRemote stop_reply =
+          PrepareStopReplyPacketForThread(listed_thread);
       if (!stop_reply.Empty())
         m_stop_notification_queue.push_back(stop_reply.GetString().str());
     }
@@ -1170,28 +1182,8 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Stopped(
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log, "GDBRemoteCommunicationServerLLGS::%s called", __FUNCTION__);
 
-  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply 
-  // packet.
-  StreamGDBRemote extra_stop_reply_args;
-  for (auto &plugin_up : m_plugins) {
-    if (std::optional<GPUActions> gpu_actions =
-            plugin_up->NativeProcessIsStopping()) {
-      extra_stop_reply_args.PutCString("gpu-actions:");
-      extra_stop_reply_args.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
-      extra_stop_reply_args.PutChar(';');
-    }
-  }
-
-  // Check if the process has any GPUActions to perform. 
-  if (std::optional<GPUActions> gpu_actions = process->GetGPUActions()) {
-    extra_stop_reply_args.PutCString("gpu-actions:");
-    extra_stop_reply_args.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
-    extra_stop_reply_args.PutChar(';');
-  }
-
   PacketResult result = SendStopReasonForState(
-      *process, StateType::eStateStopped, /*force_synchronous=*/false,
-      extra_stop_reply_args.GetData());
+      *process, StateType::eStateStopped, /*force_synchronous=*/false);
   if (result != PacketResult::Success) {
     LLDB_LOGF(log,
               "GDBRemoteCommunicationServerLLGS::%s failed to send stop "
@@ -2016,7 +2008,7 @@ GDBRemoteCommunicationServerLLGS::Handle_stop_reason(
       // stop reasons).
       NativeThreadProtocol *thread = m_current_process->GetCurrentThread();
       if (thread) {
-        StreamString stop_reply = PrepareStopReplyPacketForThread(*thread);
+        StreamGDBRemote stop_reply = PrepareStopReplyPacketForThread(*thread);
         if (!stop_reply.Empty())
           m_stop_notification_queue.push_back(stop_reply.GetString().str());
       }
@@ -2044,7 +2036,7 @@ GDBRemoteCommunicationServerLLGS::Handle_stop_reason(
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::SendStopReasonForState(
     NativeProcessProtocol &process, lldb::StateType process_state,
-    bool force_synchronous, llvm::StringRef extra_stop_reply_args) {
+    bool force_synchronous) {
   Log *log = GetLog(LLDBLog::Process);
 
   if (m_disabling_non_stop) {
@@ -2078,8 +2070,7 @@ GDBRemoteCommunicationServerLLGS::SendStopReasonForState(
     // Make sure we set the current thread so g and p packets return the data
     // the gdb will expect.
     SetCurrentThreadID(tid);
-    return SendStopReplyPacketForThread(process, tid, force_synchronous,
-                                        extra_stop_reply_args);
+    return SendStopReplyPacketForThread(process, tid, force_synchronous);
   }
 
   case eStateInvalid:
@@ -3736,8 +3727,7 @@ GDBRemoteCommunicationServerLLGS::Handle_qThreadStopInfo(
     return SendErrorResponse(0x15);
   }
   return SendStopReplyPacketForThread(*m_current_process, tid,
-                                      /*force_synchronous=*/true,
-                                      llvm::StringRef());
+                                      /*force_synchronous=*/true);
 }
 
 GDBRemoteCommunication::PacketResult

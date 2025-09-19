@@ -13,9 +13,17 @@
 #include "ThreadAMDGPU.h"
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
+#include "lldb/Utility/GPUGDBRemotePackets.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Status.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Threading.h"
 
+#include "Plugins/Utils/Utils.h"
+#include <amd-dbgapi/amd-dbgapi.h>
 #include <cinttypes>
+#include <cstdint>
+#include <optional>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -55,7 +63,7 @@ static amd_dbgapi_status_t amd_dbgapi_client_process_get_info_callback(
 // Internal name used to identify the gpu loader breakpoint.
 // We match this name in the GPUBreakpointInfo passed into the
 // `BreakpointWasHit` callback to identify which breakpoint was hit.
-static const char *kGpuLoaderBreakpointIdentifier = "GPU loader breakpoint";
+static constexpr uint32_t kGpuLoaderBreakpointIdentifier = 1;
 
 // Set the internal gpu breakpoint by symbol name instead of using the address
 // passed into the `insert_breakpoint` callback. The ROCdbgapi library
@@ -141,9 +149,15 @@ LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU(
   m_process_manager_up.reset(new ProcessManagerAMDGPU(main_loop));
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
       m_main_loop, *m_process_manager_up, "amd-gpu.server"));
+
+  Status error = InitializeAmdDbgApi();
+  if (error.Fail()) {
+    logAndReportFatalError("{} Failed to initialize debug library: {}",
+                           __FUNCTION__, error);
+  }
 }
 
-LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() { CloseFDs(); }
+LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() { }
 
 llvm::StringRef LLDBServerPluginAMDGPU::GetPluginName() { return "amd-gpu"; }
 
@@ -151,48 +165,33 @@ llvm::StringRef LLDBServerPluginAMDGPU::GetSessionName() {
   return "AMD GPU Session";
 }
 
-void LLDBServerPluginAMDGPU::CloseFDs() {
-  if (m_fds[0] != -1) {
-    close(m_fds[0]);
-    m_fds[0] = -1;
-  }
-  if (m_fds[1] != -1) {
-    close(m_fds[1]);
-    m_fds[1] = -1;
-  }
-}
+Status LLDBServerPluginAMDGPU::InitializeAmdDbgApi() {
+  LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s called", __FUNCTION__);
 
-int LLDBServerPluginAMDGPU::GetEventFileDescriptorAtIndex(size_t idx) {
-  if (idx != 0)
-    return -1;
-  if (m_fds[0] == -1) {
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, m_fds) == -1) {
-      m_fds[0] = -1;
-      m_fds[1] = -1;
-    }
-  }
-  return m_fds[0];
-}
-
-bool LLDBServerPluginAMDGPU::initRocm() {
   // Initialize AMD Debug API with callbacks
   amd_dbgapi_status_t status = amd_dbgapi_initialize(&s_dbgapi_callbacks);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin), "Failed to initialize AMD debug API");
-    exit(-1);
+    return Status::FromErrorStringWithFormat(
+        "Failed to initialize AMD debug API: %d", status);
   }
 
+  m_amd_dbg_api_state = AmdDbgApiState::Initialized;
+  return Status();
+}
+
+Status LLDBServerPluginAMDGPU::AttachAmdDbgApi() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%s called", __FUNCTION__);
   // Attach to the process with AMD Debug API
-  status = amd_dbgapi_process_attach(
+  amd_dbgapi_status_t status = amd_dbgapi_process_attach(
       reinterpret_cast<amd_dbgapi_client_process_id_t>(
           this), // Use pid_ as client_process_id
       &m_gpu_pid);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin),
-              "Failed to attach to process with AMD debug API: %d", status);
-    amd_dbgapi_finalize();
-    return false;
+    return HandleAmdDbgApiAttachError(
+        "Failed to attach to process with AMD debug API", status);
   }
+  m_amd_dbg_api_state = AmdDbgApiState::Attached;
 
   // Get the process notifier
   status =
@@ -200,19 +199,39 @@ bool LLDBServerPluginAMDGPU::initRocm() {
                                   sizeof(m_notifier_fd), &m_notifier_fd);
 
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin), "Failed to get process notifier: %d",
-              status);
-    amd_dbgapi_process_detach(m_gpu_pid);
-    amd_dbgapi_finalize();
-    return false;
+    return HandleAmdDbgApiAttachError("Failed to get process notifier", status);
+  }
+  LLDB_LOGF(log, "Process notifier fd: %d", m_notifier_fd);
+
+  Status error = InstallAmdDbgApiNotifierOnMainLoop();
+  if (error.Fail()) {
+    return HandleAmdDbgApiAttachError(error.AsCString(),
+                                      AMD_DBGAPI_STATUS_ERROR);
   }
 
-  // event_handler_.addNotifierFd(m_notifier_fd);
-  LLDB_LOGF(GetLog(GDBRLog::Plugin), "Process notifier fd: %d", m_notifier_fd);
+  // TODO: read the architecture from the attached agent.
+  amd_dbgapi_architecture_id_t architecture_id;
+  const uint32_t elf_amdgpu_machine = 0x04C;
+  status = amd_dbgapi_get_architecture(elf_amdgpu_machine, &architecture_id);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    return HandleAmdDbgApiAttachError("Failed to get architecture", status);
+  }
+  m_architecture_id = architecture_id;
 
+  // The process from LLDB’s PoV is the entire portion of logical GPU bound to
+  // the CPU host process. It does not represent a real process on the GPU. The
+  // The GPU process is fake and shouldn't fail to launch. Let's abort if we see
+  // an error.
+  error = CreateGpuProcess();
+  if (error.Fail()) {
+    return HandleAmdDbgApiAttachError(error.AsCString(),
+                                      AMD_DBGAPI_STATUS_ERROR);
+  }
+
+  // Process all pending events
+  LLDB_LOGF(log, "%s Processing any pending dbgapi events", __FUNCTION__);
   amd_dbgapi_event_id_t eventId;
   amd_dbgapi_event_kind_t eventKind;
-  // Process all pending events
   if (amd_dbgapi_process_next_pending_event(m_gpu_pid, &eventId, &eventKind) ==
       AMD_DBGAPI_STATUS_SUCCESS) {
     GetGPUProcess()->handleDebugEvent(eventId, eventKind);
@@ -221,17 +240,58 @@ bool LLDBServerPluginAMDGPU::initRocm() {
     amd_dbgapi_event_processed(eventId);
   }
 
-  amd_dbgapi_architecture_id_t architecture_id;
-  // TODO: do not hardcode the device id
-  status = amd_dbgapi_get_architecture(0x04C, &architecture_id);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    // Handle error
-    LLDB_LOGF(GetLog(GDBRLog::Plugin), "amd_dbgapi_get_architecture failed");
-    return false;
-  }
-  m_architecture_id = architecture_id;
+  LLDB_LOGF(log, "%s successfully attached to debug library", __FUNCTION__);
+  return Status();
+}
 
-  return true;
+Status
+LLDBServerPluginAMDGPU::HandleAmdDbgApiAttachError(llvm::StringRef error_msg,
+                                                   amd_dbgapi_status_t status) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%s called", __FUNCTION__);
+  // Cleanup any partial initialization
+  if (m_amd_dbg_api_state == AmdDbgApiState::Attached) {
+    Status error = DetachAmdDbgApi();
+    if (error.Fail()) {
+      LLDB_LOGF(log, "%s: failed DetachAmdDbgApi: %s", __FUNCTION__,
+                error.AsCString());
+    }
+  }
+
+  // Finalize the AMD Debug API
+  amd_dbgapi_status_t finalize_status = amd_dbgapi_finalize();
+  if (finalize_status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "amd_dbgapi_finalize failed: %d",
+              finalize_status);
+  }
+
+  // Reset the state to error state
+  m_amd_dbg_api_state = AmdDbgApiState::Error;
+
+  // Return a status with the error message and additional context
+  return Status::FromErrorStringWithFormat(
+      "AMD Debug API attach failed: %s (status: %d)", error_msg.data(), status);
+}
+
+Status LLDBServerPluginAMDGPU::DetachAmdDbgApi() {
+  LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s called", __FUNCTION__);
+
+  if (m_amd_dbg_api_state == AmdDbgApiState::Detached) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s -- already detached from process",
+              __FUNCTION__);
+    return Status();
+  }
+
+  amd_dbgapi_status_t status = amd_dbgapi_process_detach(m_gpu_pid);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    return Status::FromErrorStringWithFormat(
+        "Failed to detach from process: %d", status);
+  }
+  m_gpu_pid = AMD_DBGAPI_PROCESS_NONE;
+  m_notifier_fd = INVALID_NOTIFIER_ID;
+
+  m_amd_dbg_api_state = AmdDbgApiState::Detached;
+  return Status();
 }
 
 bool LLDBServerPluginAMDGPU::processGPUEvent() {
@@ -268,41 +328,6 @@ bool LLDBServerPluginAMDGPU::HandleEventFileDescriptorEvent(int fd) {
   return processGPUEvent();
 }
 
-void LLDBServerPluginAMDGPU::AcceptAndMainLoopThread(
-    std::unique_ptr<TCPSocket> listen_socket_up) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGF(log, "%s spawned", __PRETTY_FUNCTION__);
-  Socket *socket = nullptr;
-  Status error = listen_socket_up->Accept(std::chrono::seconds(30), socket);
-  // Scope for lock guard.
-  {
-    // Protect access to m_is_listening and m_is_connected.
-    std::lock_guard<std::mutex> guard(m_connect_mutex);
-    m_is_listening = false;
-    if (error.Fail()) {
-      LLDB_LOGF(log, "%s error returned from Accept(): %s", __PRETTY_FUNCTION__,
-                error.AsCString());
-      return;
-    }
-    m_is_connected = true;
-  }
-
-  LLDB_LOGF(log, "%s initializing connection", __PRETTY_FUNCTION__);
-  std::unique_ptr<Connection> connection_up(
-      new ConnectionFileDescriptor(std::unique_ptr<Socket>(socket)));
-  m_gdb_server->InitializeConnection(std::move(connection_up));
-  LLDB_LOGF(log, "%s running main loop", __PRETTY_FUNCTION__);
-  m_main_loop_status = m_main_loop.Run();
-  LLDB_LOGF(log, "%s main loop exited!", __PRETTY_FUNCTION__);
-  if (m_main_loop_status.Fail()) {
-    LLDB_LOGF(log, "%s main loop exited with an error: %s", __PRETTY_FUNCTION__,
-              m_main_loop_status.AsCString());
-  }
-  // Protect access to m_is_connected.
-  std::lock_guard<std::mutex> guard(m_connect_mutex);
-  m_is_connected = false;
-}
-
 std::optional<GPUPluginConnectionInfo>
 LLDBServerPluginAMDGPU::CreateConnection() {
   std::lock_guard<std::mutex> guard(m_connect_mutex);
@@ -326,9 +351,6 @@ LLDBServerPluginAMDGPU::CreateConnection() {
     connection_info.connect_url =
         llvm::formatv("connect://localhost:{}", listen_port);
     LLDB_LOGF(log, "%s listening to %u", __PRETTY_FUNCTION__, listen_port);
-    // std::thread t(&LLDBServerPluginAMDGPU::AcceptAndMainLoopThread, this,
-    //               std::move(*sock));
-    // t.detach();
 
     // Store the socket in the member variable to keep it alive
     m_listen_socket = std::move(*sock);
@@ -340,7 +362,7 @@ LLDBServerPluginAMDGPU::CreateConnection() {
             m_main_loop, [this](std::unique_ptr<Socket> socket) {
               Log *log = GetLog(GDBRLog::Plugin);
               LLDB_LOGF(log,
-                        "LLDBServerPluginAMDGPU::AcceptAndMainLoopThread() "
+                        "LLDBServerPluginAMDGPU::CreateConnection() "
                         "initializing connection");
               std::unique_ptr<Connection> connection_up(
                   new ConnectionFileDescriptor(std::move(socket)));
@@ -357,6 +379,7 @@ LLDBServerPluginAMDGPU::CreateConnection() {
           llvm::toString(res.takeError()).c_str());
     }
 
+    connection_info.synchronous = true;
     return connection_info;
   } else {
     std::string error = llvm::toString(sock.takeError());
@@ -367,93 +390,126 @@ LLDBServerPluginAMDGPU::CreateConnection() {
   return std::nullopt;
 }
 
+Status LLDBServerPluginAMDGPU::InstallAmdDbgApiNotifierOnMainLoop() {
+  Status error;
+  LLDBServerPluginAMDGPU *amdGPUPlugin = this;
+  m_gpu_event_io_obj_sp = std::make_shared<GPUIOObject>(m_notifier_fd);
+  m_gpu_event_read_up = m_main_loop.RegisterReadObject(
+      m_gpu_event_io_obj_sp,
+      [amdGPUPlugin](MainLoopBase &) {
+        amdGPUPlugin->HandleEventFileDescriptorEvent(
+            amdGPUPlugin->m_notifier_fd);
+      },
+      error);
+  return error;
+}
+
+Status LLDBServerPluginAMDGPU::CreateGpuProcess() {
+  ProcessManagerAMDGPU *manager =
+      (ProcessManagerAMDGPU *)m_process_manager_up.get();
+  manager->m_debugger = this;
+
+  // During initialization, there might be no code objects loaded, so we don't
+  // have anything tangible to use as the identifier or file for the GPU
+  // process. Thus, we create a fake process and we pretend we just launched it.
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%s faking launch...", __FUNCTION__);
+  ProcessLaunchInfo info;
+  info.GetFlags().Set(eLaunchFlagStopAtEntry | eLaunchFlagDebug |
+                      eLaunchFlagDisableASLR);
+  Args args;
+  args.AppendArgument("/pretend/path/to/amdgpu");
+  info.SetArguments(args, true);
+  info.GetEnvironment() = Host::GetEnvironment();
+  info.SetProcessID(m_gpu_pid.handle);
+  m_gdb_server->SetLaunchInfo(info);
+
+  return m_gdb_server->LaunchProcess();
+}
+
+bool LLDBServerPluginAMDGPU::ReadyToSendConnectionRequest() {
+  // We are ready to send a connection request if we are attached to the debug
+  // library and we have not yet sent a connection request.
+  // The GPUActions are ignored on the initial stop when the process is first
+  // launched so we wait until the second stop to send the connection request.
+  const bool ready = m_amd_dbg_api_state == AmdDbgApiState::Attached &&
+                     !m_is_connected && !m_is_listening &&
+                     GetNativeProcess()->GetStopID() > 1;
+
+  LLDB_LOGF(GetLog(GDBRLog::Plugin),
+            "%s - ready: %d dbg_api_state: %d, connected: %d, listening: %d, "
+            "native-stop-id: %d",
+            __FUNCTION__, ready, (int)m_amd_dbg_api_state, m_is_connected,
+            m_is_listening, GetNativeProcess()->GetStopID());
+  return ready;
+}
+
+bool LLDBServerPluginAMDGPU::ReadyToAttachDebugLibrary() {
+  return m_amd_dbg_api_state == AmdDbgApiState::Initialized;
+}
+
+bool LLDBServerPluginAMDGPU::ReadyToSetGpuLoaderBreakpointByAddress() {
+  return m_wait_for_gpu_internal_bp_stop && m_gpu_internal_bp.has_value();
+}
+
+GPUActions LLDBServerPluginAMDGPU::SetConnectionInfo() {
+  GPUActions actions;
+  actions.plugin_name = GetPluginName();
+  actions.session_name = GetSessionName();
+  actions.connect_info = CreateConnection();
+  return actions;
+}
+
+GPUActions LLDBServerPluginAMDGPU::SetGpuLoaderBreakpointByAddress() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%s Requesting gpu breakpoint at 0x%p", __FUNCTION__,
+            (void *)m_gpu_internal_bp->addr);
+  assert(!kSetDbgApiBreakpointByName);
+  GPUActions actions;
+  actions.plugin_name = GetPluginName();
+
+  GPUBreakpointByAddress bp_addr;
+  bp_addr.load_address = m_gpu_internal_bp->addr;
+
+  GPUBreakpointInfo bp;
+  bp.identifier = kGpuLoaderBreakpointIdentifier;
+  bp.addr_info.emplace(bp_addr);
+
+  std::vector<GPUBreakpointInfo> breakpoints;
+  breakpoints.emplace_back(std::move(bp));
+
+  actions.breakpoints = std::move(breakpoints);
+  m_wait_for_gpu_internal_bp_stop = false;
+  return actions;
+}
+
 std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
   Log *log = GetLog(GDBRLog::Plugin);
-  if (!m_is_connected) {
-    initRocm();
-    ProcessManagerAMDGPU *manager =
-        (ProcessManagerAMDGPU *)m_process_manager_up.get();
-    manager->m_debugger = this;
+  LLDB_LOGF(log, "%s called", __FUNCTION__);
 
-    GPUActions actions;
-    actions.plugin_name = GetPluginName();
-
-    Status error;
-    LLDBServerPluginAMDGPU *amdGPUPlugin = this;
-    m_gpu_event_io_obj_sp = std::make_shared<GPUIOObject>(m_notifier_fd);
-    m_gpu_event_read_up = m_main_loop.RegisterReadObject(
-        m_gpu_event_io_obj_sp,
-        [amdGPUPlugin](MainLoopBase &) {
-          amdGPUPlugin->HandleEventFileDescriptorEvent(
-              amdGPUPlugin->m_notifier_fd);
-        },
-        error);
+  if (ReadyToAttachDebugLibrary()) {
+    Status error = AttachAmdDbgApi();
     if (error.Fail()) {
-      LLDB_LOGF(log, "LLDBServerPluginAMDGPU::NativeProcessIsStopping() failed "
-                     "to RegisterReadObject");
-      // TODO: how to report this error?
-    } else {
-      LLDB_LOGF(
-          log,
-          "LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU() faking launch...");
-      ProcessLaunchInfo info;
-      info.GetFlags().Set(eLaunchFlagStopAtEntry | eLaunchFlagDebug |
-                          eLaunchFlagDisableASLR);
-      Args args;
-      args.AppendArgument("/pretend/path/to/amdgpu");
-      args.AppendArgument("--option1");
-      args.AppendArgument("--option2");
-      args.AppendArgument("--option3");
-      info.SetArguments(args, true);
-      info.GetEnvironment() = Host::GetEnvironment();
-      info.SetProcessID(m_gpu_pid.handle);
-      m_gdb_server->SetLaunchInfo(info);
-      Status error = m_gdb_server->LaunchProcess();
-      if (error.Fail()) {
-        LLDB_LOGF(log,
-                  "LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU() failed to "
-                  "launch: %s",
-                  error.AsCString());
-      } else {
-        LLDB_LOGF(log, "LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU() "
-                       "launched successfully");
-      }
-      actions.connect_info = CreateConnection();
-      actions.connect_info->synchronous = true;
-      actions.session_name = GetSessionName();
+      LLDB_LOGF(log, "%s failed to attach debug library: %s", __FUNCTION__,
+                error.AsCString());
+      return std::nullopt;
     }
-    return actions;
-  } else {
-    if (m_wait_for_gpu_internal_bp_stop && m_gpu_internal_bp.has_value()) {
-      LLDB_LOGF(GetLog(GDBRLog::Plugin), "Please set gpu breakpoint at 0x%p",
-                (void *)m_gpu_internal_bp->addr);
-      assert(!kSetDbgApiBreakpointByName);
-      GPUActions actions;
-      actions.plugin_name = GetPluginName();
+  }
 
-      GPUBreakpointByAddress bp_addr;
-      bp_addr.load_address = m_gpu_internal_bp->addr;
+  if (ReadyToSendConnectionRequest()) {
+    return SetConnectionInfo();
+  }
 
-      GPUBreakpointInfo bp;
-      bp.identifier = kGpuLoaderBreakpointIdentifier;
-      bp.addr_info.emplace(bp_addr);
-
-      std::vector<GPUBreakpointInfo> breakpoints;
-      breakpoints.emplace_back(std::move(bp));
-
-      actions.breakpoints = std::move(breakpoints);
-      m_wait_for_gpu_internal_bp_stop = false;
-      return actions;
-    }
+  if (ReadyToSetGpuLoaderBreakpointByAddress()) {
+    return SetGpuLoaderBreakpointByAddress();
   }
   return std::nullopt;
 }
 
 bool LLDBServerPluginAMDGPU::HandleGPUInternalBreakpointHit(
-    const GPUInternalBreakpoinInfo &bp, bool &has_new_libraries) {
-  LLDB_LOGF(GetLog(GDBRLog::Plugin), "Hit %s at address: 0x%" PRIx64,
+    const GPUInternalBreakpoinInfo &bp) {
+  LLDB_LOGF(GetLog(GDBRLog::Plugin), "Hit %u at address: 0x%" PRIx64,
             kGpuLoaderBreakpointIdentifier, bp.addr);
-  has_new_libraries = false;
   amd_dbgapi_breakpoint_id_t breakpoint_id{bp.breakpoind_id};
   amd_dbgapi_breakpoint_action_t action;
 
@@ -476,9 +532,6 @@ bool LLDBServerPluginAMDGPU::HandleGPUInternalBreakpointHit(
     amd_dbgapi_event_id_t resume_event_id =
         process_event_queue(AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME);
     amd_dbgapi_event_processed(resume_event_id);
-    if (!GetGPUProcess()->GetGPUModules().empty()) {
-      has_new_libraries = true;
-    }
     return true;
   } else {
     LLDB_LOGF(GetLog(GDBRLog::Plugin), "Unknown action: %d", action);
@@ -513,6 +566,21 @@ amd_dbgapi_event_id_t LLDBServerPluginAMDGPU::process_event_queue(
     amd_dbgapi_event_processed(event_id);
   }
   return AMD_DBGAPI_EVENT_NONE;
+}
+
+void LLDBServerPluginAMDGPU::FreeDbgApiClientMemory(void *mem) {
+  s_dbgapi_callbacks.deallocate_memory(mem);
+}
+
+void LLDBServerPluginAMDGPU::GpuRuntimeDidLoad() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGF(log, "%s called", __FUNCTION__);
+  if (m_amd_dbg_api_state == AmdDbgApiState::RuntimeLoaded) {
+    LLDB_LOGF(log, "%s -- runtime loaded event already handled", __FUNCTION__);
+    return;
+  }
+
+  m_amd_dbg_api_state = AmdDbgApiState::RuntimeLoaded;
 }
 
 bool LLDBServerPluginAMDGPU::SetGPUBreakpoint(uint64_t addr,
@@ -592,11 +660,11 @@ llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   Log *log = GetLog(GDBRLog::Plugin);
   std::string json_string;
-  std::string &bp_identifier = args.breakpoint.identifier;
+  const auto bp_identifier = args.breakpoint.identifier;
   llvm::raw_string_ostream os(json_string);
   os << toJSON(args);
-  LLDB_LOGF(log, "LLDBServerPluginAMDGPU::BreakpointWasHit(\"%s\"):\nJSON:\n%s",
-            bp_identifier.c_str(), json_string.c_str());
+  LLDB_LOGF(log, "LLDBServerPluginAMDGPU::BreakpointWasHit(\"%d\"):\nJSON:\n%s",
+            bp_identifier, json_string.c_str());
 
   GPUPluginBreakpointHitResponse response;
   response.actions.plugin_name = GetPluginName();
@@ -615,16 +683,18 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
       return llvm::createStringError(
           "Breakpoint address does not match expected value from ROCdbgapi");
     }
-    bool has_new_libraries = false;
-    bool success = HandleGPUInternalBreakpointHit(m_gpu_internal_bp.value(),
-                                                  has_new_libraries);
+
+    bool success = HandleGPUInternalBreakpointHit(m_gpu_internal_bp.value());
     assert(success);
-    if (has_new_libraries) {
-      response.actions.wait_for_gpu_process_to_resume = true;
-      auto process = m_gdb_server->GetCurrentProcess();
-      ThreadAMDGPU *thread = (ThreadAMDGPU *)process->GetCurrentThread();
-      thread->SetStopReason(lldb::eStopReasonDynamicLoader);
-      process->Halt();
+    if (GetGPUProcess()->HasDyldChangesToReport()) {
+      auto *process = m_gdb_server->GetCurrentProcess();
+      if (process->IsRunning()) {
+        response.actions.wait_for_gpu_process_to_resume = true;
+        response.actions.stop_id = GetGPUProcess()->GetNextStopID();
+        ThreadAMDGPU *thread = (ThreadAMDGPU *)process->GetCurrentThread();
+        thread->SetStopReason(lldb::eStopReasonDynamicLoader);
+        process->Halt();
+      }
     }
   }
   return response;

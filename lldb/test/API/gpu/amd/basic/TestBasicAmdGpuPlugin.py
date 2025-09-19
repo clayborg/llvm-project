@@ -29,6 +29,11 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         gpu_thread = self.gpu_process.GetThreadAtIndex(0)
         self.assertEqual(gpu_thread.GetName(), "AMD Native Shadow Thread", "GPU thread has the right name")
 
+        # The target should have the triple set correctly.
+        self.assertIn("amdgcn-amd-amdhsa", self.gpu_target.GetTriple())
+
+
+
     def test_gpu_breakpoint_hit(self):
         """Test that we can hit a breakpoint on the gpu target."""
         self.build()
@@ -48,3 +53,28 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         target = self.createTestTarget()
         process = target.LaunchSimple(None, None, self.get_process_working_directory())
         self.assertState(process.GetState(), lldb.eStateExited, PROCESS_EXITED)
+
+    def test_image_list(self):
+        """Test that we can load modules on the gpu target."""
+        self.build()
+
+        # GPU breakpoint should get hit by at least one thread.
+        source = "hello_world.hip"
+        gpu_threads = self.run_to_gpu_breakpoint(
+            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
+        )
+        self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
+
+        # There should two modules loaded for the gpu.
+        # There should be one module loaded from the executable (the kernel) and one
+        # loaded from memory (driver/debugger lib code). The in-memory module name is the
+        # same as the cpu process id.
+        gpu_modules = self.gpu_target.modules
+        self.assertEqual(2, len(gpu_modules), "GPU should have two modules")
+
+        # Check for the expected modules but allow them to be in any order.
+        exe = "a.out"
+        pid = str(self.cpu_process.GetProcessID())
+        module_files = [module.file.basename for module in gpu_modules]
+        self.assertIn(exe, module_files)
+        self.assertIn(pid, module_files)

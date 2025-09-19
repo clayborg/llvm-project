@@ -19,10 +19,12 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Core/dwarf.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Host/HostInfo.h"
 #include "lldb/Symbol/DWARFCallFrameInfo.h"
 #include "lldb/Utility/StreamString.h"
+#include "lldb/lldb-enumerations.h"
 #include "llvm/Testing/Support/Error.h"
 
 #include "llvm/Support/FileUtilities.h"
@@ -32,7 +34,7 @@
 
 using namespace lldb_private;
 using namespace lldb;
-
+namespace lldb_private {
 class DWARFCallFrameInfoTest : public testing::Test {
   SubsystemRAII<FileSystem, HostInfo, ObjectFileELF, SymbolFileSymtab>
       subsystems;
@@ -40,9 +42,12 @@ class DWARFCallFrameInfoTest : public testing::Test {
 protected:
   void TestBasic(DWARFCallFrameInfo::Type type, llvm::StringRef symbol);
   void TestValOffset(DWARFCallFrameInfo::Type type, llvm::StringRef symbol);
+  DWARFCallFrameInfo::CIESP ParseCIE(DWARFCallFrameInfo &cfi,
+                                     dw_offset_t cie_offset = 0) {
+    return cfi.ParseCIE(cie_offset);
+  }
 };
 
-namespace lldb_private {
 static std::ostream &operator<<(std::ostream &OS, const UnwindPlan::Row &row) {
   StreamString SS;
   row.Dump(SS, nullptr, nullptr, 0);
@@ -379,4 +384,61 @@ Symbols:
 
 TEST_F(DWARFCallFrameInfoTest, ValOffset_dwarf3) {
   TestValOffset(DWARFCallFrameInfo::DWARF, "debug_frame3");
+}
+
+TEST_F(DWARFCallFrameInfoTest, AugmentationString) {
+  // This test verifies that we can parse the larger augmentation string
+  // that is used by the AMDGPU backend. The object file is a stripped down
+  // version that only contains the CIE entry in the .debug_frame section.
+  auto ExpectedFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_DYN
+  Machine:         EM_AMDGPU
+  Flags:           [ EF_AMDGPU_MACH_AMDGCN_GFX942 ]
+Sections:
+  - Name:            .debug_frame
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000008
+    Content:         20000000FFFFFFFF045B6C6C766D3A76302E305D00080004041000000000000000000000
+#00000000 00000020 ffffffff CIE
+#  Format:                DWARF32
+#  Version:               4
+#  Augmentation:          "[llvm:v0.0]"
+#  Address size:          8
+#  Segment desc size:     0
+#  Code alignment factor: 4
+#  Data alignment factor: 4
+#  Return address column: 16
+#
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+#  DW_CFA_nop:
+...
+)");
+  // Parse the yaml object file.
+  ASSERT_THAT_EXPECTED(ExpectedFile, llvm::Succeeded());
+  auto module_sp = std::make_shared<Module>(ExpectedFile->moduleSpec());
+  SectionList *list = module_sp->GetSectionList();
+  ASSERT_NE(nullptr, list);
+
+  // Grab the .debug_frame section.
+  auto section_sp = list->FindSectionByType(eSectionTypeDWARFDebugFrame, false);
+  ASSERT_NE(nullptr, section_sp);
+
+  // Make sure the augmentation string is parsed correctly.
+  DWARFCallFrameInfo cfi(*module_sp->GetObjectFile(), section_sp,
+                         DWARFCallFrameInfo::DWARF);
+  auto cie_sp = ParseCIE(cfi);
+  ASSERT_NE(cie_sp, nullptr);
+  ASSERT_STREQ((const char *)cie_sp->augmentation, "[llvm:v0.0]");
 }

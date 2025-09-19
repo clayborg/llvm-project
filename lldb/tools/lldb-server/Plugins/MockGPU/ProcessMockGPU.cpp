@@ -59,7 +59,7 @@ Status ProcessMockGPU::Signal(int signo) {
 ///
 /// \return
 ///     Returns an error object.
-Status ProcessMockGPU::Interrupt() { return Status(); }
+Status ProcessMockGPU::Interrupt() { return Halt(); }
 
 Status ProcessMockGPU::Kill() { return Status(); }
 
@@ -227,7 +227,6 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   response.library_infos.push_back(lib5);
   return response;
 }
-
 
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessMockGPU::Manager::Launch(
