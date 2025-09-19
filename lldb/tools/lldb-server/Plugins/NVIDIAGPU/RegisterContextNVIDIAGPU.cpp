@@ -26,29 +26,30 @@ using namespace llvm;
 #define REG_OFFSET(Reg) offsetof(ThreadRegistersValues, Reg)
 
 #define R_REG_OFFSET(Index)                                                    \
-  offsetof(ThreadRegistersValues, R) +                                         \
-      Index * sizeof(ThreadRegistersValues::R[0])
+  offsetof(ThreadRegistersValues, regular) +                                   \
+      Index * sizeof(ThreadRegistersValues::regular[0])
 
 #define P_REG_OFFSET(Index)                                                    \
-  offsetof(ThreadRegistersValues, P) +                                         \
-      Index * sizeof(ThreadRegistersValues::P[0])
+  offsetof(ThreadRegistersValues, predicate) +                                 \
+      Index * sizeof(ThreadRegistersValues::predicate[0])
 
 #define UR_REG_OFFSET(Index)                                                   \
-  offsetof(ThreadRegistersValues, UR) +                                        \
-      Index * sizeof(ThreadRegistersValues::UR[0])
+  offsetof(ThreadRegistersValues, uniform) +                                   \
+      Index * sizeof(ThreadRegistersValues::uniform[0])
 
 #define UP_REG_OFFSET(Index)                                                   \
-  offsetof(ThreadRegistersValues, UP) +                                        \
-      Index * sizeof(ThreadRegistersValues::UP[0])
+  offsetof(ThreadRegistersValues, uniform_predicate) +                         \
+      Index * sizeof(ThreadRegistersValues::uniform_predicate[0])
 
 // Include generated register definitions for all SASS registers
 #include "RegisterDefinitionsSASS.inc"
 
 // Use the 255-register versions
-#define EXPAND_R_REGISTERS(PREFIX) EXPAND_R_REGISTERS_255(PREFIX)
-#define EXPAND_UR_REGISTERS(PREFIX) EXPAND_UR_REGISTERS_255(PREFIX)
-#define EXPAND_P_REGISTERS(PREFIX) EXPAND_P_REGISTERS_8(PREFIX)
-#define EXPAND_UP_REGISTERS(PREFIX) EXPAND_UP_REGISTERS_8(PREFIX)
+#define EXPAND_REGULAR_REGISTERS(PREFIX) EXPAND_REGULAR_REGISTERS_255(PREFIX)
+#define EXPAND_UNIFORM_REGISTERS(PREFIX) EXPAND_UNIFORM_REGISTERS_255(PREFIX)
+#define EXPAND_PREDICATE_REGISTERS(PREFIX) EXPAND_PREDICATE_REGISTERS_8(PREFIX)
+#define EXPAND_UNIFORM_PREDICATE_REGISTERS(PREFIX)                             \
+  EXPAND_UNIFORM_PREDICATE_REGISTERS_8(PREFIX)
 
 /// LLDB register numbers must start at 0 and be contiguous with no gaps.
 /// See
@@ -59,12 +60,12 @@ enum LLDBRegNum : uint32_t {
   LLDB_SP = sass::LLDB_SP,
   LLDB_FP = sass::LLDB_FP,
   LLDB_RA = sass::LLDB_RA,
-  EXPAND_R_REGISTERS(LLDB),
-  LLDB_RZ,                   // R255 - zero register
-  EXPAND_P_REGISTERS(LLDB),  // Predicate registers
-  EXPAND_UR_REGISTERS(LLDB), // Uniform registers
-  LLDB_URZ,                  // UR255 - uniform zero register
-  EXPAND_UP_REGISTERS(LLDB), // Uniform predicate registers
+  EXPAND_REGULAR_REGISTERS(LLDB),
+  LLDB_RZ,                                  // R255 - zero register
+  EXPAND_PREDICATE_REGISTERS(LLDB),         // Predicate registers
+  EXPAND_UNIFORM_REGISTERS(LLDB),           // Uniform registers
+  LLDB_URZ,                                 // UR255 - uniform zero register
+  EXPAND_UNIFORM_PREDICATE_REGISTERS(LLDB), // Uniform predicate registers
   kNumRegs,
 };
 
@@ -113,19 +114,19 @@ enum DWARFRegNum : uint32_t {
   // Note: No DWARF_RA because return address spans R20-R21 (64-bit).
   // DWARF cannot represent multi-register values.
   // R registers use CUDA encoding - all 255 registers
-  GENERATE_DWARF_R_DEFS(),
+  GENERATE_DWARF_REGULAR_DEFS(),
   // R255 - zero register
   DWARF_RZ =
       sass::GetDWARFEncodedRegister(REG_CLASS_REG_FULL, sass::SASS_ZERO_REG),
   // Predicate registers use CUDA encoding
-  GENERATE_DWARF_P_DEFS(),
+  GENERATE_DWARF_PREDICATE_DEFS(),
   // Uniform registers use CUDA encoding - all 255 uniform registers
-  GENERATE_DWARF_UR_DEFS(),
+  GENERATE_DWARF_UNIFORM_DEFS(),
   // UR255 - uniform zero register
   DWARF_URZ =
       sass::GetDWARFEncodedRegister(REG_CLASS_UREG_FULL, sass::SASS_ZERO_REG),
   // Uniform predicate registers use CUDA encoding
-  GENERATE_DWARF_UP_DEFS()
+  GENERATE_DWARF_UNIFORM_PREDICATE_DEFS()
 };
 
 /// Compiler registers should match the register numbers that the compiler
@@ -140,32 +141,34 @@ enum CompilerRegNum : uint32_t {
   EH_FRAME_SP,
   EH_FRAME_FP,
   EH_FRAME_RA,
-  EXPAND_R_REGISTERS(EH_FRAME),
-  EH_FRAME_RZ = 2500,            // R255 - zero register
-  EXPAND_P_REGISTERS(EH_FRAME),  // Predicate registers
-  EXPAND_UR_REGISTERS(EH_FRAME), // Uniform registers
-  EH_FRAME_URZ = 2501,           // UR255 - uniform zero register
-  EXPAND_UP_REGISTERS(EH_FRAME), // Uniform predicate registers
+  EXPAND_REGULAR_REGISTERS(EH_FRAME),
+  EH_FRAME_RZ = 2500,                           // R255 - zero register
+  EXPAND_PREDICATE_REGISTERS(EH_FRAME),         // Predicate registers
+  EXPAND_UNIFORM_REGISTERS(EH_FRAME),           // Uniform registers
+  EH_FRAME_URZ = 2501,                          // UR255 - uniform zero register
+  EXPAND_UNIFORM_PREDICATE_REGISTERS(EH_FRAME), // Uniform predicate registers
 };
 
 static uint32_t g_gpr_regnums[] = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
                                    LLDB_RA};
 // All 255 R registers
-static uint32_t g_r_regnums[] = {EXPAND_R_REGISTERS(LLDB)};
+static uint32_t g_regular_regnums[] = {EXPAND_REGULAR_REGISTERS(LLDB)};
 // All 8 predicate registers
-static uint32_t g_p_regnums[] = {EXPAND_P_REGISTERS(LLDB)};
+static uint32_t g_predicate_regnums[] = {EXPAND_PREDICATE_REGISTERS(LLDB)};
 // All 255 uniform registers
-static uint32_t g_ur_regnums[] = {EXPAND_UR_REGISTERS(LLDB)};
+static uint32_t g_uniform_regnums[] = {EXPAND_UNIFORM_REGISTERS(LLDB)};
 // All 8 uniform predicate registers
-static uint32_t g_up_regnums[] = {EXPAND_UP_REGISTERS(LLDB)};
+static uint32_t g_uniform_predicate_regnums[] = {
+    EXPAND_UNIFORM_PREDICATE_REGISTERS(LLDB)};
 
 static const RegisterSet g_reg_sets[] = {
     {"General Purpose Registers", "gpr",
      sizeof(g_gpr_regnums) / sizeof(g_gpr_regnums[0]), g_gpr_regnums},
-    {"R Registers", "r", kNumRRegs, g_r_regnums},
-    {"Predicate Registers", "p", kNumPRegs, g_p_regnums},
-    {"Uniform Registers", "ur", kNumURRegs, g_ur_regnums},
-    {"Uniform Predicate Registers", "up", kNumUPRegs, g_up_regnums}};
+    {"Regular Registers", "r", kNumRRegs, g_regular_regnums},
+    {"Predicate Registers", "p", kNumPRegs, g_predicate_regnums},
+    {"Uniform Registers", "ur", kNumURRegs, g_uniform_regnums},
+    {"Uniform Predicate Registers", "up", kNumUPRegs,
+     g_uniform_predicate_regnums}};
 
 /// Define all of the information about all registers. The register info structs
 /// are accessed by the LLDB register numbers, which are defined above.
@@ -266,15 +269,15 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     // The number of elements in this list must match kNumRRegs (255).
-    GENERATE_ALL_R_REGISTER_INFO(),
+    GENERATE_ALL_REGULAR_REGISTER_INFO(),
     // R255 - zero register
     {
-        "RZ",           // RegisterInfo::name
-        "R255",         // RegisterInfo::alt_name
-        4,              // RegisterInfo::byte_size
-        REG_OFFSET(RZ), // RegisterInfo::byte_offset
-        eEncodingUint,  // RegisterInfo::encoding
-        eFormatHex,     // RegisterInfo::format
+        "RZ",                     // RegisterInfo::name
+        "R255",                   // RegisterInfo::alt_name
+        4,                        // RegisterInfo::byte_size
+        REG_OFFSET(regular_zero), // RegisterInfo::byte_offset
+        eEncodingUint,            // RegisterInfo::encoding
+        eFormatHex,               // RegisterInfo::format
         {
             // RegisterInfo::kinds
             2500, // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -290,17 +293,17 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     // Predicate registers - all 8 predicate registers (P0-P7)
-    GENERATE_ALL_P_REGISTER_INFO(),
+    GENERATE_ALL_PREDICATE_REGISTER_INFO(),
     // Uniform registers - all 255 uniform registers (UR0-UR254)
-    GENERATE_ALL_UR_REGISTER_INFO(),
+    GENERATE_ALL_UNIFORM_REGISTER_INFO(),
     // UR255 - uniform zero register
     {
-        "URZ",           // RegisterInfo::name
-        "UR255",         // RegisterInfo::alt_name
-        4,               // RegisterInfo::byte_size
-        REG_OFFSET(URZ), // RegisterInfo::byte_offset
-        eEncodingUint,   // RegisterInfo::encoding
-        eFormatHex,      // RegisterInfo::format
+        "URZ",                    // RegisterInfo::name
+        "UR255",                  // RegisterInfo::alt_name
+        4,                        // RegisterInfo::byte_size
+        REG_OFFSET(uniform_zero), // RegisterInfo::byte_offset
+        eEncodingUint,            // RegisterInfo::encoding
+        eFormatHex,               // RegisterInfo::format
         {
             // RegisterInfo::kinds
             2501, // RegisterInfo::kinds[eRegisterKindEHFrame]
@@ -316,7 +319,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::flags_type
     },
     // Uniform predicate registers - all 8 uniform predicate registers (UP0-UP7)
-    GENERATE_ALL_UP_REGISTER_INFO()};
+    GENERATE_ALL_UNIFORM_PREDICATE_REGISTER_INFO()};
 
 RegisterContextNVIDIAGPU::RegisterContextNVIDIAGPU(ThreadNVIDIAGPU &thread)
     : NativeRegisterContext(thread) {}
@@ -331,14 +334,15 @@ CUDBGAPI RegisterContextNVIDIAGPU::GetDebuggerAPI() {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
-static void ReadRRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                     const PhysicalCoords &physical_coords,
-                                     ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetNumRRegisters();
+static void
+ReadRegularRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                               const PhysicalCoords &physical_coords,
+                               ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumRegularRegisters();
 
   CUDBGResult res = api->readRegisterRange(
       physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      physical_coords.thread_id, 0, num_regs, regs.val.R);
+      physical_coords.thread_id, 0, num_regs, regs.val.regular);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
@@ -346,7 +350,7 @@ static void ReadRRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                            cudbgGetErrorString(res));
 
   for (size_t i = 0; i < num_regs; ++i)
-    regs.is_valid.R[i] = true;
+    regs.is_valid.regular[i] = true;
 }
 
 static void
@@ -359,7 +363,7 @@ ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
 
   CUDBGResult res = api->readPredicates(
       physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      physical_coords.thread_id, num_regs, regs.val.P);
+      physical_coords.thread_id, num_regs, regs.val.predicate);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
@@ -367,7 +371,7 @@ ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                            cudbgGetErrorString(res));
 
   for (size_t i = 0; i < num_regs; ++i)
-    regs.is_valid.P[i] = true;
+    regs.is_valid.predicate[i] = true;
 }
 
 static void
@@ -380,7 +384,7 @@ ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
 
   CUDBGResult res = api->readUniformRegisterRange(
       physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id, 0,
-      num_regs, regs.val.UR);
+      num_regs, regs.val.uniform);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
@@ -388,7 +392,7 @@ ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                            cudbgGetErrorString(res));
 
   for (size_t i = 0; i < num_regs; ++i)
-    regs.is_valid.UR[i] = true;
+    regs.is_valid.uniform[i] = true;
 }
 
 static void
@@ -401,7 +405,7 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
 
   CUDBGResult res = api->readUniformPredicates(
       physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      num_regs, regs.val.UP);
+      num_regs, regs.val.uniform_predicate);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
@@ -409,8 +413,8 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                            cudbgGetErrorString(res));
 
   for (size_t i = 0; i < num_regs; ++i) {
-    regs.val.UP[i] = regs.val.UP[i] & 0x1;
-    regs.is_valid.UP[i] = true;
+    regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
+    regs.is_valid.uniform_predicate[i] = true;
   }
 }
 
@@ -451,19 +455,19 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
     DeviceState &device_info =
         GetGPUThread().GetGPU().GetAllDevices()[physical_coords.dev_id];
 
-    ReadRRegistersFromDevice(device_info, api, physical_coords, regs);
+    ReadRegularRegistersFromDevice(device_info, api, physical_coords, regs);
     ReadPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
     ReadUniformRegistersFromDevice(device_info, api, physical_coords, regs);
     ReadUniformPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
 
     {
-      regs.val.RZ = 0;
-      regs.is_valid.RZ = true;
+      regs.val.regular_zero = 0;
+      regs.is_valid.regular_zero = true;
     }
 
     {
-      regs.val.URZ = 0;
-      regs.is_valid.URZ = true;
+      regs.val.uniform_zero = 0;
+      regs.is_valid.uniform_zero = true;
     }
 
     return regs;
@@ -510,25 +514,25 @@ Status RegisterContextNVIDIAGPU::ReadRegister(const RegisterInfo *reg_info,
     if (!regs.is_valid.errorPC)
       return Status("errorPC register is invalid");
   } else if (reg_num == LLDB_RA) {
-    if (!regs.is_valid.R[sass::SASS_RA_REG_LO] ||
-        !regs.is_valid.R[sass::SASS_RA_REG_HI])
+    if (!regs.is_valid.regular[sass::SASS_RA_REG_LO] ||
+        !regs.is_valid.regular[sass::SASS_RA_REG_HI])
       return Status("RA register is invalid");
   } else if (reg_num >= static_cast<int>(kNumRegs)) {
     return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
   } else if (int up_index = reg_num - LLDB_UP0; up_index >= 0) {
-    if (!regs.is_valid.UP[up_index])
+    if (!regs.is_valid.uniform_predicate[up_index])
       return Status::FromErrorStringWithFormatv("UP{} register is invalid",
                                                 up_index);
   } else if (int p_index = reg_num - LLDB_P0; p_index >= 0) {
-    if (!regs.is_valid.P[p_index])
+    if (!regs.is_valid.predicate[p_index])
       return Status::FromErrorStringWithFormatv("P{} register is invalid",
                                                 p_index);
   } else if (int ur_index = reg_num - LLDB_UR0; ur_index >= 0) {
-    if (!regs.is_valid.UR[ur_index])
+    if (!regs.is_valid.uniform[ur_index])
       return Status::FromErrorStringWithFormatv("UR{} register is invalid",
                                                 ur_index);
   } else if (int r_index = reg_num - LLDB_R0; r_index >= 0) {
-    if (!regs.is_valid.R[r_index])
+    if (!regs.is_valid.regular[r_index])
       return Status::FromErrorStringWithFormatv("R{} register is invalid",
                                                 r_index);
   }
@@ -564,7 +568,8 @@ RegisterContextNVIDIAGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
     g_expedited_regs.push_back(LLDB_SP);
     g_expedited_regs.push_back(LLDB_FP);
     g_expedited_regs.push_back(LLDB_RA);
-    g_expedited_regs.insert(g_expedited_regs.end(), {EXPAND_R_REGISTERS(LLDB)});
+    g_expedited_regs.insert(g_expedited_regs.end(),
+                            {EXPAND_REGULAR_REGISTERS(LLDB)});
   }
   return g_expedited_regs;
 }
@@ -580,13 +585,13 @@ ThreadRegisterValidity::ThreadRegisterValidity() {
   PC = false;
   errorPC = false;
   for (size_t i = 0; i < kNumRRegs; ++i)
-    R[i] = false;
-  RZ = false;
+    regular[i] = false;
+  regular_zero = false;
   for (size_t i = 0; i < kNumPRegs; ++i)
-    P[i] = false;
+    predicate[i] = false;
   for (size_t i = 0; i < kNumURRegs; ++i)
-    UR[i] = false;
-  URZ = false;
+    uniform[i] = false;
+  uniform_zero = false;
   for (size_t i = 0; i < kNumUPRegs; ++i)
-    UP[i] = false;
+    uniform_predicate[i] = false;
 }

@@ -282,7 +282,7 @@ size_t DeviceState::GetNumUniformRegisters() {
   return *m_num_uniform_registers;
 }
 
-size_t DeviceState::GetNumRRegisters() {
+size_t DeviceState::GetNumRegularRegisters() {
   if (m_num_r_registers)
     return *m_num_r_registers;
 
