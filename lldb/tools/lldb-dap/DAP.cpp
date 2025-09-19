@@ -1491,7 +1491,6 @@ void DAP::EventThread() {
           // target ID of the created target. The DAP instance will attach to
           // this existing target and the debug session will be ready to go.
           llvm::json::Object attach_config;
-          llvm::json::Array attach_commands;
 
           // If we have a process name, add command to attach to the same
           // process name
