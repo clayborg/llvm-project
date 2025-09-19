@@ -178,7 +178,7 @@ struct GPUActions {
   /// The name of the plugin.
   std::string plugin_name;
   /// The name to give a DAP session
-  std::string dap_session_name;
+  std::string session_name;
   /// New breakpoints to set. Nothing to set if this is empty.
   std::vector<GPUBreakpointInfo> breakpoints;
   /// If a GPU connection is available return a connect URL to use to reverse

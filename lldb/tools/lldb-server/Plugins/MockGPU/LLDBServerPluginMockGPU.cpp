@@ -173,7 +173,7 @@ LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(\"%s\") disabling breakpoint", 
               bp_identifier.c_str());
     response.actions.connect_info = CreateConnection();
-    response.actions.dap_session_name = "Mock GPU Session";
+    response.actions.session_name = "Mock GPU Session";
 
     // We asked for the symbol "gpu_shlib_load" to be delivered as a symbol
     // value when the "gpu_initialize" breakpoint was set. So we will use this

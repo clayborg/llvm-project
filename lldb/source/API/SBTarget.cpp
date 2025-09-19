@@ -145,11 +145,11 @@ SBModule SBTarget::GetModuleAtIndexFromEvent(const uint32_t idx,
   return SBModule(module_list.GetModuleAtIndex(idx));
 }
 
-const char *SBTarget::GetDAPSessionNameFromEvent(const SBEvent &event) {
+const char *SBTarget::GetSessionNameFromEvent(const SBEvent &event) {
   LLDB_INSTRUMENT_VA(event);
 
   return ConstString(
-             Target::TargetEventData::GetDAPSessionNameFromEvent(event.get()))
+             Target::TargetEventData::GetSessionNameFromEvent(event.get()))
       .AsCString();
 }
 

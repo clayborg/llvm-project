@@ -70,7 +70,7 @@ public:
   static lldb::SBModule GetModuleAtIndexFromEvent(const uint32_t idx,
                                                   const lldb::SBEvent &event);
 
-  static const char *GetDAPSessionNameFromEvent(const SBEvent &event);
+  static const char *GetSessionNameFromEvent(const SBEvent &event);
 
   static const char *GetBroadcasterClassName();
 

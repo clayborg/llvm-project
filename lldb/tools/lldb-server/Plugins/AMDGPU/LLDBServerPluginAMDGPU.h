@@ -68,7 +68,7 @@ public:
   }
 
   bool CreateGPUBreakpoint(uint64_t addr);
-  llvm::StringRef GetDAPSessionName();
+  llvm::StringRef GetSessionName();
 
   // TODO: make this private
   struct GPUInternalBreakpoinInfo {
