@@ -306,7 +306,7 @@ public:
   ///
   /// \return
   ///     The number of R registers for the device.
-  size_t GetNumRRegisters();
+  size_t GetNumRegularRegisters();
 
   size_t GetNumPredicateRegisters();
 
