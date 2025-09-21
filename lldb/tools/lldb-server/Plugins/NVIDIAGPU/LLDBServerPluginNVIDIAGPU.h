@@ -15,19 +15,14 @@
 #include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "lldb/Utility/Status.h"
 
-namespace lldb_private {
-
-class TCPSocket;
-
-namespace lldb_server {
+namespace lldb_private::lldb_server {
 
 /// LLDB server plugin for NVIDIA GPU debugging support.
 ///
 /// This effectively orchestrates the initialization of the NVIDIA debugger API
 /// and the interaction between the CPU process, the GPU process and the
 /// debugger API.
-class LLDBServerPluginNVIDIAGPU
-    : public lldb_private::lldb_server::LLDBServerPlugin {
+class LLDBServerPluginNVIDIAGPU : public LLDBServerPlugin {
 public:
   /// Constructor for the NVIDIA GPU server plugin.
   ///
@@ -36,9 +31,8 @@ public:
   ///
   /// \param[in] main_loop
   ///     Reference to the main event loop for handling asynchronous events.
-  LLDBServerPluginNVIDIAGPU(
-      lldb_private::lldb_server::LLDBServerPlugin::GDBServer &native_process,
-      MainLoop &main_loop);
+  LLDBServerPluginNVIDIAGPU(LLDBServerPlugin::GDBServer &native_process,
+                            MainLoop &main_loop);
 
   /// Get the name identifier for this plugin.
   ///
@@ -108,7 +102,6 @@ private:
   std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
 };
 
-} // namespace lldb_server
-} // namespace lldb_private
+} // namespace lldb_private::lldb_server
 
 #endif // LLDB_TOOLS_LLDB_SERVER_LLDBSERVERPLUGINNVIDIAGPU_H
