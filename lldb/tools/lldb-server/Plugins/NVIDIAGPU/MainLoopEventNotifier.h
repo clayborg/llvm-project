@@ -11,11 +11,11 @@
 
 #include <sys/socket.h>
 
+#include "forward-declarations.h"
 #include "lldb/Host/MainLoop.h"
 
 namespace lldb_private::lldb_server {
 
-class MainLoopEventNotifier;
 using MainLoopEventNotifierUP = std::unique_ptr<MainLoopEventNotifier>;
 
 /// This class is used to notify a main loop that an event has occurred.
