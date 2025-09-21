@@ -10,6 +10,7 @@
 #define LLDB_TOOLS_LLDB_SERVER_PLUGINS_NVIDIAGPU_DEVICESTATE_H
 
 #include "../Utils/Bitset.h"
+#include "ThreadNVIDIAGPU.h"
 #include "cudadebugger.h"
 #include "lldb/Utility/Stream.h"
 #include <functional>
@@ -63,9 +64,22 @@ struct ExceptionInfo {
 class ThreadState {
 public:
   /// Construct a thread state with physical coordinates.
+  ///
+  /// \param[in] gpu
+  ///     The GPU that this thread state belongs to.
   /// \param[in] physical_coords
-  ///     This physical coordinates won't change for the lifetime of this object.
-  ThreadState(const PhysicalCoords &physical_coords);
+  ///     This physical coordinates won't change for the lifetime of this
+  ///     object.
+  ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords);
+
+  /// Non-copyable.
+  ThreadState(const ThreadState &) = delete;
+  ThreadState &operator=(const ThreadState &) = delete;
+
+  /// We want to make ThreadState non-movable and non-copyable, but as its
+  /// stored in a vector, we need to define a move constructor. This move
+  /// constructor must abort if invoked.
+  ThreadState(ThreadState &&);
 
   /// Decode thread information from a buffer received from CUDA debugger API.
   ///
@@ -126,6 +140,10 @@ public:
   ///     The unique sequential ID for this thread.
   lldb::tid_t GetThreadID() const { return m_thread_id; }
 
+  /// \return
+  ///     The ThreadNVIDIAGPU object associated with this thread.
+  ThreadNVIDIAGPU &GetThreadNVIDIAGPU() { return m_thread_nvidiagpu; }
+
 private:
   /// Whether this thread is valid in the GPU.
   bool m_is_valid = false;
@@ -144,6 +162,10 @@ private:
 
   /// Unique sequential ID for this thread.
   lldb::tid_t m_thread_id;
+
+  /// The ThreadNVIDIAGPU object associated with this thread. This object is the
+  /// interface LLGS wants to interact with.
+  ThreadNVIDIAGPU m_thread_nvidiagpu;
 };
 
 /// Represents the state of a CUDA warp.
@@ -151,6 +173,8 @@ class WarpState {
 public:
   /// Construct a warp state with the specified parameters.
   ///
+  /// \param[in] gpu
+  ///     The GPU that this warp state belongs to.
   /// \param[in] num_threads
   ///     The number of threads in this warp.
   /// \param[in] device_id
@@ -159,8 +183,8 @@ public:
   ///     The streaming multiprocessor ID where this warp resides.
   /// \param[in] warp_id
   ///     The warp ID within the streaming multiprocessor.
-  WarpState(uint32_t num_threads, uint32_t device_id, uint32_t sm_id,
-            uint32_t warp_id);
+  WarpState(NVIDIAGPU &gpu, uint32_t num_threads, uint32_t device_id,
+            uint32_t sm_id, uint32_t warp_id);
 
   /// Decode warp information from a buffer received from CUDA debugger API.
   ///
@@ -202,14 +226,18 @@ public:
 
   /// \return
   ///     A reference to the collection of threads.
-  llvm::ArrayRef<ThreadState> GetThreads() const { return m_threads; }
+  llvm::MutableArrayRef<ThreadState> GetThreads() const { return m_threads; }
 
   /// \return
   ///     An iterator to the collection of valid threads.
-  auto GetValidThreads() const {
+  auto GetValidThreads() {
     return llvm::make_filter_range(
-        m_threads, [](const ThreadState &thread) { return thread.IsValid(); });
+        m_threads, [](ThreadState &thread) { return thread.IsValid(); });
   }
+
+  /// \return
+  ///     The maximum number of threads on this warp supported by the HW.
+  size_t GetMaxNumSupportedThreads() const;
 
 private:
   /// Whether this warp is valid in the GPU.
@@ -227,6 +255,8 @@ class SMState {
 public:
   /// Construct an SM state with the specified parameters.
   ///
+  /// \param[in] gpu
+  ///     The GPU that this SM state belongs to.
   /// \param[in] num_warps
   ///     The number of warps in this SM.
   /// \param[in] num_threads_per_warp
@@ -235,8 +265,8 @@ public:
   ///     The device ID where this SM resides.
   /// \param[in] sm_id
   ///     The SM ID within the device.
-  SMState(uint32_t num_warps, uint32_t num_threads_per_warp, uint32_t device_id,
-          uint32_t sm_id);
+  SMState(NVIDIAGPU &gpu, uint32_t num_warps, uint32_t num_threads_per_warp,
+          uint32_t device_id, uint32_t sm_id);
 
   /// Decode SM information from a buffer received from CUDA debugger API.
   ///
@@ -274,14 +304,18 @@ public:
 
   /// \return
   ///     A reference to the collection of warps.
-  llvm::ArrayRef<WarpState> GetWarps() const { return m_warps; }
+  llvm::MutableArrayRef<WarpState> GetWarps() { return m_warps; }
 
   /// \return
   ///     An iterator to the collection of valid warps.
-  auto GetValidWarps() const {
+  auto GetValidWarps() {
     return llvm::make_filter_range(
-        m_warps, [](const WarpState &warp) { return warp.IsValid(); });
+        m_warps, [](WarpState &warp) { return warp.IsValid(); });
   }
+
+  /// \return
+  ///     The maximum number of threads on this SM supported by the HW.
+  size_t GetMaxNumSupportedThreads() const;
 
 private:
   /// Whether this SM is currently active in the GPU.
@@ -296,11 +330,11 @@ class DeviceState {
 public:
   /// Construct a device state manager for the specified device.
   ///
-  /// \param[in] api
-  ///     Reference to the CUDA debugger API structure.
+  /// \param[in] gpu
+  ///     The GPU that this device state belongs to.
   /// \param[in] device_id
   ///     The ID of the CUDA device to manage.
-  DeviceState(const CUDBGAPI_st &api, uint32_t device_id);
+  DeviceState(NVIDIAGPU &gpu, uint32_t device_id);
 
   /// Get the number of R registers available on this device. This is cached for the lifetime of the device.
   ///
@@ -340,18 +374,18 @@ public:
 
   /// \return
   ///     A reference to the collection of SM states.
-  llvm::ArrayRef<SMState> GetSMs() const { return m_sms; }
+  llvm::MutableArrayRef<SMState> GetSMs() { return m_sms; }
 
   /// \return
   ///     An iterator to the collection of active SMs.
-  auto GetActiveSMs() const {
-    return llvm::make_filter_range(
-        m_sms, [](const SMState &sm) { return sm.IsActive(); });
+  auto GetActiveSMs() {
+    return llvm::make_filter_range(m_sms,
+                                   [](SMState &sm) { return sm.IsActive(); });
   }
 
   /// \return
-  ///     The maximum number of threads on this device.
-  size_t GetMaxNumThreads() const;
+  ///     The maximum number of threads on this device supported by the HW.
+  size_t GetMaxNumSupportedThreads() const;
 
 private:
   /// Decode device information from a buffer received from CUDA debugger API.
@@ -423,9 +457,9 @@ public:
 
   /// Construct a registry and initialize it with all available CUDA devices.
   ///
-  /// \param[in] api
-  ///     Reference to the CUDA debugger API structure.
-  DeviceStateRegistry(const CUDBGAPI_st &api);
+  /// \param[in] gpu
+  ///     The GPU that this device state registry belongs to.
+  DeviceStateRegistry(NVIDIAGPU &gpu);
 
   /// Update state information for all registered devices.
   void BatchUpdate();
@@ -456,7 +490,11 @@ public:
 
   /// \return
   ///     A reference to the collection of device states.
-  llvm::ArrayRef<DeviceState> GetDevices() { return m_devices; }
+  llvm::MutableArrayRef<DeviceState> GetDevices() { return m_devices; }
+
+  /// \return
+  ///     The maximum number of threads on all devices supported by the HW.
+  size_t GetMaxNumSupportedThreads() const;
 
 private:
   /// Collection of device states for all CUDA devices in the system.

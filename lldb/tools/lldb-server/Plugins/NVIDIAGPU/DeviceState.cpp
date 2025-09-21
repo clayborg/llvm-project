@@ -8,7 +8,9 @@
 
 #include "DeviceState.h"
 #include "../Utils/Utils.h"
+#include "NVIDIAGPU.h"
 #include "lldb/Utility/StreamString.h"
+#include <numeric>
 
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
@@ -99,10 +101,20 @@ std::string ExceptionInfo::ToString() const {
   return result;
 }
 
-ThreadState::ThreadState(const PhysicalCoords &physical_coords)
-    : m_physical_coords(physical_coords) {
-  static lldb::tid_t g_thread_id = 1;
-  m_thread_id = g_thread_id++;
+static lldb::tid_t g_thread_id = 1;
+
+ThreadState::ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords)
+    : m_physical_coords(physical_coords), m_thread_id(g_thread_id++),
+      m_thread_nvidiagpu(gpu, m_thread_id, this) {}
+
+ThreadState::ThreadState(ThreadState &&other)
+    : m_physical_coords(other.GetPhysicalCoords()),
+      m_thread_id(other.m_thread_id),
+      m_thread_nvidiagpu(other.m_thread_nvidiagpu.GetGPU(), other.m_thread_id,
+                         this) {
+  logAndReportFatalError("ThreadState is not movable. Ensure that this "
+                         "constructor is never called by reserving the "
+                         "appropriate amount of space in parent container.");
 }
 
 void ThreadState::Dump(Stream &s) {
@@ -121,12 +133,12 @@ void ThreadState::Dump(Stream &s) {
   }
 }
 
-WarpState::WarpState(uint32_t num_threads, uint32_t device_id, uint32_t sm_id,
-                     uint32_t warp_id) {
+WarpState::WarpState(NVIDIAGPU &gpu, uint32_t num_threads, uint32_t device_id,
+                     uint32_t sm_id, uint32_t warp_id) {
   m_threads.reserve(num_threads);
   for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
     m_threads.emplace_back(
-        PhysicalCoords(device_id, sm_id, warp_id, thread_id));
+        gpu, PhysicalCoords(device_id, sm_id, warp_id, thread_id));
 }
 
 void WarpState::Dump(Stream &s) {
@@ -156,12 +168,15 @@ const ThreadState *WarpState::FindSomeThreadWithException() const {
   return nullptr;
 }
 
-SMState::SMState(uint32_t num_warps, uint32_t num_threads_per_warp,
-                 uint32_t device_id, uint32_t sm_id)
+size_t WarpState::GetMaxNumSupportedThreads() const { return m_threads.size(); }
+
+SMState::SMState(NVIDIAGPU &gpu, uint32_t num_warps,
+                 uint32_t num_threads_per_warp, uint32_t device_id,
+                 uint32_t sm_id)
     : m_is_active(false), m_warps() {
   m_warps.reserve(num_warps);
   for (uint32_t warp_id = 0; warp_id < num_warps; ++warp_id)
-    m_warps.emplace_back(num_threads_per_warp, device_id, sm_id, warp_id);
+    m_warps.emplace_back(gpu, num_threads_per_warp, device_id, sm_id, warp_id);
 }
 
 void SMState::SetIsActive(bool is_active) { m_is_active = is_active; }
@@ -194,8 +209,15 @@ const ThreadState *SMState::FindSomeThreadWithException() const {
   return nullptr;
 }
 
-DeviceState::DeviceState(const CUDBGAPI_st &api, uint32_t device_id)
-    : m_api(&api), m_device_id(device_id) {
+size_t SMState::GetMaxNumSupportedThreads() const {
+  return std::accumulate(m_warps.begin(), m_warps.end(), 0,
+                         [](size_t acc, const WarpState &warp) {
+                           return acc + warp.GetMaxNumSupportedThreads();
+                         });
+}
+
+DeviceState::DeviceState(NVIDIAGPU &gpu, uint32_t device_id)
+    : m_api(gpu.GetDebuggerAPI()), m_device_id(device_id) {
   CUDBGResult res =
       m_api->getDeviceInfoSizes(m_device_id, &m_device_info_sizes);
   if (res != CUDBG_SUCCESS) {
@@ -228,8 +250,8 @@ DeviceState::DeviceState(const CUDBGAPI_st &api, uint32_t device_id)
 
   m_sms.reserve(m_num_sms);
   for (uint32_t sm_id = 0; sm_id < m_num_sms; ++sm_id)
-    m_sms.emplace_back(m_num_warps_per_sm, m_num_threads_per_warp, m_device_id,
-                       sm_id);
+    m_sms.emplace_back(gpu, m_num_warps_per_sm, m_num_threads_per_warp,
+                       m_device_id, sm_id);
 }
 
 size_t DeviceState::GetNumPredicateRegisters() {
@@ -347,9 +369,16 @@ const ThreadState *DeviceState::FindSomeThreadWithException() const {
   return nullptr;
 }
 
-DeviceStateRegistry::DeviceStateRegistry(const CUDBGAPI_st &api) {
+size_t DeviceState::GetMaxNumSupportedThreads() const {
+  return std::accumulate(m_sms.begin(), m_sms.end(), 0,
+                         [](size_t acc, const SMState &sm) {
+                           return acc + sm.GetMaxNumSupportedThreads();
+                         });
+}
+
+DeviceStateRegistry::DeviceStateRegistry(NVIDIAGPU &gpu) {
   uint32_t num_devices;
-  CUDBGResult res = api.getNumDevices(&num_devices);
+  CUDBGResult res = gpu.GetDebuggerAPI()->getNumDevices(&num_devices);
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("AllDevices::AllDevices(). "
                            "getNumDevices failed: {0}",
@@ -357,7 +386,7 @@ DeviceStateRegistry::DeviceStateRegistry(const CUDBGAPI_st &api) {
 
   m_devices.reserve(num_devices);
   for (uint32_t device_id = 0; device_id < num_devices; ++device_id)
-    m_devices.emplace_back(api, device_id);
+    m_devices.emplace_back(gpu, device_id);
 }
 
 void DeviceStateRegistry::BatchUpdate() {
@@ -382,4 +411,11 @@ const ThreadState *DeviceStateRegistry::FindSomeThreadWithException() const {
       return thread;
 
   return nullptr;
+}
+
+size_t DeviceStateRegistry::GetMaxNumSupportedThreads() const {
+  return std::accumulate(m_devices.begin(), m_devices.end(), 0,
+                         [](size_t acc, const DeviceState &device) {
+                           return acc + device.GetMaxNumSupportedThreads();
+                         });
 }
