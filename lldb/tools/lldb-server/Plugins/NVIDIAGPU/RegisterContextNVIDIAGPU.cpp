@@ -152,11 +152,12 @@ enum CompilerRegNum : uint32_t {
 static uint32_t g_gpr_regnums[] = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
                                    LLDB_RA};
 // All 255 R registers
-static uint32_t g_regular_regnums[] = {EXPAND_REGULAR_REGISTERS(LLDB)};
+static uint32_t g_regular_regnums[] = {EXPAND_REGULAR_REGISTERS(LLDB), LLDB_RZ};
 // All 8 predicate registers
 static uint32_t g_predicate_regnums[] = {EXPAND_PREDICATE_REGISTERS(LLDB)};
 // All 255 uniform registers
-static uint32_t g_uniform_regnums[] = {EXPAND_UNIFORM_REGISTERS(LLDB)};
+static uint32_t g_uniform_regnums[] = {EXPAND_UNIFORM_REGISTERS(LLDB),
+                                       LLDB_URZ};
 // All 8 uniform predicate registers
 static uint32_t g_uniform_predicate_regnums[] = {
     EXPAND_UNIFORM_PREDICATE_REGISTERS(LLDB)};
@@ -164,9 +165,9 @@ static uint32_t g_uniform_predicate_regnums[] = {
 static const RegisterSet g_reg_sets[] = {
     {"General Purpose Registers", "gpr",
      sizeof(g_gpr_regnums) / sizeof(g_gpr_regnums[0]), g_gpr_regnums},
-    {"Regular Registers", "r", kNumRRegs, g_regular_regnums},
+    {"Regular Registers", "r", LLDB_RZ - LLDB_R0 + 1, g_regular_regnums},
     {"Predicate Registers", "p", kNumPRegs, g_predicate_regnums},
-    {"Uniform Registers", "ur", kNumURRegs, g_uniform_regnums},
+    {"Uniform Registers", "ur", LLDB_URZ - LLDB_UR0 + 1, g_uniform_regnums},
     {"Uniform Predicate Registers", "up", kNumUPRegs,
      g_uniform_predicate_regnums}};
 
