@@ -48,3 +48,12 @@ class TestNVIDIAGPURegisters(NvidiaGpuTestCaseBase):
 
         up0 = frame.FindRegister("UP0")
         self.assertTrue(up0.IsValid())
+
+        # We check that RZ and URZ are in the right group
+        regular_registers = frame.GetRegisters().GetFirstValueByName("Regular Registers")
+        rz = regular_registers.GetChildAtIndex(regular_registers.GetNumChildren() - 1)
+        self.assertEqual(rz.GetName(), "RZ")
+
+        uniform_registers = frame.GetRegisters().GetFirstValueByName("Uniform Registers")
+        urz = uniform_registers.GetChildAtIndex(uniform_registers.GetNumChildren() - 1)
+        self.assertEqual(urz.GetName(), "URZ")
