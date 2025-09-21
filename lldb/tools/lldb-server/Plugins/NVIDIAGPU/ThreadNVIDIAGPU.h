@@ -9,17 +9,13 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 
-#include "DeviceState.h"
 #include "RegisterContextNVIDIAGPU.h"
+#include "forward-declarations.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-private-forward.h"
 #include <string>
 
 namespace lldb_private::lldb_server {
-class NVIDIAGPU;
-
-class NativeProcessLinux;
-
 /// This class represents a HW thread in a GPU.
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:

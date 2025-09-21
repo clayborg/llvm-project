@@ -98,7 +98,9 @@ private:
 
 NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate),
-      m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr) {
+      m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr),
+      m_fallback_thread(*this, std::numeric_limits<lldb::tid_t>::max() - 1,
+                        /*thread_state=*/nullptr) {
   // We need to initialize the state to stopped so that the client can connect
   // to the server. The gdb-remote protocol refuses to connect to running
   // targets.
@@ -107,12 +109,10 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
   // As part of connecting the client with the server, we need to set the
   // initial state to stopped, which requires sending some thread to the client.
   // Because of that, we create a fake thread with stopped state.
-  lldb::tid_t tid = 1;
-  auto thread =
-      std::make_unique<ThreadNVIDIAGPU>(*this, tid, /*thread_state=*/nullptr);
-  thread->SetStoppedByInitialization();
-  m_threads.push_back(std::move(thread));
-  SetCurrentThreadID(tid);
+  m_fallback_thread.SetStoppedByInitialization();
+  m_threads.push_back(
+      std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
+  SetCurrentThreadID(m_fallback_thread.GetID());
 }
 
 Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
@@ -150,8 +150,15 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
 }
 
 void NVIDIAGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
+  Log *log = GetLog(GDBRLog::Plugin);
   m_api = api.GetRawAPI();
-  m_devices = DeviceStateRegistry(*m_api);
+  m_devices = DeviceStateRegistry(*this);
+  size_t max_num_threads = m_devices.GetMaxNumSupportedThreads();
+  LLDB_LOG(
+      log,
+      "NVIDIAGPU::SetDebuggerAPI(). Reserving space for max num threads: {}",
+      max_num_threads);
+  m_threads.reserve(max_num_threads);
 }
 
 Status NVIDIAGPU::Halt() {
@@ -382,6 +389,14 @@ void NVIDIAGPU::ReportDyldStop() {
   SetState(StateType::eStateStopped, true);
 }
 
+/// Release all pointers to ThreadNVIDIAGPU objects and clear the vector.
+static void ReleaseAndClearThreads(
+    std::vector<std::unique_ptr<NativeThreadProtocol>> &threads) {
+  for (std::unique_ptr<NativeThreadProtocol> &thread : threads)
+    thread.release();
+  threads.clear();
+}
+
 void NVIDIAGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
   Log *log = GetLog(GDBRLog::Plugin);
@@ -390,28 +405,29 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   m_devices.BatchUpdate();
   LLDB_LOG(log, "Device info dump:\n{}", m_devices.Dump());
 
-  m_threads.clear();
+  ReleaseAndClearThreads(m_threads);
+
   std::optional<lldb::tid_t> exception_thread_id;
 
-  for (const DeviceState &device : m_devices.GetDevices()) {
-    for (const SMState &sm : device.GetActiveSMs()) {
-      for (const WarpState &warp : sm.GetValidWarps()) {
-        for (const ThreadState &thread_state : warp.GetValidThreads()) {
-          // This is a tad inneficient because we allocate all over again
-          // ThreadNVIDIAGPU objects. At some point this should be optimized.
-          auto thread = std::make_unique<ThreadNVIDIAGPU>(
-              *this, thread_state.GetThreadID(), &thread_state);
+  for (DeviceState &device : m_devices.GetDevices()) {
+    for (SMState &sm : device.GetActiveSMs()) {
+      for (WarpState &warp : sm.GetValidWarps()) {
+        for (ThreadState &thread_state : warp.GetValidThreads()) {
+          ThreadNVIDIAGPU &thread = thread_state.GetThreadNVIDIAGPU();
 
           if (const ExceptionInfo *exception_info =
                   thread_state.GetException()) {
-            thread->SetStoppedByException(*exception_info);
+            thread.SetStoppedByException(*exception_info);
             if (!exception_thread_id)
-              exception_thread_id = thread->GetID();
+              exception_thread_id = thread.GetID();
           } else {
-            thread->SetStopped();
+            thread.SetStopped();
           }
 
-          m_threads.push_back(std::move(thread));
+          /// The threads are owned by the DeviceStateRegistry, but we need to
+          /// add them to the m_threads vector using a std::unique_ptr that
+          /// we'll release later.
+          m_threads.push_back(std::unique_ptr<NativeThreadProtocol>(&thread));
         }
       }
     }
@@ -420,10 +436,9 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   // We need to report a fake thread in case no actual threads are found, as the
   // client doesn't support empty thread lists.
   if (m_threads.empty()) {
-    auto thread =
-        std::make_unique<ThreadNVIDIAGPU>(*this, 1, /*thread_state=*/nullptr);
-    thread->SetStopped(lldb::eStopReasonNone, "No threads found");
-    m_threads.push_back(std::move(thread));
+    m_fallback_thread.SetStopped(lldb::eStopReasonNone, "No threads found");
+    m_threads.push_back(
+        std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
   }
 
   SetCurrentThreadID(exception_thread_id.value_or(m_threads.front()->GetID()));
