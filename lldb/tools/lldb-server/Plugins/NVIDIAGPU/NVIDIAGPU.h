@@ -352,6 +352,8 @@ private:
 
   /// Snapshot of the information of all devices. It's updated upon every stop.
   DeviceStateRegistry m_devices;
+
+  ThreadNVIDIAGPU m_fallback_thread;
 };
 
 } // namespace lldb_private::lldb_server
