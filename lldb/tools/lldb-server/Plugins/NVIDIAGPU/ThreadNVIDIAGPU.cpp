@@ -74,9 +74,6 @@ void ThreadNVIDIAGPU::SetStopped(lldb::StopReason reason,
                                  uint32_t signo) {
   LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVIDIAGPU::SetStopped()");
 
-  // On every stop, clear any cached information.
-  GetRegisterContext().InvalidateAllRegisters();
-
   m_state = lldb::eStateStopped;
   if (description)
     m_stop_description = *description;
