@@ -21,6 +21,16 @@
 
 namespace lldb_private::lldb_server {
 
+/// This struct represents the coordinates of a warp in a GPU.
+struct WarpCoords {
+  int64_t dev_id;
+  int64_t sm_id;
+  int64_t warp_id;
+
+  WarpCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id)
+      : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id) {}
+};
+
 /// This struct represents the physical coordinates of a HW thread in a GPU.
 struct PhysicalCoords {
   int64_t dev_id;
@@ -31,6 +41,12 @@ struct PhysicalCoords {
   PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
                  int64_t thread_id)
       : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), thread_id(thread_id) {}
+
+  /// \return
+  ///     A corresponding warp coordinates structure.
+  WarpCoords GetWarpCoords() const {
+    return WarpCoords(dev_id, sm_id, warp_id);
+  }
 
   /// \return
   //    A string representation of the coordinates used for logging.
@@ -249,6 +265,13 @@ public:
   ///     The number of regular registers currently used by this warp.
   size_t GetCurrentNumRegularRegisters();
 
+  /// Get the registers for this warp. The result is cached until the warp state
+  /// changes.
+  ///
+  /// \return
+  ///     A reference to the registers for this warp.
+  const WarpRegistersWithValidity &GetRegisters();
+
 private:
   /// Whether this warp is valid in the GPU.
   bool m_is_valid = false;
@@ -262,6 +285,12 @@ private:
   /// The number of regular registers currently available for each thread of
   /// this warp.
   std::optional<uint32_t> m_current_num_regular_registers;
+
+  /// The registers for this warp.
+  WarpRegistersWithValidity m_regs;
+
+  /// Whether the registers for this warp have been calculated.
+  bool m_regs_calculated = false;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).
