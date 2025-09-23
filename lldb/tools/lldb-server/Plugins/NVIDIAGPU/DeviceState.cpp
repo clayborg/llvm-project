@@ -170,6 +170,28 @@ const ThreadState *WarpState::FindSomeThreadWithException() const {
 
 size_t WarpState::GetMaxNumSupportedThreads() const { return m_threads.size(); }
 
+size_t WarpState::GetCurrentNumRegularRegisters() {
+  if (m_current_num_regular_registers)
+    return *m_current_num_regular_registers;
+
+  CUDBGWarpResources resources;
+  // We get the coordinates and a handle to the API from the first thread in
+  // the warp. We do this to avoid storing additional copies at the warp level.
+  const PhysicalCoords &physical_coords = m_threads[0].GetPhysicalCoords();
+  NVIDIAGPU &gpu = m_threads[0].GetThreadNVIDIAGPU().GetGPU();
+
+  CUDBGResult res = gpu.GetDebuggerAPI()->readWarpResources(
+      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
+      &resources);
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("WarpState::GetCurrentNumRegularRegisters(). "
+                           "readWarpResources failed: {}",
+                           cudbgGetErrorString(res));
+
+  m_current_num_regular_registers = resources.numRegisters;
+  return *m_current_num_regular_registers;
+}
+
 SMState::SMState(NVIDIAGPU &gpu, uint32_t num_warps,
                  uint32_t num_threads_per_warp, uint32_t device_id,
                  uint32_t sm_id)
@@ -304,7 +326,7 @@ size_t DeviceState::GetNumUniformRegisters() {
   return *m_num_uniform_registers;
 }
 
-size_t DeviceState::GetNumRegularRegisters() {
+size_t DeviceState::GetMaxNumSupportedRegularRegister() {
   if (m_num_r_registers)
     return *m_num_r_registers;
 
