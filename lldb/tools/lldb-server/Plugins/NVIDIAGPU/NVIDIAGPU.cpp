@@ -408,6 +408,7 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   ReleaseAndClearThreads(m_threads);
 
   std::optional<lldb::tid_t> exception_thread_id;
+  bool exception_errorpc_matches_pc = false;
 
   for (DeviceState &device : m_devices.GetDevices()) {
     for (SMState &sm : device.GetActiveSMs()) {
@@ -415,13 +416,21 @@ void NVIDIAGPU::OnAllDevicesSuspended(
         for (ThreadState &thread_state : warp.GetValidThreads()) {
           ThreadNVIDIAGPU &thread = thread_state.GetThreadNVIDIAGPU();
 
-          if (const ExceptionInfo *exception_info =
-                  thread_state.GetException()) {
-            thread.SetStoppedByException(*exception_info);
-            if (!exception_thread_id)
-              exception_thread_id = thread.GetID();
-          } else {
-            thread.SetStopped();
+          // We report as the selected thread the one the first one that has an
+          // exception and whose errorPC matches its PC.
+          if (!exception_thread_id || !exception_errorpc_matches_pc) {
+            if (const ExceptionInfo *exception_info =
+                    thread_state.GetException()) {
+              bool new_exception_errorpc_matches_pc =
+                  exception_info->errorPC.has_value() &&
+                  exception_info->errorPC.value() == thread_state.GetPC();
+
+              if (!exception_thread_id || (new_exception_errorpc_matches_pc &&
+                                           !exception_errorpc_matches_pc)) {
+                exception_thread_id = thread.GetID();
+                exception_errorpc_matches_pc = new_exception_errorpc_matches_pc;
+              }
+            }
           }
 
           /// The threads are owned by the DeviceStateRegistry, but we need to
