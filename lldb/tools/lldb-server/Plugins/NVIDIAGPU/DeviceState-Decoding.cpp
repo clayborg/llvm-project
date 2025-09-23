@@ -77,6 +77,11 @@ size_t ThreadState::DecodeThreadInfoBuffer(
   m_pc = thread_info.virtualPC;
   m_exception = warp_exception;
   m_thread_idx = thread_idx;
+  m_thread_nvidiagpu.GetRegisterContext().InvalidateAllRegisters();
+  if (m_exception)
+    m_thread_nvidiagpu.SetStoppedByException(*m_exception);
+  else
+    m_thread_nvidiagpu.SetStopped();
 
   return buffer_offset;
 }
