@@ -239,6 +239,16 @@ public:
   ///     The maximum number of threads on this warp supported by the HW.
   size_t GetMaxNumSupportedThreads() const;
 
+  /// Get the number of regular registers currently used by this warp. It is
+  /// cached until the warp state changes.
+  ///
+  /// \param[in] gpu
+  ///     The GPU that this warp state belongs to.
+  ///
+  /// \return
+  ///     The number of regular registers currently used by this warp.
+  size_t GetCurrentNumRegularRegisters();
+
 private:
   /// Whether this warp is valid in the GPU.
   bool m_is_valid = false;
@@ -248,6 +258,10 @@ private:
 
   /// All threads in this warp.
   std::vector<ThreadState> m_threads;
+
+  /// The number of regular registers currently available for each thread of
+  /// this warp.
+  std::optional<uint32_t> m_current_num_regular_registers;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).
@@ -340,12 +354,27 @@ public:
   ///
   /// \return
   ///     The number of R registers for the device.
-  size_t GetNumRegularRegisters();
+  size_t GetMaxNumSupportedRegularRegister();
 
+  /// Get the number of predicate registers available on this device. This is
+  /// cached for the lifetime of the device.
+  ///
+  /// \return
+  ///     The number of predicate registers for the device.
   size_t GetNumPredicateRegisters();
 
+  /// Get the number of uniform registers available on this device. This is
+  /// cached for the lifetime of the device.
+  ///
+  /// \return
+  ///     The number of uniform registers for the device.
   size_t GetNumUniformRegisters();
 
+  /// Get the number of uniform predicate registers available on this device.
+  /// This is cached for the lifetime of the device.
+  ///
+  /// \return
+  ///     The number of uniform predicate registers for the device.
   size_t GetNumUniformPredicateRegisters();
 
   /// Update all device state information from the CUDA debugger API.
