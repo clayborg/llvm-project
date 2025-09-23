@@ -339,7 +339,9 @@ static void
 ReadRegularRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                const PhysicalCoords &physical_coords,
                                ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetNumRegularRegisters();
+  size_t num_regs = device_info.GetSMs()[physical_coords.sm_id]
+                        .GetWarps()[physical_coords.warp_id]
+                        .GetCurrentNumRegularRegisters();
 
   CUDBGResult res = api->readRegisterRange(
       physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
