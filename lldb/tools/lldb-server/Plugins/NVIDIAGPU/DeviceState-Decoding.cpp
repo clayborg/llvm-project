@@ -102,6 +102,7 @@ size_t WarpState::DecodeWarpInfoBuffer(
       std::numeric_limits<uint32_t>::max());
   bool thread_attributes_present = false;
 
+  m_regs_calculated = false;
   m_current_num_regular_registers = std::nullopt;
   m_exception = std::nullopt;
   std::optional<uint64_t> errorPC;
