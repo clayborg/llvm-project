@@ -451,7 +451,9 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
         ReadFrameAddress(row_register_kind, row->GetAFAValue(), m_afa);
 
         // A couple of sanity checks..
-        if (m_cfa == LLDB_INVALID_ADDRESS || m_cfa == 0 || m_cfa == 1) {
+        if (m_cfa == LLDB_INVALID_ADDRESS ||
+            (abi_sp && !abi_sp->CallFrameAddressIsValid(m_cfa)) ||
+            (!abi_sp && (m_cfa == 0 || m_cfa == 1))) {
           UnwindLogMsg("could not find a valid cfa address");
           m_frame_type = eNotAValidFrame;
           return;
@@ -1809,9 +1811,13 @@ bool RegisterContextUnwind::TryFallbackUnwindPlan() {
       active_row->GetCFAValue().GetValueType() !=
           UnwindPlan::Row::FAValue::unspecified) {
     addr_t new_cfa;
+    ProcessSP process_sp = m_thread.GetProcess();
+    ABISP abi_sp = process_sp ? process_sp->GetABI() : nullptr;
     if (!ReadFrameAddress(m_fallback_unwind_plan_sp->GetRegisterKind(),
-                            active_row->GetCFAValue(), new_cfa) ||
-        new_cfa == 0 || new_cfa == 1 || new_cfa == LLDB_INVALID_ADDRESS) {
+                          active_row->GetCFAValue(), new_cfa) ||
+        new_cfa == LLDB_INVALID_ADDRESS ||
+        (abi_sp && !abi_sp->CallFrameAddressIsValid(new_cfa)) ||
+        (!abi_sp && (new_cfa == 0 || new_cfa == 1))) {
       UnwindLogMsg("failed to get cfa with fallback unwindplan");
       m_fallback_unwind_plan_sp.reset();
       m_full_unwind_plan_sp = original_full_unwind_plan_sp;
@@ -1832,10 +1838,8 @@ bool RegisterContextUnwind::TryFallbackUnwindPlan() {
         if (ReadRegisterValueFromRegisterLocation(regloc, reg_info,
                                                   reg_value)) {
           new_caller_pc_value = reg_value.GetAsUInt64();
-          if (ProcessSP process_sp = m_thread.GetProcess()) {
-            if (ABISP abi_sp = process_sp->GetABI())
-              new_caller_pc_value = abi_sp->FixCodeAddress(new_caller_pc_value);
-          }
+          if (abi_sp)
+            new_caller_pc_value = abi_sp->FixCodeAddress(new_caller_pc_value);
         }
       }
     }
@@ -1894,9 +1898,12 @@ bool RegisterContextUnwind::ForceSwitchToFallbackUnwindPlan() {
       active_row->GetCFAValue().GetValueType() !=
           UnwindPlan::Row::FAValue::unspecified) {
     addr_t new_cfa;
+    ABISP abi_sp = m_thread.GetProcess()->GetABI();
     if (!ReadFrameAddress(m_fallback_unwind_plan_sp->GetRegisterKind(),
-                            active_row->GetCFAValue(), new_cfa) ||
-        new_cfa == 0 || new_cfa == 1 || new_cfa == LLDB_INVALID_ADDRESS) {
+                          active_row->GetCFAValue(), new_cfa) ||
+        new_cfa == LLDB_INVALID_ADDRESS ||
+        (abi_sp && !abi_sp->CallFrameAddressIsValid(new_cfa)) ||
+        (!abi_sp && (new_cfa == 0 || new_cfa == 1))) {
       UnwindLogMsg("failed to get cfa with fallback unwindplan");
       m_fallback_unwind_plan_sp.reset();
       return false;
@@ -2020,8 +2027,9 @@ bool RegisterContextUnwind::ReadFrameAddress(
     if (ReadGPRValue(cfa_reg, cfa_reg_contents)) {
       if (abi_sp)
         cfa_reg_contents = abi_sp->FixDataAddress(cfa_reg_contents);
-      if (cfa_reg_contents == LLDB_INVALID_ADDRESS || cfa_reg_contents == 0 ||
-          cfa_reg_contents == 1) {
+      if (cfa_reg_contents == LLDB_INVALID_ADDRESS ||
+          (abi_sp && !abi_sp->CallFrameAddressIsValid(cfa_reg_contents)) ||
+          (!abi_sp && (cfa_reg_contents == 0 || cfa_reg_contents == 1))) {
         UnwindLogMsg(
             "Got an invalid CFA register value - reg %s (%d), value 0x%" PRIx64,
             cfa_reg.GetName(), cfa_reg.GetAsKind(eRegisterKindLLDB),
