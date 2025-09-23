@@ -934,6 +934,20 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   }
 
   // This is the CPU process.
+  uint32_t current_stop_id = GetStopId();
+  auto it = m_processed_gpu_actions.find(gpu_action.plugin_name);
+  if (it != m_processed_gpu_actions.end() && it->second == current_stop_id) {
+    LLDB_LOG(log,
+             "ProcessGDBRemote::HandleGPUActions skipping already "
+             "processed GPU actions for plugin '{0}' with process stop_id {1}",
+             gpu_action.plugin_name, current_stop_id);
+    return Status();
+  m_processed_gpu_actions[gpu_action.plugin_name] = current_stop_id;
+  LLDB_LOG(log,
+           "ProcessGDBRemote::HandleGPUActions processing GPU actions "
+           "for plugin '{0}' with process stop_id {1}",
+           gpu_action.plugin_name, current_stop_id);
+  }
   Status error;
   if (!gpu_action.breakpoints.empty())
     HandleGPUBreakpoints(gpu_action);
@@ -2809,22 +2823,7 @@ void ProcessGDBRemote::RefreshStateAfterStop() {
   UpdateThreadListIfNeeded();
 
   if (m_last_stop_packet)
-    std::string packet_str = m_last_stop_packet->GetStringRef().str();
-    size_t gpu_actions_pos = packet_str.find(";gpu-actions:");
-    if (gpu_actions_pos != std::string::npos) {
-      // Find the end of the gpu-actions value.
-      size_t end_pos = packet_str.find(';', gpu_actions_pos + 1);
-      if (end_pos == std::string::npos) {
-        end_pos = packet_str.length();
-      }
-      // Remove the gpu-actions key-value pair
-      packet_str.erase(gpu_actions_pos, end_pos - gpu_actions_pos);
-    }
-
-    // Process the modified packet without gpu-actions.
-    StringExtractorGDBRemote modified_packet(packet_str);
-    SetThreadStopInfo(modified_packet);
-  }
+    SetThreadStopInfo(*m_last_stop_packet);
   m_last_stop_packet.reset();
 
   // If we have queried for a default thread id

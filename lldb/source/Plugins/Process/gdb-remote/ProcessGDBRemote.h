@@ -554,6 +554,9 @@ private:
   llvm::StringMap<std::unique_ptr<FieldEnum>> m_registers_enum_types;
 
   SyncState m_sync_state;
+  
+  //  Map to track processed GPU actions.
+  std::map<std::string, uint32_t> m_processed_gpu_actions;
 };
 
 } // namespace process_gdb_remote
