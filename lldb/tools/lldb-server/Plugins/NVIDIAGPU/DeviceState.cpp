@@ -9,6 +9,7 @@
 #include "DeviceState.h"
 #include "../Utils/Utils.h"
 #include "NVIDIAGPU.h"
+#include "ThreadNVIDIAGPU.h"
 #include "lldb/Utility/StreamString.h"
 #include <numeric>
 
@@ -190,6 +191,70 @@ size_t WarpState::GetCurrentNumRegularRegisters() {
 
   m_current_num_regular_registers = resources.numRegisters;
   return *m_current_num_regular_registers;
+}
+
+static void ReadUniformRegistersFromDevice(DeviceState &device_info,
+                                           CUDBGAPI api,
+                                           const WarpCoords &warp_coords,
+                                           WarpRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumUniformRegisters();
+  if (num_regs == 0)
+    return;
+
+  CUDBGResult res = api->readUniformRegisterRange(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, 0, num_regs,
+      regs.val.uniform);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readUniformRegisterRange failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i)
+    regs.is_valid.uniform[i] = true;
+}
+
+static void
+ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                        const WarpCoords &warp_coords,
+                                        WarpRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetNumUniformPredicateRegisters();
+  if (num_regs == 0)
+    return;
+
+  CUDBGResult res = api->readUniformPredicates(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, num_regs,
+      regs.val.uniform_predicate);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+                           "readUniformPredicates failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i) {
+    regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
+    regs.is_valid.uniform_predicate[i] = true;
+  }
+}
+
+const WarpRegistersWithValidity &WarpState::GetRegisters() {
+  if (m_regs_calculated)
+    return m_regs;
+
+  ThreadState &thread = m_threads[0];
+  ThreadNVIDIAGPU &thread_nvidiagpu = thread.GetThreadNVIDIAGPU();
+  NVIDIAGPU &gpu = thread_nvidiagpu.GetGPU();
+
+  WarpCoords coords = thread.GetPhysicalCoords().GetWarpCoords();
+  DeviceState &device_info = gpu.GetAllDevices()[coords.dev_id];
+
+  ReadUniformRegistersFromDevice(device_info, gpu.GetDebuggerAPI(), coords,
+                                 m_regs);
+  ReadUniformPredicateRegistersFromDevice(device_info, gpu.GetDebuggerAPI(),
+                                          coords, m_regs);
+
+  m_regs_calculated = true;
+  return m_regs;
 }
 
 SMState::SMState(NVIDIAGPU &gpu, uint32_t num_warps,
