@@ -9,6 +9,7 @@
 #include "RegisterContextNVIDIAGPU.h"
 
 #include "../Utils/Utils.h"
+#include "DeviceState.h"
 #include "NVIDIAGPU.h"
 #include "ThreadNVIDIAGPU.h"
 #include "lldb/Utility/RegisterValue.h"
@@ -377,50 +378,6 @@ ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
     regs.is_valid.predicate[i] = true;
 }
 
-static void
-ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                               const PhysicalCoords &physical_coords,
-                               ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetNumUniformRegisters();
-  if (num_regs == 0)
-    return;
-
-  CUDBGResult res = api->readUniformRegisterRange(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id, 0,
-      num_regs, regs.val.uniform);
-
-  if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
-                           "readUniformRegisterRange failed: {}",
-                           cudbgGetErrorString(res));
-
-  for (size_t i = 0; i < num_regs; ++i)
-    regs.is_valid.uniform[i] = true;
-}
-
-static void
-ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                        const PhysicalCoords &physical_coords,
-                                        ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetNumUniformPredicateRegisters();
-  if (num_regs == 0)
-    return;
-
-  CUDBGResult res = api->readUniformPredicates(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      num_regs, regs.val.uniform_predicate);
-
-  if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
-                           "readUniformPredicates failed: {}",
-                           cudbgGetErrorString(res));
-
-  for (size_t i = 0; i < num_regs; ++i) {
-    regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
-    regs.is_valid.uniform_predicate[i] = true;
-  }
-}
-
 const ThreadRegistersWithValidity &
 RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
   if (m_regs)
@@ -460,8 +417,21 @@ RegisterContextNVIDIAGPU::ReadAllRegsFromDevice() {
 
     ReadRegularRegistersFromDevice(device_info, api, physical_coords, regs);
     ReadPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
-    ReadUniformRegistersFromDevice(device_info, api, physical_coords, regs);
-    ReadUniformPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
+
+    WarpState &warp_state = device_info.GetSMs()[physical_coords.sm_id]
+                                .GetWarps()[physical_coords.warp_id];
+    const WarpRegistersWithValidity &warp_regs = warp_state.GetRegisters();
+
+    std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
+              regs.val.uniform);
+    std::copy(warp_regs.val.uniform_predicate,
+              warp_regs.val.uniform_predicate + kNumUPRegs,
+              regs.val.uniform_predicate);
+    std::copy(warp_regs.is_valid.uniform,
+              warp_regs.is_valid.uniform + kNumURRegs, regs.is_valid.uniform);
+    std::copy(warp_regs.is_valid.uniform_predicate,
+              warp_regs.is_valid.uniform_predicate + kNumUPRegs,
+              regs.is_valid.uniform_predicate);
 
     {
       regs.val.regular_zero = 0;
@@ -595,6 +565,13 @@ ThreadRegisterValidity::ThreadRegisterValidity() {
   for (size_t i = 0; i < kNumURRegs; ++i)
     uniform[i] = false;
   uniform_zero = false;
+  for (size_t i = 0; i < kNumUPRegs; ++i)
+    uniform_predicate[i] = false;
+}
+
+WarpRegisterValidity::WarpRegisterValidity() {
+  for (size_t i = 0; i < kNumURRegs; ++i)
+    uniform[i] = false;
   for (size_t i = 0; i < kNumUPRegs; ++i)
     uniform_predicate[i] = false;
 }

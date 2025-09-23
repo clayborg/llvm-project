@@ -57,6 +57,30 @@ struct ThreadRegisterValidity {
 struct ThreadRegistersWithValidity {
   ThreadRegisterValidity is_valid;
   ThreadRegistersValues val;
+
+  ThreadRegistersWithValidity() = default;
+};
+
+/// Store all the registers for a single warp.
+struct WarpRegistersValues {
+  uint32_t uniform[kNumURRegs];           // Uniform registers
+  uint32_t uniform_predicate[kNumUPRegs]; // Uniform predicate registers (1-bit
+                                          // each, stored in bytes)
+};
+
+/// Store the validity of the registers for a single warp.
+struct WarpRegisterValidity {
+  bool uniform[kNumURRegs];           // Uniform register validity
+  bool uniform_predicate[kNumUPRegs]; // Uniform predicate register validity
+
+  WarpRegisterValidity();
+};
+
+struct WarpRegistersWithValidity {
+  WarpRegisterValidity is_valid;
+  WarpRegistersValues val;
+
+  WarpRegistersWithValidity() = default;
 };
 
 class RegisterContextNVIDIAGPU : public NativeRegisterContext {
