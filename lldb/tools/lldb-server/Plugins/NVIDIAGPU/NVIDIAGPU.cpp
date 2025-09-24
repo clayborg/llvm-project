@@ -28,74 +28,6 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-/// Helper class to provide range-based iteration over
-/// std::vector<std::unique_ptr<NativeThreadProtocol>> with automatic casting to
-/// ThreadNVIDIAGPU&.
-class NVIDIAGPU::GPUThreadRange {
-public:
-  /// Iterator class that automatically casts to ThreadNVIDIAGPU&.
-  class iterator {
-  public:
-    /// Constructor for the iterator.
-    ///
-    /// \param[in] it
-    ///     Iterator to the underlying thread container.
-    iterator(std::vector<std::unique_ptr<NativeThreadProtocol>>::iterator it)
-        : m_it(it) {}
-
-    /// Dereference operator with automatic casting to ThreadNVIDIAGPU&.
-    ///
-    /// \return
-    ///     Reference to ThreadNVIDIAGPU object.
-    ThreadNVIDIAGPU &operator*() const {
-      return static_cast<ThreadNVIDIAGPU &>(**m_it);
-    }
-
-    /// Pre-increment operator.
-    ///
-    /// \return
-    ///     Reference to incremented iterator.
-    iterator &operator++() {
-      ++m_it;
-      return *this;
-    }
-
-    /// Equality comparison operator.
-    ///
-    /// \param[in] other
-    ///     Iterator to compare against.
-    ///
-    /// \return
-    ///     True if iterators are equal, false otherwise.
-    bool operator!=(const iterator &other) const { return m_it != other.m_it; }
-
-  private:
-    std::vector<std::unique_ptr<NativeThreadProtocol>>::iterator m_it;
-  };
-
-  /// Constructor for the range object.
-  ///
-  /// \param[in] threads
-  ///     Reference to the thread container.
-  GPUThreadRange(std::vector<std::unique_ptr<NativeThreadProtocol>> &threads)
-      : m_threads(threads) {}
-
-  /// Get iterator to the beginning of the range.
-  ///
-  /// \return
-  ///     Iterator pointing to the first element.
-  iterator begin() { return iterator(m_threads.begin()); }
-
-  /// Get iterator to the end of the range.
-  ///
-  /// \return
-  ///     Iterator pointing past the last element.
-  iterator end() { return iterator(m_threads.end()); }
-
-private:
-  std::vector<std::unique_ptr<NativeThreadProtocol>> &m_threads;
-};
-
 NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate),
       m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr),
@@ -460,8 +392,8 @@ NVIDIAGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) {
   return response;
 }
 
-NVIDIAGPU::GPUThreadRange NVIDIAGPU::GPUThreads() {
-  return GPUThreadRange(m_threads);
+NVIDIAGPUThreadRange NVIDIAGPU::GPUThreads() {
+  return NVIDIAGPUThreadRange(m_threads);
 }
 
 const CUDBGAPI_st &NVIDIAGPU::GetCudaAPI() {
