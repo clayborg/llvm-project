@@ -348,9 +348,26 @@ void LLDBServerPluginNVIDIAGPU::OnDebuggerAPIEvent() {
              event.cases.allDevicesSuspended.brokenDevicesMask,
              event.cases.allDevicesSuspended.faultedDevicesMask);
     bool was_halted;
+    auto log_to_client_callback = [this](llvm::StringRef message) {
+      // The structured data packet can only be sent when the client is waiting
+      // for the stop reply packet. Otherwise, it might think that this is the
+      // response to a pending query packet. Creating the callback at this point
+      // is safe because we are about to report that the state is stopped, which
+      // means that we are running.
+      if (m_gpu->GetState() != lldb::eStateRunning) {
+        logAndReportFatalError(
+            "Logging to client is only supported when the GPU is running.");
+      }
+
+      m_gdb_server->SendStructuredDataPacket(
+          llvm::json::Value(llvm::json::Object{{"type", "nvidia-gpu-monitor"},
+                                               {"subtype", "log"},
+                                               {"message", message}}));
+    };
     // Order is important here. We need to suspend the GPU first before the
     // native process so that the CPU's GPUActions can hit the GPU server.
-    m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
+    m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended,
+                                 log_to_client_callback);
     HaltNativeProcessIfNeeded(was_halted);
     break;
   }
