@@ -218,7 +218,8 @@ public:
   size_t DecodeWarpInfoBuffer(
       uint8_t *buffer, const CUDBGDeviceInfo &device_info,
       const CUDBGDeviceInfoSizes &device_info_sizes,
-      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info);
+      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// \return
   ///     True if the warp is valid in the GPU, false otherwise.
@@ -321,13 +322,16 @@ public:
   ///     Size information for device data structures.
   /// \param[in] get_grid_info
   ///     Function to retrieve grid information by grid ID.
+  /// \param[in] log_to_client_callback
+  ///     Function to log messages to the client.
   ///
   /// \return
   ///     The number of bytes consumed from the buffer.
   size_t DecodeSMInfoBuffer(
       uint8_t *buffer, const CUDBGDeviceInfo &device_info,
       const CUDBGDeviceInfoSizes &device_info_sizes,
-      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info);
+      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// Set the activity status of this SM.
   void SetIsActive(bool is_active);
@@ -410,7 +414,8 @@ public:
   ///
   /// This method performs a batch update of all dynamic state information
   /// including SM states, warp states, and thread states.
-  void BatchUpdate();
+  void BatchUpdate(
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// Output device state information to a stream for debugging.
   void Dump(Stream &s);
@@ -452,7 +457,11 @@ private:
   ///     Buffer containing device information data.
   /// \param[in] size
   ///     Size of the buffer in bytes.
-  void DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size);
+  /// \param[in] log_to_client_callback
+  ///     Function to log messages to the client.
+  void DecodeDeviceInfoBuffer(
+      uint8_t *buffer, size_t size,
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// Reference to the CUDA debugger API structure.
   CUDBGAPI m_api;
@@ -520,7 +529,8 @@ public:
   DeviceStateRegistry(NVIDIAGPU &gpu);
 
   /// Update state information for all registered devices.
-  void BatchUpdate();
+  void BatchUpdate(
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// Output registry state information to a stream for debugging.
   void Dump(Stream &s);
