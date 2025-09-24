@@ -28,9 +28,6 @@ namespace lldb_private::lldb_server {
 /// manage the GPU.
 class NVIDIAGPU : public NativeProcessProtocol {
 public:
-  /// Forward declaration of helper class for thread iteration.
-  class GPUThreadRange;
-
   /// Class that manages the creation of NVIDIAGPU objects.
   class Manager : public NativeProcessProtocol::Manager {
   public:
@@ -333,7 +330,7 @@ private:
   ///
   /// \return
   ///     Range object for iterating over GPU threads.
-  GPUThreadRange GPUThreads();
+  NVIDIAGPUThreadRange GPUThreads();
 
   ArchSpec m_arch;
   /// This contains some launch/attach/runtime information for the GPU. We are
