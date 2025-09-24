@@ -13,8 +13,18 @@ using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
 using namespace lldb_server;
 
-ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
+/// Global thread ID counter. This is used to assign a unique thread ID to each
+/// thread created by the GPU. This is not related to logical or hardware
+/// coordinates.
+static lldb::tid_t g_thread_id = 1;
+
+ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu,
                                  const ThreadState *thread_state)
+    : ThreadNVIDIAGPU(gpu, thread_state, g_thread_id++) {}
+
+ThreadNVIDIAGPU::ThreadNVIDIAGPU(NVIDIAGPU &gpu,
+                                 const ThreadState *thread_state,
+                                 lldb::tid_t tid)
     : NativeThreadProtocol(gpu, tid), m_state(lldb::eStateInvalid),
       m_stop_info(), m_reg_context(*this), m_thread_state(thread_state) {}
 
