@@ -89,7 +89,8 @@ size_t ThreadState::DecodeThreadInfoBuffer(
 size_t WarpState::DecodeWarpInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
-    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info) {
+    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   Log *log = GetLog(GDBRLog::Plugin);
   llvm::StringRef log_indent = "    ";
 
@@ -148,7 +149,8 @@ size_t WarpState::DecodeWarpInfoBuffer(
   }
 
   if (errorPC.has_value() && exception == CUDBG_EXCEPTION_NONE)
-    logAndReportFatalError("WarpInformation::DecodeWarpInfoBuffer(). "
+    logAndReportFatalError(log_to_client_callback,
+                           "WarpInformation::DecodeWarpInfoBuffer(). "
                            "errorPC set to {} without an exception",
                            errorPC);
 
@@ -194,7 +196,8 @@ size_t WarpState::DecodeWarpInfoBuffer(
 size_t SMState::DecodeSMInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
-    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info) {
+    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   Log *log = GetLog(GDBRLog::Plugin);
   llvm::StringRef log_indent = "  ";
 
@@ -237,14 +240,16 @@ size_t SMState::DecodeSMInfoBuffer(
     LLDB_LOG(log, "{}Warp {} is updated: {}", log_indent, warp_id, is_updated);
     if (is_updated)
       buffer_offset += m_warps[warp_id].DecodeWarpInfoBuffer(
-          buffer + buffer_offset, device_info, device_info_sizes,
-          get_grid_info);
+          buffer + buffer_offset, device_info, device_info_sizes, get_grid_info,
+          log_to_client_callback);
   }
 
   return buffer_offset;
 }
 
-void DeviceState::DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size) {
+void DeviceState::DecodeDeviceInfoBuffer(
+    uint8_t *buffer, size_t size,
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   size_t buffer_offset = 0;
@@ -301,26 +306,31 @@ void DeviceState::DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size) {
           buffer + buffer_offset, device_info, m_device_info_sizes,
           [this](uint64_t grid_id) -> const CUDBGGridInfo & {
             return this->GetGridInfo(grid_id);
-          });
+          },
+          log_to_client_callback);
   }
 
   if (buffer_offset != size)
-    logAndReportFatalError("DeviceInformation::DecodeDeviceInfoBuffer(). "
+    logAndReportFatalError(log_to_client_callback,
+                           "DeviceInformation::DecodeDeviceInfoBuffer(). "
                            "Didn't parse the entire device info buffer. "
                            "Expected {} bytes but read {} bytes",
                            size, buffer_offset);
 }
 
-void DeviceState::BatchUpdate() {
+void DeviceState::BatchUpdate(
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   uint32_t data_length = 0;
   // TODO: handle CUDBG_RESPONSE_TYPE_UPDATE
   CUDBGResult res = m_api->getDeviceInfo(
       m_device_id, CUDBG_RESPONSE_TYPE_FULL, m_device_info_buffer.data(),
       m_device_info_sizes.requiredBufferSize, &data_length);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("DeviceInformation::BatchUpdate(). "
+    logAndReportFatalError(log_to_client_callback,
+                           "DeviceInformation::BatchUpdate(). "
                            "getDeviceInfo failed: {}",
                            cudbgGetErrorString(res));
 
-  DecodeDeviceInfoBuffer(m_device_info_buffer.data(), data_length);
+  DecodeDeviceInfoBuffer(m_device_info_buffer.data(), data_length,
+                         log_to_client_callback);
 }
