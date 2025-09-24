@@ -9,6 +9,7 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
 
+#include "Plugins/Utils/Utils.h"
 #include "RegisterContextNVIDIAGPU.h"
 #include "forward-declarations.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
@@ -106,6 +107,8 @@ private:
   /// are no threads yet.
   const ThreadState *m_thread_state = nullptr;
 };
+
+using NVIDIAGPUThreadRange = GPUThreadRange<ThreadNVIDIAGPU>;
 } // namespace lldb_private::lldb_server
 
 #endif // #ifndef LLDB_TOOLS_LLDB_SERVER_THREADNVIDIAGPU_H
