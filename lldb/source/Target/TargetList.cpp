@@ -176,7 +176,7 @@ Status TargetList::CreateTargetInternal(
         module_spec.GetArchitecture() = arch;
         if (module_specs.FindMatchingModuleSpec(module_spec,
                                                 matching_module_spec))
-            update_platform_arch(matching_module_spec.GetArchitecture());
+          update_platform_arch(matching_module_spec.GetArchitecture());
       } else {
         // Fat binary. No architecture specified, check if there is
         // only one platform for all of the architectures.
@@ -256,6 +256,9 @@ Status TargetList::CreateTargetInternal(Debugger &debugger,
   Status error;
   const bool is_dummy_target = false;
 
+  // Global static counter for assigning unique IDs to targets
+  static uint32_t g_target_unique_id = 0;
+
   ArchSpec arch(specified_arch);
 
   if (arch.IsValid()) {
@@ -294,7 +297,7 @@ Status TargetList::CreateTargetInternal(Debugger &debugger,
 
     if (file.IsRelative() && !user_exe_path.empty()) {
       llvm::SmallString<64> cwd;
-      if (! llvm::sys::fs::current_path(cwd)) {
+      if (!llvm::sys::fs::current_path(cwd)) {
         FileSpec cwd_file(cwd.c_str());
         cwd_file.AppendPathComponent(file);
         if (FileSystem::Instance().Exists(cwd_file))
@@ -343,6 +346,8 @@ Status TargetList::CreateTargetInternal(Debugger &debugger,
 
   if (!target_sp)
     return error;
+
+  target_sp->m_target_unique_id = ++g_target_unique_id;
 
   // Set argv0 with what the user typed, unless the user specified a
   // directory. If the user specified a directory, then it is probably a
@@ -426,6 +431,18 @@ TargetSP TargetList::FindTargetWithProcess(Process *process) const {
     target_sp = *it;
 
   return target_sp;
+}
+
+TargetSP TargetList::FindTargetWithUniqueID(uint32_t id) const {
+  std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
+  auto it = llvm::find_if(m_target_list, [id](const TargetSP &item) {
+    return item->GetUniqueID() == id;
+  });
+
+  if (it != m_target_list.end())
+    return *it;
+
+  return TargetSP();
 }
 
 TargetSP TargetList::GetTargetSP(Target *target) const {
@@ -554,29 +571,27 @@ bool TargetList::AnyTargetContainsModule(Module &module) {
     if (target_sp->GetImages().FindModule(&module))
       return true;
   }
-  for (const auto &target_sp: m_in_process_target_list) {
+  for (const auto &target_sp : m_in_process_target_list) {
     if (target_sp->GetImages().FindModule(&module))
       return true;
   }
   return false;
 }
 
-  void TargetList::RegisterInProcessTarget(TargetSP target_sp) {
-    std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
-    [[maybe_unused]] bool was_added;
-    std::tie(std::ignore, was_added) =
-        m_in_process_target_list.insert(target_sp);
-    assert(was_added && "Target pointer was left in the in-process map");
-  }
-  
-  void TargetList::UnregisterInProcessTarget(TargetSP target_sp) {
-    std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
-    [[maybe_unused]] bool was_present =
-        m_in_process_target_list.erase(target_sp);
-    assert(was_present && "Target pointer being removed was not registered");
-  }
-  
-  bool TargetList::IsTargetInProcess(TargetSP target_sp) {
-    std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
-    return m_in_process_target_list.count(target_sp) == 1; 
-  }
+void TargetList::RegisterInProcessTarget(TargetSP target_sp) {
+  std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
+  [[maybe_unused]] bool was_added;
+  std::tie(std::ignore, was_added) = m_in_process_target_list.insert(target_sp);
+  assert(was_added && "Target pointer was left in the in-process map");
+}
+
+void TargetList::UnregisterInProcessTarget(TargetSP target_sp) {
+  std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
+  [[maybe_unused]] bool was_present = m_in_process_target_list.erase(target_sp);
+  assert(was_present && "Target pointer being removed was not registered");
+}
+
+bool TargetList::IsTargetInProcess(TargetSP target_sp) {
+  std::lock_guard<std::recursive_mutex> guard(m_target_list_mutex);
+  return m_in_process_target_list.count(target_sp) == 1;
+}

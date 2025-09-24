@@ -72,6 +72,7 @@ public:
   void FreeDbgApiClientMemory(void *mem);
 
   bool CreateGPUBreakpoint(uint64_t addr);
+  llvm::StringRef GetSessionName();
 
   void GpuRuntimeDidLoad();
 
