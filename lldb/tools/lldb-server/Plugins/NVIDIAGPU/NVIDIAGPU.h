@@ -273,7 +273,8 @@ public:
   /// \param[in] event
   ///     Event data containing information about the suspended devices.
   void OnAllDevicesSuspended(
-      const CUDBGEvent::cases_st::allDevicesSuspended_st &event);
+      const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
+      std::function<void(llvm::StringRef message)> log_to_client_callback);
 
   /// Handle the ElfImageLoaded event.
   ///
@@ -306,6 +307,8 @@ public:
   /// \param[in] exit_status
   ///     The exit status of the native process.
   void OnNativeProcessExit(const WaitStatus &exit_status);
+
+  std::vector<std::string> GetStructuredDataPlugins() override;
 
 private:
   friend class Manager;
