@@ -99,8 +99,9 @@ private:
 NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate),
       m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr),
-      m_fallback_thread(*this, std::numeric_limits<lldb::tid_t>::max() - 1,
-                        /*thread_state=*/nullptr) {
+      m_fallback_thread(*this,
+                        /*thread_state=*/nullptr,
+                        std::numeric_limits<lldb::tid_t>::max() - 1) {
   // We need to initialize the state to stopped so that the client can connect
   // to the server. The gdb-remote protocol refuses to connect to running
   // targets.
@@ -409,7 +410,6 @@ void NVIDIAGPU::OnAllDevicesSuspended(
   ReleaseAndClearThreads(m_threads);
 
   std::optional<lldb::tid_t> exception_thread_id;
-  bool exception_errorpc_matches_pc = false;
 
   for (DeviceState &device : m_devices.GetDevices()) {
     for (SMState &sm : device.GetActiveSMs()) {
@@ -418,21 +418,9 @@ void NVIDIAGPU::OnAllDevicesSuspended(
           ThreadNVIDIAGPU &thread = thread_state.GetThreadNVIDIAGPU();
 
           // We report as the selected thread the one the first one that has an
-          // exception and whose errorPC matches its PC.
-          if (!exception_thread_id || !exception_errorpc_matches_pc) {
-            if (const ExceptionInfo *exception_info =
-                    thread_state.GetException()) {
-              bool new_exception_errorpc_matches_pc =
-                  exception_info->errorPC.has_value() &&
-                  exception_info->errorPC.value() == thread_state.GetPC();
-
-              if (!exception_thread_id || (new_exception_errorpc_matches_pc &&
-                                           !exception_errorpc_matches_pc)) {
-                exception_thread_id = thread.GetID();
-                exception_errorpc_matches_pc = new_exception_errorpc_matches_pc;
-              }
-            }
-          }
+          // exception.
+          if (!exception_thread_id && thread_state.HasException())
+            exception_thread_id = thread.GetID();
 
           /// The threads are owned by the DeviceStateRegistry, but we need to
           /// add them to the m_threads vector using a std::unique_ptr that
