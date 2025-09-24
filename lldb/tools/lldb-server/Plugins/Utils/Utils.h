@@ -28,12 +28,22 @@ llvm::Error createStringErrorFmt(const char *format, Args &&...args) {
 /// which will cause the lldb-server to crash and print a backtrace. It's worth
 /// mentioning that the backtrace is only printed if lldb-server is started
 /// manually on a terminal.
+[[noreturn]] void logAndReportFatalError(llvm::StringRef err_msg);
+
 template <typename... Args>
 [[noreturn]] void logAndReportFatalError(const char *format, Args &&...args) {
-  Log *log = GetLog(process_gdb_remote::GDBRLog::Plugin);
+  logAndReportFatalError(llvm::formatv(format, args...).str());
+}
+
+/// Variant of `logAndReportFatalError` that allows passing a callback that
+/// gets invoked with the error message.
+template <typename... Args>
+[[noreturn]] void logAndReportFatalError(
+    std::function<void(llvm::StringRef)> additional_log_callback,
+    const char *format, Args &&...args) {
   std::string err_msg = llvm::formatv(format, args...).str();
-  LLDB_LOG(log, "{0}", err_msg);
-  llvm::report_fatal_error(llvm::createStringError(err_msg));
+  additional_log_callback(err_msg);
+  logAndReportFatalError(err_msg);
 }
 
 /// Get a user-friendly string representation of a state.

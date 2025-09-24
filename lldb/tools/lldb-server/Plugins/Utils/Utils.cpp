@@ -42,4 +42,10 @@ llvm::StringRef StateToString(lldb::StateType state) {
   return "unknown";
 }
 
+void logAndReportFatalError(llvm::StringRef err_msg) {
+  Log *log = GetLog(process_gdb_remote::GDBRLog::Plugin);
+  LLDB_LOG(log, "{0}", err_msg);
+  llvm::report_fatal_error(llvm::createStringError(err_msg));
+}
+
 } // namespace lldb_private::lldb_server

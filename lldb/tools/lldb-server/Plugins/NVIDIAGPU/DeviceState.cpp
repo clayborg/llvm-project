@@ -476,9 +476,10 @@ DeviceStateRegistry::DeviceStateRegistry(NVIDIAGPU &gpu) {
     m_devices.emplace_back(gpu, device_id);
 }
 
-void DeviceStateRegistry::BatchUpdate() {
+void DeviceStateRegistry::BatchUpdate(
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   for (DeviceState &device : m_devices)
-    device.BatchUpdate();
+    device.BatchUpdate(log_to_client_callback);
 }
 
 void DeviceStateRegistry::Dump(Stream &s) {

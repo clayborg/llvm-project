@@ -398,11 +398,12 @@ static void ReleaseAndClearThreads(
 }
 
 void NVIDIAGPU::OnAllDevicesSuspended(
-    const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
+    const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVIDIAGPU::OnAllDevicesSuspended()");
 
-  m_devices.BatchUpdate();
+  m_devices.BatchUpdate(log_to_client_callback);
   LLDB_LOG(log, "Device info dump:\n{}", m_devices.Dump());
 
   ReleaseAndClearThreads(m_threads);
@@ -580,4 +581,8 @@ void NVIDIAGPU::OnNativeProcessExit(const WaitStatus &exit_status) {
            exit_status);
   // Set our exit status to match the native process and notify delegates.
   SetExitStatus(exit_status, /*bNotifyStateChange=*/true);
+}
+
+std::vector<std::string> NVIDIAGPU::GetStructuredDataPlugins() {
+  return {"nvidia-gpu-monitor"};
 }
