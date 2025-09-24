@@ -19,8 +19,10 @@ namespace lldb_private::lldb_server {
 /// This class represents a HW thread in a GPU.
 class ThreadNVIDIAGPU : public NativeThreadProtocol {
 public:
-  ThreadNVIDIAGPU(NVIDIAGPU &gpu, lldb::tid_t tid,
-                  const ThreadState *thread_state);
+  ThreadNVIDIAGPU(NVIDIAGPU &gpu, const ThreadState *thread_state);
+
+  ThreadNVIDIAGPU(NVIDIAGPU &gpu, const ThreadState *thread_state,
+                  lldb::tid_t tid);
 
   std::string GetName() override;
 

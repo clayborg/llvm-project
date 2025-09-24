@@ -153,10 +153,6 @@ public:
   uint64_t GetPC() const { return m_pc; }
 
   /// \return
-  ///     The unique sequential ID for this thread.
-  lldb::tid_t GetThreadID() const { return m_thread_id; }
-
-  /// \return
   ///     The ThreadNVIDIAGPU object associated with this thread.
   ThreadNVIDIAGPU &GetThreadNVIDIAGPU() { return m_thread_nvidiagpu; }
 
@@ -175,9 +171,6 @@ private:
 
   /// The physical coordinates of this thread on the device.
   PhysicalCoords m_physical_coords;
-
-  /// Unique sequential ID for this thread.
-  lldb::tid_t m_thread_id;
 
   /// The ThreadNVIDIAGPU object associated with this thread. This object is the
   /// interface LLGS wants to interact with.
@@ -251,10 +244,6 @@ public:
     return llvm::make_filter_range(
         m_threads, [](ThreadState &thread) { return thread.IsValid(); });
   }
-
-  /// \return
-  ///     The maximum number of threads on this warp supported by the HW.
-  size_t GetMaxNumSupportedThreads() const;
 
   /// Get the number of regular registers currently used by this warp. It is
   /// cached until the warp state changes.
@@ -359,10 +348,6 @@ public:
     return llvm::make_filter_range(
         m_warps, [](WarpState &warp) { return warp.IsValid(); });
   }
-
-  /// \return
-  ///     The maximum number of threads on this SM supported by the HW.
-  size_t GetMaxNumSupportedThreads() const;
 
 private:
   /// Whether this SM is currently active in the GPU.
