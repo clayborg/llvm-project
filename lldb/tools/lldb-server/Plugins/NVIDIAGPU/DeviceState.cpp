@@ -102,17 +102,12 @@ std::string ExceptionInfo::ToString() const {
   return result;
 }
 
-static lldb::tid_t g_thread_id = 1;
-
 ThreadState::ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords)
-    : m_physical_coords(physical_coords), m_thread_id(g_thread_id++),
-      m_thread_nvidiagpu(gpu, m_thread_id, this) {}
+    : m_physical_coords(physical_coords), m_thread_nvidiagpu(gpu, this) {}
 
 ThreadState::ThreadState(ThreadState &&other)
     : m_physical_coords(other.GetPhysicalCoords()),
-      m_thread_id(other.m_thread_id),
-      m_thread_nvidiagpu(other.m_thread_nvidiagpu.GetGPU(), other.m_thread_id,
-                         this) {
+      m_thread_nvidiagpu(other.m_thread_nvidiagpu.GetGPU(), this) {
   logAndReportFatalError("ThreadState is not movable. Ensure that this "
                          "constructor is never called by reserving the "
                          "appropriate amount of space in parent container.");
@@ -169,8 +164,6 @@ const ThreadState *WarpState::FindSomeThreadWithException() const {
   return nullptr;
 }
 
-size_t WarpState::GetMaxNumSupportedThreads() const { return m_threads.size(); }
-
 size_t WarpState::GetCurrentNumRegularRegisters() {
   if (m_current_num_regular_registers)
     return *m_current_num_regular_registers;
@@ -206,7 +199,7 @@ static void ReadUniformRegistersFromDevice(DeviceState &device_info,
       regs.val.uniform);
 
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+    logAndReportFatalError("WarpState::GetRegisters(). "
                            "readUniformRegisterRange failed: {}",
                            cudbgGetErrorString(res));
 
@@ -227,7 +220,7 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
       regs.val.uniform_predicate);
 
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVIDIAGPU::ReadAllRegsFromDevice(). "
+    logAndReportFatalError("WarpState::GetRegisters(). "
                            "readUniformPredicates failed: {}",
                            cudbgGetErrorString(res));
 
@@ -294,13 +287,6 @@ const ThreadState *SMState::FindSomeThreadWithException() const {
       return warp.FindSomeThreadWithException();
 
   return nullptr;
-}
-
-size_t SMState::GetMaxNumSupportedThreads() const {
-  return std::accumulate(m_warps.begin(), m_warps.end(), 0,
-                         [](size_t acc, const WarpState &warp) {
-                           return acc + warp.GetMaxNumSupportedThreads();
-                         });
 }
 
 DeviceState::DeviceState(NVIDIAGPU &gpu, uint32_t device_id)
@@ -457,10 +443,7 @@ const ThreadState *DeviceState::FindSomeThreadWithException() const {
 }
 
 size_t DeviceState::GetMaxNumSupportedThreads() const {
-  return std::accumulate(m_sms.begin(), m_sms.end(), 0,
-                         [](size_t acc, const SMState &sm) {
-                           return acc + sm.GetMaxNumSupportedThreads();
-                         });
+  return m_num_threads_per_warp * m_num_warps_per_sm * m_num_sms;
 }
 
 DeviceStateRegistry::DeviceStateRegistry(NVIDIAGPU &gpu) {
