@@ -80,6 +80,7 @@ public:
   bool HandleEventFileDescriptorEvent(int fd) override;
   GPUActions GetInitializeActions() override;
   std::optional<struct GPUActions> NativeProcessIsStopping() override;
+  void NativeProcessDidExit(const WaitStatus &exit_status) override;
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
 

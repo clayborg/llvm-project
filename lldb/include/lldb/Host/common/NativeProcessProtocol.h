@@ -301,8 +301,6 @@ public:
     return std::nullopt;
   };
 
-
-
   /// Extension flag constants, returned by Manager::GetSupportedExtensions()
   /// and passed to SetEnabledExtension()
   enum class Extension {

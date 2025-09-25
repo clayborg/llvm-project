@@ -249,3 +249,12 @@ ProcessMockGPU::Extension
 ProcessMockGPU::Manager::GetSupportedExtensions() const {
   return Extension::gpu_dyld | Extension::address_spaces;
 }
+
+void ProcessMockGPU::HandleNativeProcessExit(const WaitStatus &exit_status) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "ProcessMockGPU::{0}() native process exited with status=({1})",
+           __FUNCTION__, exit_status);
+
+  // Set our exit status to match the native process and notify delegates
+  SetExitStatus(exit_status, true);
+}
