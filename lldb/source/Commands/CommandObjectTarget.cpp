@@ -485,6 +485,65 @@ protected:
   }
 };
 
+#pragma mark CommandObjectTargetSwitch
+class CommandObjectTargetSwitch : public CommandObjectParsed {
+public:
+  CommandObjectTargetSwitch(CommandInterpreter &interpreter)
+      : CommandObjectParsed(
+            interpreter, "target switch",
+            "Switch between a CPU target and its related GPU plugin targets. "
+            "If no argument is provided, switch to any GPU plugin target if "
+            "the current target is a CPU target, otherwise switch to the CPU "
+            "target. If an argument is provided, switch to the specified GPU "
+            "plugin target or the CPU target depending on the input.",
+            "target switch [cpu | <gpu-plugin-name>]", eCommandRequiresTarget) {
+    AddSimpleArgumentList(eArgTypeName);
+  }
+
+  void DoExecute(Args &args, CommandReturnObject &result) override {
+    size_t argc = args.GetArgumentCount();
+    TargetSP target_sp = GetDebugger().GetSelectedTarget();
+
+    auto setTarget = [&](TargetSP target_sp) {
+      TargetList &target_list = GetDebugger().GetTargetList();
+      target_list.SetSelectedTarget(target_sp);
+      Stream &strm = result.GetOutputStream();
+      DumpTargetList(target_list, /*show_stopped_process_status=*/false, strm);
+      result.SetStatus(eReturnStatusSuccessFinishResult);
+    };
+
+    if (argc == 0) {
+      if (target_sp->IsGPUTarget()) {
+        return setTarget(target_sp->GetNativeTargetForGPU());
+      }
+      TargetSP gpu_target_sp = target_sp->GetAnyGPUPluginTarget();
+      if (!gpu_target_sp) {
+        result.AppendError("No GPU targets found.");
+        result.SetStatus(eReturnStatusFailed);
+        return;
+      }
+      return setTarget(gpu_target_sp);
+    }
+
+    llvm::StringRef target_name = args.GetArgumentAtIndex(0);
+    TargetSP cpu_target = target_sp->IsCPUTarget()
+                              ? target_sp
+                              : target_sp->GetNativeTargetForGPU();
+
+    if (target_name == "cpu") {
+      return setTarget(cpu_target);
+    }
+    TargetSP gpu_target = cpu_target->GetGPUPluginTarget(target_name);
+    if (!gpu_target) {
+      result.AppendErrorWithFormat("No GPU target found for plugin name '%s'.",
+                                   target_name.str().c_str());
+      result.SetStatus(eReturnStatusFailed);
+      return;
+    }
+    setTarget(gpu_target);
+  }
+};
+
 #pragma mark CommandObjectTargetSelect
 
 class CommandObjectTargetSelect : public CommandObjectParsed {
@@ -5362,6 +5421,8 @@ CommandObjectMultiwordTarget::CommandObjectMultiwordTarget(
                  CommandObjectSP(new CommandObjectTargetList(interpreter)));
   LoadSubCommand("select",
                  CommandObjectSP(new CommandObjectTargetSelect(interpreter)));
+  LoadSubCommand("switch",
+                 CommandObjectSP(new CommandObjectTargetSwitch(interpreter)));
   LoadSubCommand("show-launch-environment",
                  CommandObjectSP(new CommandObjectTargetShowLaunchEnvironment(
                      interpreter)));

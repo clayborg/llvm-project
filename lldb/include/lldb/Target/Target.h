@@ -1570,20 +1570,46 @@ public:
   /// Print all the signals set in this target.
   void PrintDummySignals(Stream &strm, Args &signals);
 
+  /// \return
+  ///   The number of GPU plugin targets associated with this target.
+  size_t GetNumGPUPluginTargets() const { return m_gpu_plugin_targets.size(); }
 
-  lldb::TargetSP GetGPUPluginTarget(llvm::StringRef plugin_name) {
-    return m_gpu_plugin_targets.lookup(plugin_name).lock();
+  /// \return
+  ///   Any GPU plugin target associated with this target, or null if there are
+  ///   no GPU plugin targets.
+  lldb::TargetSP GetAnyGPUPluginTarget() {
+    if (m_gpu_plugin_targets.empty())
+      return lldb::TargetSP();
+    return m_gpu_plugin_targets.begin()->second.lock();
   }
 
-  void SetGPUPluginTarget(llvm::StringRef plugin_name, 
+  /// \return
+  ///   The GPU plugin target associated with the given plugin name, or null if
+  ///   no such target exists.
+  lldb::TargetSP GetGPUPluginTarget(llvm::StringRef plugin_name) {
+    auto it = m_gpu_plugin_targets.find(plugin_name);
+    if (it == m_gpu_plugin_targets.end())
+      return lldb::TargetSP();
+    return it->second.lock();
+  }
+
+  /// Assign a GPU plugin target to this target.
+  void SetGPUPluginTarget(llvm::StringRef plugin_name,
                           lldb::TargetSP gpu_target_sp) {
     gpu_target_sp->m_native_target_gpu_wp = shared_from_this();
+    gpu_target_sp->m_is_cpu_target = false;
     m_gpu_plugin_targets[plugin_name] = gpu_target_sp;
   }
 
+  /// \return
+  ///   The CPU native target for this target.
   lldb::TargetSP GetNativeTargetForGPU() {
     return m_native_target_gpu_wp.lock();
   }
+
+  bool IsCPUTarget() const { return m_is_cpu_target; }
+
+  bool IsGPUTarget() const { return !m_is_cpu_target; }
 
 protected:
   /// Implementing of ModuleList::Notifier.
@@ -1680,6 +1706,7 @@ protected:
   /// targets. For example if a GPU target wants to resume but it requires its
   /// native target to resume as well, we can use this to make this happen.
   lldb::TargetWP m_native_target_gpu_wp;
+  bool m_is_cpu_target = true;
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);

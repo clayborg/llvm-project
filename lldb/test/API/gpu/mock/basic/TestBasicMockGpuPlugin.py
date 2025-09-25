@@ -116,3 +116,41 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             1,
             "Breakpoint should have been hit once",
         )
+
+    def test_mock_gpu_target_switch(self):
+        """Test that we can switch targets between CPU and GPU."""
+
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
+
+        self.select_gpu()
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch cpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch cpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("ts mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+        
+        self.runCmd("ts")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
