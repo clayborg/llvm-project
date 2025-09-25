@@ -1,0 +1,37 @@
+# Test memory space functionality with Mock GPU
+# REQUIRES: lldb-mockgpu
+
+# RUN: mkdir -p %t.dir
+# RUN: %clang_host %S/Inputs/memory-space-main.c -g -o %t.dir/a.out
+
+# Test memory space operations on GPU target
+# RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
+# RUN:        -o "memory read --space Global 0x1000" \
+# RUN:        -o "memory read --space Thread 0x1000" 2>&1 | FileCheck %s --check-prefix=GPU
+
+# Test invalid memory space on GPU target fails
+# RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
+# RUN:        -o "memory read --space Invalid 0x1000" 2>&1 | FileCheck %s --check-prefix=INVALID
+
+# Test address space operations on CPU target fail
+# RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
+# RUN:        -o "target select 0" \
+# RUN:        -o "memory read --space Global 0x1000" 2>&1 | FileCheck %s --check-prefix=CPU
+
+# Test GPU Global memory space read should succeed  
+# GPU-LABEL: memory read --space Global 0x1000
+# GPU: 0x00001000: 31 31 31 31 31 31 31 31 31 31 31 31 31 31 31 31 1111111111111111
+
+# Test GPU Thread memory space read should succeed  
+# GPU-LABEL: memory read --space Thread 0x1000
+# GPU: 0x00001000: 32 32 32 32 32 32 32 32 32 32 32 32 32 32 32 32 2222222222222222
+
+# Test invalid memory space name should fail  
+# INVALID-LABEL: memory read --space Invalid 0x1000
+# INVALID: error: invalid address space "Invalid", address space must be one of: "Global", "Thread"
+
+# Test CPU process doesn't support memory space operations
+# CPU-LABEL: target select 0
+# CPU: Current targets:
+# CPU-LABEL: memory read --space Global 0x1000
+# CPU: error: process doesn't support address spaces

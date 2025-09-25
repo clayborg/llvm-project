@@ -151,6 +151,9 @@ if config.lldb_system_debugserver:
 if config.have_lldb_server:
     config.available_features.add("lldb-server")
 
+if config.lldb_enable_mock_gpu_plugin:
+    config.available_features.add("lldb-mockgpu")
+
 if config.objc_gnustep_dir:
     config.available_features.add("objc-gnustep")
     if platform.system() == "Windows":
