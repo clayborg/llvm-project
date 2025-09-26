@@ -556,7 +556,7 @@ private:
   SyncState m_sync_state;
   
   //  Map to track processed GPU actions.
-  std::map<std::string, uint32_t> m_processed_gpu_actions;
+  std::unordered_map<std::string, uint32_t> m_processed_gpu_actions;
 };
 
 } // namespace process_gdb_remote
