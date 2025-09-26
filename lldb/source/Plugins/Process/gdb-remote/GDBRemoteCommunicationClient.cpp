@@ -916,7 +916,8 @@ lldb::pid_t GDBRemoteCommunicationClient::GetCurrentProcessID(bool allow_lazy) {
   return LLDB_INVALID_PROCESS_ID;
 }
 
-llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
+llvm::Error GDBRemoteCommunicationClient::LaunchProcess(
+    const Args &args, StringExtractorGDBRemote &response) {
   if (!args.GetArgumentAtIndex(0))
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "Nothing to launch");
@@ -929,7 +930,6 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
       packet.PutStringAsRawHex8(arg.ref());
     }
 
-    StringExtractorGDBRemote response;
     if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
         PacketResult::Success)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -957,7 +957,6 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
     packet.PutStringAsRawHex8(arg.value().ref());
   }
 
-  StringExtractorGDBRemote response;
   if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
       PacketResult::Success) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
