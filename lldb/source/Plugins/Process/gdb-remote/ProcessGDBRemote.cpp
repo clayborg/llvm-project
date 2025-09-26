@@ -934,7 +934,7 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   }
 
   // This is the CPU process.
-  uint32_t current_stop_id = GetStopId();
+  uint32_t current_stop_id = GetStopID();
   auto it = m_processed_gpu_actions.find(gpu_action.plugin_name);
   if (it != m_processed_gpu_actions.end() && it->second == current_stop_id) {
     LLDB_LOG(log,
@@ -942,12 +942,12 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
              "processed GPU actions for plugin '{0}' with process stop_id {1}",
              gpu_action.plugin_name, current_stop_id);
     return Status();
+  }
   m_processed_gpu_actions[gpu_action.plugin_name] = current_stop_id;
   LLDB_LOG(log,
            "ProcessGDBRemote::HandleGPUActions processing GPU actions "
            "for plugin '{0}' with process stop_id {1}",
            gpu_action.plugin_name, current_stop_id);
-  }
   Status error;
   if (!gpu_action.breakpoints.empty())
     HandleGPUBreakpoints(gpu_action);
