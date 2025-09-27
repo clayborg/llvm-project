@@ -15,6 +15,7 @@
 #define LLDB_TOOLS_LLDB_SERVER_AMDDBGAPIHELPERS_H
 #include <algorithm>
 #include <amd-dbgapi/amd-dbgapi.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,21 @@ private:
   std::vector<amd_dbgapi_event_kind_t> m_events;
   amd_dbgapi_event_id_t m_last_event_id = AMD_DBGAPI_EVENT_NONE;
 };
+
+// Custom deleter for std::unique_ptr that uses FreeDbgApiClientMemory
+struct DbgApiClientMemoryDeleter {
+  void operator()(void *ptr) const;
+};
+
+// Type alias for std::unique_ptr with the custom deleter
+//
+// Example usage:
+// auto ptr =
+// DbgApiClientMemoryPtr<SomeType>(static_cast<SomeType*>(raw_ptr_from_dbgapi));
+// The memory will be automatically freed when ptr goes out of scope
+template <typename T>
+using DbgApiClientMemoryPtr = std::unique_ptr<T, DbgApiClientMemoryDeleter>;
+
 } // namespace lldb_server
 } // namespace lldb_private
 #endif

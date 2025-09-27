@@ -396,6 +396,8 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
       return result;
     }
 
+    DbgApiClientMemoryPtr<amd_dbgapi_code_object_id_t>
+        code_objects_list_deleter(code_object_list);
     m_gpu_module_manager.BeginCodeObjectListUpdate();
     for (size_t i = 0; i < count; ++i) {
       uint64_t l_addr;
@@ -413,12 +415,12 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
       if (status != AMD_DBGAPI_STATUS_SUCCESS)
         continue;
 
+      DbgApiClientMemoryPtr<char> uri_bytes_deleter(uri_bytes);
       LLDB_LOGF(GetLog(GDBRLog::Plugin),
                 "Code object %zu: %s at address %" PRIu64, i, uri_bytes,
                 l_addr);
 
       m_gpu_module_manager.CodeObjectIsLoaded(uri_bytes, l_addr);
-      m_debugger->FreeDbgApiClientMemory(uri_bytes);
     }
     m_gpu_module_manager.EndCodeObjectListUpdate();
     break;

@@ -36,6 +36,12 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
+void DbgApiClientMemoryDeleter::operator()(void *ptr) const {
+  if (ptr) {
+    LLDBServerPluginAMDGPU::FreeDbgApiClientMemory(ptr);
+  }
+}
+
 static amd_dbgapi_status_t amd_dbgapi_client_process_get_info_callback(
     amd_dbgapi_client_process_id_t client_process_id,
     amd_dbgapi_client_process_info_t query, size_t value_size, void *value) {

@@ -70,7 +70,7 @@ public:
   }
 
   // Free the memory using the matching callback provided to the debug library.
-  void FreeDbgApiClientMemory(void *mem);
+  static void FreeDbgApiClientMemory(void *mem);
 
   bool CreateGPUBreakpoint(uint64_t addr);
 
