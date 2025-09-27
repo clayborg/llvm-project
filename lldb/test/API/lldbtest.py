@@ -59,6 +59,9 @@ class LLDBTest(TestFormat):
             cmd.extend(["--env", "LUA_EXECUTABLE=%s" % test.config.lua_executable])
             cmd.extend(["--env", "LLDB_LUA_CPATH=%s" % test.config.lldb_lua_cpath])
 
+        if "DOTEST_LD_EXTRAS" in os.environ:
+            cmd.extend(["--env", "LD_EXTRAS=%s" % os.environ["DOTEST_LD_EXTRAS"]])
+
         timeoutInfo = None
         try:
             out, err, exitCode = lit.util.executeCommand(
