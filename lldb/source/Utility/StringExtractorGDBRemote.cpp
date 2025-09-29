@@ -496,14 +496,25 @@ bool StringExtractorGDBRemote::IsErrorResponse() const {
          isxdigit(m_packet[2]);
 }
 
-bool StringExtractorGDBRemote::IsStopReply() const {
+bool StringExtractorGDBRemote::IsStopReply(
+    uint32_t mask = StopReplyMask::Any) const {
   if (!IsNormalResponse())
     return false;
 
   char first_char = m_packet.empty() ? '\0' : m_packet[0];
-  return first_char == 'T' || first_char == 'S' || first_char == 'W' ||
-         first_char == 'X' || first_char == 'w' || first_char == 'N' ||
-         first_char == 'O' || first_char == 'F';
+  if (mask & Signal && (first_char == 'T' || first_char == 'S'))
+    return true;
+  if (mask & Exited && (first_char == 'w' || first_char == 'W'))
+    return true;
+  if (mask & Terminated && first_char == 'X')
+    return true;
+  if (mask & Output && first_char == 'O')
+    return true;
+  if (mask & NoResumed && first_char == 'N')
+    return true;
+  if (mask & Syscall && first_char == 'F')
+    return true;
+  return false;
 }
 
 uint8_t StringExtractorGDBRemote::GetError() {
