@@ -126,6 +126,8 @@ struct GPUPluginConnectionInfo {
   std::string connect_url;
   /// Synchronously wait for the GPU to initialize when connecting.
   bool synchronous = false;
+  /// Whether to copy the CPU breakpoints to the GPU target during attaching.
+  bool copy_cpu_breakpoints_during_attaching = false;
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUPluginConnectionInfo &data,

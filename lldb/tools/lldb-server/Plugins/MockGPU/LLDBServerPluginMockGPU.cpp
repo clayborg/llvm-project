@@ -124,6 +124,7 @@ std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
     connection_info.connect_url = llvm::formatv("connect://localhost:{}", 
                                                 listen_port);
+    connection_info.copy_cpu_breakpoints_during_attaching = true;
     LLDB_LOGF(log, "%s listening to %u", __PRETTY_FUNCTION__, listen_port);
     
     m_listen_socket = std::move(*sock);

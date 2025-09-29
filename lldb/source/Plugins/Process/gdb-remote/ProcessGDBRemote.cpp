@@ -1022,6 +1022,25 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   return Status();
 }
 
+static void CopyCPUBreakpointsToGPUTarget(TargetSP gpu_target_sp,
+                                          TargetSP cpu_target_sp) {
+  BreakpointList &bp_list = cpu_target_sp->GetBreakpointList();
+  for (size_t i = 0; i < bp_list.GetSize(); i++) {
+    BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
+
+    StructuredData::ObjectSP bp_data_sp =
+        bp_sp->SerializeToStructuredData()->GetObjectForDotSeparatedPath(
+            "Breakpoint");
+    Status error;
+    Breakpoint::CreateFromStructuredData(gpu_target_sp, bp_data_sp, error);
+
+    if (error.Fail())
+      Debugger::ReportError(llvm::formatv(
+          "failed to create breakpoint from structured data: {0}\n",
+          error.AsCString()));
+  }
+}
+
 Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   const GPUPluginConnectionInfo &connection_info =
       gpu_action.connect_info.value();
@@ -1045,6 +1064,10 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     return error;
   if (!gpu_target_sp)
     return Status::FromErrorString("failed to create target");
+
+  if (connection_info.copy_cpu_breakpoints_during_attaching)
+    CopyCPUBreakpointsToGPUTarget(gpu_target_sp,
+                                  GetTarget().shared_from_this());
 
   PlatformSP platform_sp = gpu_target_sp->GetPlatform();
   if (!platform_sp)

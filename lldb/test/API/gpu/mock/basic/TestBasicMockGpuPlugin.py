@@ -14,7 +14,7 @@ SOURCE_FILE = "hello_world.cpp"
 
 
 class BasicMockGpuTestCase(GpuTestCaseBase):
-    def setUp(self):
+    def common_setup(self):
         """Build the test program and run to the CPU breakpoint."""
         super().setUp()
         self.build()
@@ -30,6 +30,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Verify that two targets exist: one CPU and one mock GPU.
         Ensures the GPU thread is correctly named.
         """
+        self.common_setup()
         # Check that there is one CPU target before GPU is initialized.
         self.assertEqual(self.dbg.GetNumTargets(), 1, "There is one CPU target")
 
@@ -60,6 +61,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Test that we can read registers from the mock GPU target
         and the "fake" register values are correct.
         """
+        self.common_setup()
         # Continue to the breakpoint after GPU is initialized.
         lldbutil.continue_to_source_breakpoint(
             self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
@@ -101,6 +103,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
     def test_mock_gpu_breakpoint_hit(self):
         """Test that we can hit a breakpoint on the gpu target."""
         # Switch to the GPU target and set a breakpoint.
+        self.common_setup()
         self.select_gpu()
         (gpu_target, gpu_process, gpu_thread, gpu_bkpt) = (
             lldbutil.run_to_source_breakpoint(
@@ -116,3 +119,15 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             1,
             "Breakpoint should have been hit once",
         )
+
+    def test_copy_cpu_breakpoints_during_attaching(self):
+        """Test that we can copy CPU breakpoints during attaching."""
+        self.build()
+        exe = self.getBuildArtifact("a.out")
+        self.runCmd(f"file {exe}")
+        gpu_breakpoint_comment_line = line_number(SOURCE_FILE, GPU_BREAKPOINT_COMMENT)
+
+        self.runCmd(f"b {gpu_breakpoint_comment_line}")
+        self.runCmd("r")
+
+        self.assertTrue(self.gpu_process.IsValid())

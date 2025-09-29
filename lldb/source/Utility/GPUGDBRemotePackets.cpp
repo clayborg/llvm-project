@@ -92,7 +92,9 @@ bool fromJSON(const llvm::json::Value &value, GPUPluginConnectionInfo &data,
          o.mapOptional("platform_name", data.platform_name) &&
          o.mapOptional("triple", data.triple) &&
          o.map("connect_url", data.connect_url) &&
-         o.map("synchronous", data.synchronous);
+         o.map("synchronous", data.synchronous) &&
+         o.map("copy_cpu_breakpoints_during_attaching",
+               data.copy_cpu_breakpoints_during_attaching);
 }
 
 llvm::json::Value toJSON(const GPUPluginConnectionInfo &data) {
@@ -102,6 +104,8 @@ llvm::json::Value toJSON(const GPUPluginConnectionInfo &data) {
       {"triple", data.triple},
       {"connect_url", data.connect_url},
       {"synchronous", data.synchronous},
+      {"copy_cpu_breakpoints_during_attaching",
+       data.copy_cpu_breakpoints_during_attaching},
   });
 }
 
