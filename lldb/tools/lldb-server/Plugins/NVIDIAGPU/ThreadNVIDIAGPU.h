@@ -80,8 +80,14 @@ public:
   /// Set the thread to stopped state by initialization.
   void SetStoppedByInitialization();
 
+  /// Set the thread to stopped state by a breakpoint.
+  void SetStoppedByBreakpoint();
+
   /// Set the thread to running state.
   void SetRunning();
+
+  /// \return the stop reason of the thread.
+  lldb::StopReason GetStopReason() const;
 
 private:
   friend class NVIDIAGPU;
