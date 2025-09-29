@@ -9,6 +9,8 @@ class TestNVIDIAGPUExit(NvidiaGpuTestCaseBase):
 
     def _run_to_exit_code(self, exit_code: int):
         """Run to the exit code breakpoint."""
+        self.killCPUOnTeardown()
+
         self.build()
         source = "empty.cu"
         cpu_bp_line: int = line_number(source, "// breakpoint1")
@@ -22,6 +24,11 @@ class TestNVIDIAGPUExit(NvidiaGpuTestCaseBase):
         self.cpu_process.Continue()
         lldbutil.expect_state_changes(self, listener, self.gpu_process, [lldb.eStateRunning, lldb.eStateExited])
         lldbutil.expect_state_changes(self, listener, self.cpu_process, [lldb.eStateRunning, lldb.eStateExited])
+
+        while self.gpu_process.GetExitStatus() == -1:
+            time.sleep(1)
+        while self.cpu_process.GetExitStatus() == -1:
+            time.sleep(1)
 
         self.assertEqual(self.cpu_process.GetExitStatus(), exit_code)
         self.assertEqual(self.gpu_process.GetExitStatus(), exit_code)
