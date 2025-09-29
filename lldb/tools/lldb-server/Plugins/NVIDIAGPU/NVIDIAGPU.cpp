@@ -162,29 +162,17 @@ const ArchSpec &NVIDIAGPU::GetArchitecture() const { return m_arch; }
 
 Status NVIDIAGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                 bool hardware) {
-  for (DeviceState &device : m_devices.GetDevices()) {
-    uint32_t device_id = device.GetDeviceId();
-    CUDBGResult res = m_api->setBreakpoint(device_id, addr);
-    if (res != CUDBG_SUCCESS) 
-      logAndReportFatalError(
-          "NVIDIAGPU::SetBreakpoint(). Failed to set breakpoint at 0x{:x} "
-          "on device {}. {}",
-          addr, device_id, cudbgGetErrorString(res));
-  }
+  // setBreakpoint doesn't handle properly errors, so we just ignore them.
+  for (DeviceState &device : m_devices.GetDevices())
+    m_api->setBreakpoint(device.GetDeviceId(), addr);
 
   return Status();
 }
 
 Status NVIDIAGPU::RemoveBreakpoint(lldb::addr_t addr, bool hardware) {
-  for (DeviceState &device : m_devices.GetDevices()) {
-    uint32_t device_id = device.GetDeviceId();
-    CUDBGResult res = m_api->unsetBreakpoint(device_id, addr);
-    if (res != CUDBG_SUCCESS) 
-      logAndReportFatalError(
-          "NVIDIAGPU::RemoveBreakpoint(). Failed to remove breakpoint at 0x{:x} "
-          "on device {}. {}",
-          addr, device_id, cudbgGetErrorString(res));
-  }
+  // unsetBreakpoint doesn't handle properly errors, so we just ignore them.
+  for (DeviceState &device : m_devices.GetDevices())
+    m_api->unsetBreakpoint(device.GetDeviceId(), addr);
 
   return Status();
 }
