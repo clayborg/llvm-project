@@ -9,15 +9,19 @@ class TestNVIDIAGPUBreakpoints(NvidiaGpuTestCaseBase):
 
     def test_before_kernel_launch(self):
         """Test that we can set a breakpoint before the kernel launch."""
+        self.killCPUOnTeardown()
+
         self.build()
         exe = self.getBuildArtifact("a.out")
         self.runCmd(f"file {exe}")
         source = "breakpoints.cu"
         cpu_bp_line: int = line_number(source, "// cpu breakpoint")
         gpu_bp_line: int = line_number(source, "// gpu breakpoint")
+        exit_bp_line: int = line_number(source, "// breakpoint before exit")
 
         self.runCmd(f"b {gpu_bp_line}")
         self.runCmd(f"b {cpu_bp_line}")
+        self.runCmd(f"b {exit_bp_line}")
         self.runCmd("r")
 
         self.continue_cpu_and_wait_for_gpu_to_stop()

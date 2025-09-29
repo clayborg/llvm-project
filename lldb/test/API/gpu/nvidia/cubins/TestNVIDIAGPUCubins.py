@@ -9,13 +9,18 @@ class TestNVIDIAGPUCubins(NvidiaGpuTestCaseBase):
 
     def test_cubin_sections_have_load_addresses(self):
         """Test that all executable text sections of all cubins have a load address."""
+        self.killCPUOnTeardown()
+
         self.build()
         source = "assert.cu"
         cpu_bp_line: int = line_number(source, "// breakpoint1")
+        exit_bp_line: int = line_number(source, "// breakpoint before exit")
 
         lldbutil.run_to_line_breakpoint(self, lldb.SBFileSpec(source), cpu_bp_line)
 
         self.assertEqual(self.dbg.GetNumTargets(), 2)
+
+        self.cpu_target.BreakpointCreateByLocation(lldb.SBFileSpec(source), exit_bp_line)
 
         # We switch to async mode to wait for state changes in the GPU target while the CPU resumes.
         self.continue_cpu_and_wait_for_gpu_to_stop()

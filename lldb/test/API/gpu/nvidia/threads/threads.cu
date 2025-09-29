@@ -38,5 +38,5 @@ int main() {
   cudaFree(d_arr1);
   cudaFree(d_arr2);
 
-  return 0;
+  return 0; // breakpoint before exit
 }
