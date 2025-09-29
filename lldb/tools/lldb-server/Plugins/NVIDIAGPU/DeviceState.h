@@ -111,6 +111,10 @@ public:
   ///     Optional exception information from the containing warp.
   /// \param[in] thread_idx
   ///     The 3D thread index within the thread block.
+  /// \param[in] at_breakpoint
+  ///     Whether the parent warp is at a breakpoint.
+  /// \param[in] is_active
+  ///     Whether the thread is in the active thread set.
   ///
   /// \return
   ///     The number of bytes consumed from the buffer.
@@ -119,7 +123,8 @@ public:
                                 const CUDBGDeviceInfoSizes &device_info_sizes,
                                 bool thread_attributes_present,
                                 const ExceptionInfo *warp_exception,
-                                CuDim3 thread_idx);
+                                CuDim3 thread_idx, bool at_breakpoint,
+                                bool is_active);
 
   /// \return
   ///     True if this thread is valid in the GPU, false otherwise.
@@ -205,6 +210,8 @@ public:
   ///     Size information for device data structures.
   /// \param[in] get_grid_info
   ///     Function to retrieve grid information by grid ID.
+  /// \param[in] at_breakpoint
+  ///     Whether the warp is at a breakpoint.
   ///
   /// \return
   ///     The number of bytes consumed from the buffer.
@@ -212,7 +219,8 @@ public:
       uint8_t *buffer, const CUDBGDeviceInfo &device_info,
       const CUDBGDeviceInfoSizes &device_info_sizes,
       std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+      std::function<void(llvm::StringRef message)> log_to_client_callback,
+      bool at_breakpoint);
 
   /// \return
   ///     True if the warp is valid in the GPU, false otherwise.
@@ -367,6 +375,10 @@ public:
   /// \param[in] device_id
   ///     The ID of the CUDA device to manage.
   DeviceState(NVIDIAGPU &gpu, uint32_t device_id);
+
+  /// \return
+  ///     The ID of the CUDA device.
+  uint32_t GetDeviceId() const { return m_device_id; }
 
   /// Get the number of R registers available on this device. This is cached for the lifetime of the device.
   ///
