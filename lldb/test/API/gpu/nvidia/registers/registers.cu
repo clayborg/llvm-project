@@ -9,6 +9,8 @@ __global__ void fault() {
 
   if (fault_here)
     printf("Fault here\n");
+
+  __syncthreads();
 }
 
 int main(void) {
@@ -16,5 +18,5 @@ int main(void) {
   fault<<<20, N>>>(); // breakpoint1
   cudaDeviceSynchronize();
 
-  return 0;
+  return 0; // breakpoint before exit
 }
