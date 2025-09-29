@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
 
   printf("%s completed, returned %s\n", sampleName,
          testResult ? "OK" : "ERROR!");
-  exit(testResult ? EXIT_SUCCESS : EXIT_FAILURE);
+  exit(testResult ? EXIT_SUCCESS : EXIT_FAILURE); // breakpoint before exit
 }
 
 void runTest(int argc, char **argv) {
@@ -143,14 +143,3 @@ void runTest(int argc, char **argv) {
 
   testResult = error == cudaErrorAssert;
 }
-
-/*
-int main(void) {
-  cudaDeviceReset();
-  assert_one<<<20, N>>>(8, 21); // breakpoint1
-  HANDLE_CUDA_ERROR(cudaDeviceSynchronize());
-  HANDLE_CUDA_ERROR(cudaGetLastError());
-
-  return 0;
-}
-  */
