@@ -9,6 +9,9 @@ class NvidiaGpuTestCaseBase(GpuTestCaseBase):
     """
     NO_DEBUG_INFO_TESTCASE = True
 
+    def killCPUOnTeardown(self):
+        self.addTearDownHook(lambda: self.cpu_process.Kill())
+
     def continue_cpu_and_wait_for_gpu_to_stop(self):
         """ Resume the CPU process and wait for the GPU process to stop. The gpu_target must be already running."""
         self.setAsync(True)
