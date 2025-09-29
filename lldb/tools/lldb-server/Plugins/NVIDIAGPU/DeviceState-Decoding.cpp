@@ -14,6 +14,7 @@
 
 #include "../Utils/Utils.h"
 #include "DeviceState.h"
+#include "NVIDIAGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 
 using namespace lldb_private::lldb_server;
@@ -51,7 +52,7 @@ size_t ThreadState::DecodeThreadInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
     bool thread_attributes_present, const ExceptionInfo *warp_exception,
-    CuDim3 thread_idx) {
+    CuDim3 thread_idx, bool at_breakpoint, bool is_active) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   size_t buffer_offset = 0;
@@ -75,13 +76,23 @@ size_t ThreadState::DecodeThreadInfoBuffer(
   }
 
   m_pc = thread_info.virtualPC;
-  m_exception = warp_exception;
   m_thread_idx = thread_idx;
   m_thread_nvidiagpu.GetRegisterContext().InvalidateAllRegisters();
-  if (m_exception)
-    m_thread_nvidiagpu.SetStoppedByException(*m_exception);
-  else
+
+  // Is this thread is active, then we know exactly its stop reason, otherwise
+  // we just set it to stopped without a particular reason.
+  if (is_active) {
+    m_exception = warp_exception;
+    if (m_exception)
+      m_thread_nvidiagpu.SetStoppedByException(*m_exception);
+    else if (at_breakpoint)
+      m_thread_nvidiagpu.SetStoppedByBreakpoint();
+    else
+      m_thread_nvidiagpu.SetStopped();
+  } else {
+    m_exception = {};
     m_thread_nvidiagpu.SetStopped();
+  }
 
   return buffer_offset;
 }
@@ -90,7 +101,8 @@ size_t WarpState::DecodeWarpInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
     std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+    std::function<void(llvm::StringRef message)> log_to_client_callback,
+    bool at_breakpoint) {
   Log *log = GetLog(GDBRLog::Plugin);
   llvm::StringRef log_indent = "    ";
 
@@ -167,27 +179,27 @@ size_t WarpState::DecodeWarpInfoBuffer(
   if (thread_update_mask.AreAllBitsSet())
     LLDB_LOG(log, "{}All threads will be updated", log_indent);
 
-  StaticBitset<uint32_t> valid_lanes(warp_info.validLanes);
+  StaticBitset<uint32_t> valid_threads(warp_info.validLanes);
+  StaticBitset<uint32_t> active_threads(warp_info.activeLanes);
 
   for (uint32_t thread_id = 0; thread_id < m_threads.size(); ++thread_id) {
-    bool is_valid = valid_lanes[thread_id];
+    bool is_valid = valid_threads[thread_id];
     m_threads[thread_id].SetIsValid(is_valid);
-    if (!is_valid)
-      continue;
 
     bool is_updated = thread_update_mask[thread_id];
-
-    if (log && !thread_update_mask.AreAllBitsSet())
-      LLDB_LOG(log, "{}Thread {} is updated: {}", log_indent, thread_id,
-               is_updated);
-
-    if (!is_updated)
-      continue;
-
-    buffer_offset += m_threads[thread_id].DecodeThreadInfoBuffer(
-        buffer + buffer_offset, device_info, device_info_sizes,
-        thread_attributes_present, m_exception ? &m_exception.value() : nullptr,
-        CalculateThreadIdx(flat_thread_idx + thread_id, grid_info.blockDim));
+    if (is_updated) {
+      // This is fully valid thread with up-to-date information.
+      if (is_valid) {
+        buffer_offset += m_threads[thread_id].DecodeThreadInfoBuffer(
+            buffer + buffer_offset, device_info, device_info_sizes,
+            thread_attributes_present,
+            m_exception ? &m_exception.value() : nullptr,
+            CalculateThreadIdx(flat_thread_idx + thread_id, grid_info.blockDim),
+            at_breakpoint, active_threads[thread_id]);
+      }
+      // An invalid thread in this case means that the thread has exited.
+      // We don't do anything because it won't be reported.
+    }
   }
 
   return buffer_offset;
@@ -228,6 +240,7 @@ size_t SMState::DecodeSMInfoBuffer(
            updated_warps_mask.GetStorage());
 
   StaticBitset<uint64_t> valid_warps(sm_info.warpValidMask);
+  StaticBitset<uint64_t> warps_at_breakpoint(sm_info.warpBrokenMask);
 
   for (uint32_t warp_id = 0; warp_id < m_warps.size(); ++warp_id) {
     bool is_valid = valid_warps[warp_id];
@@ -241,7 +254,7 @@ size_t SMState::DecodeSMInfoBuffer(
     if (is_updated)
       buffer_offset += m_warps[warp_id].DecodeWarpInfoBuffer(
           buffer + buffer_offset, device_info, device_info_sizes, get_grid_info,
-          log_to_client_callback);
+          log_to_client_callback, warps_at_breakpoint[warp_id]);
   }
 
   return buffer_offset;

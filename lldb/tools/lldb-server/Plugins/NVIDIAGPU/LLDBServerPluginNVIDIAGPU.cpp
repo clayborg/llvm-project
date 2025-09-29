@@ -186,6 +186,7 @@ LLDBServerPluginNVIDIAGPU::CreateConnection() {
       Socket::TcpListen(listen_to_host_and_port, 5);
   if (sock) {
     GPUPluginConnectionInfo connection_info;
+    connection_info.copy_cpu_breakpoints_during_attaching = true;
     // connection_info.exe_path = "/pretend/path/to/NVIDIAGPU";
     connection_info.triple = "nvptx-nvidia-cuda";
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();

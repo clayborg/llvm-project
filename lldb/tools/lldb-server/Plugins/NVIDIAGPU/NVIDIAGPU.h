@@ -190,6 +190,9 @@ public:
   Status SetBreakpoint(lldb::addr_t addr, uint32_t size,
                        bool hardware) override;
 
+  /// Remove a breakpoint from the GPU at the specified address.
+  Status RemoveBreakpoint(lldb::addr_t addr, bool hardware) override;
+
   /// Get auxiliary vector data for the GPU process.
   ///
   /// \return
@@ -305,6 +308,7 @@ public:
   ///     The exit status of the native process.
   void OnNativeProcessExit(const WaitStatus &exit_status);
 
+  /// \return the list of structured data plugins for this lldb-server Process.
   std::vector<std::string> GetStructuredDataPlugins() override;
 
 private:
@@ -353,6 +357,8 @@ private:
   /// Snapshot of the information of all devices. It's updated upon every stop.
   DeviceStateRegistry m_devices;
 
+  /// A fallback thread that is used to report the state of the GPU when no
+  /// actual threads are active.
   ThreadNVIDIAGPU m_fallback_thread;
 };
 
