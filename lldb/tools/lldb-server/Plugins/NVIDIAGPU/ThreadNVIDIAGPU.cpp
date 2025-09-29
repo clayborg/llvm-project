@@ -46,6 +46,10 @@ bool ThreadNVIDIAGPU::GetStopReason(ThreadStopInfo &stop_info,
   return true;
 }
 
+lldb::StopReason ThreadNVIDIAGPU::GetStopReason() const {
+  return m_stop_info.reason;
+}
+
 NVIDIAGPU &ThreadNVIDIAGPU::GetGPU() {
   return static_cast<NVIDIAGPU &>(m_process);
 }
@@ -77,6 +81,10 @@ void ThreadNVIDIAGPU::SetStoppedByInitialization() {
   LLDB_LOG(GetLog(GDBRLog::Plugin),
            "ThreadNVIDIAGPU::SetStoppedByInitialization()");
   SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU is initializing");
+}
+
+void ThreadNVIDIAGPU::SetStoppedByBreakpoint() {
+  SetStopped(lldb::eStopReasonBreakpoint);
 }
 
 void ThreadNVIDIAGPU::SetStopped(lldb::StopReason reason,
