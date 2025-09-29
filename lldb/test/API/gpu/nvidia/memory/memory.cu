@@ -10,6 +10,8 @@ __global__ void fill_with_indices(int32_t *array) {
     if (fault_here)
       printf("Fault here\n");
   }
+
+  __syncthreads();
 }
 
 int main(void) {
@@ -33,5 +35,5 @@ int main(void) {
   cudaFree(d_arr);
   delete[] h_arr;
 
-  return 0;
+  return 0; // breakpoint before exit
 }
