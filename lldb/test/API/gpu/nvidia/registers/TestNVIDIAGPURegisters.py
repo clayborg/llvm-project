@@ -9,11 +9,16 @@ class TestNVIDIAGPURegisters(NvidiaGpuTestCaseBase):
 
     def test_gpu_showing_registers(self):
         """Test that we know when the GPU has asserted."""
+        self.killCPUOnTeardown()
+
         self.build()
         source = "registers.cu"
         cpu_bp_line: int = line_number(source, "// breakpoint1")
+        exit_bp_line: int = line_number(source, "// breakpoint before exit")
 
         lldbutil.run_to_line_breakpoint(self, lldb.SBFileSpec(source), cpu_bp_line)
+
+        self.cpu_target.BreakpointCreateByLocation(lldb.SBFileSpec(source), exit_bp_line)
 
         self.assertEqual(self.dbg.GetNumTargets(), 2)
 
