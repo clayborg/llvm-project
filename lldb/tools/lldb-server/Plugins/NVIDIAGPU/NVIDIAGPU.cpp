@@ -17,6 +17,7 @@
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/lldb-enumerations.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Base64.h"
@@ -32,8 +33,12 @@ NVIDIAGPU::NVIDIAGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate),
       m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr),
       m_fallback_thread(*this,
-                        /*thread_state=*/nullptr,
-                        std::numeric_limits<lldb::tid_t>::max() - 1) {
+                        /*thread_state=*/nullptr, /*tid=*/1) {
+  // A tid like -1 would be better, but that would make the first real thread to
+  // have a thread id of #2 in the client because the fallback thread would have
+  // a different internal id. Therefore, we keep tid=1 for the first HW thread
+  // and the fallback thread to avoid confusions when debugging small kernels.
+
   // We need to initialize the state to stopped so that the client can connect
   // to the server. The gdb-remote protocol refuses to connect to running
   // targets.
@@ -157,7 +162,31 @@ const ArchSpec &NVIDIAGPU::GetArchitecture() const { return m_arch; }
 
 Status NVIDIAGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                 bool hardware) {
-  return Status::FromErrorString("unimplemented");
+  for (DeviceState &device : m_devices.GetDevices()) {
+    uint32_t device_id = device.GetDeviceId();
+    CUDBGResult res = m_api->setBreakpoint(device_id, addr);
+    if (res != CUDBG_SUCCESS) 
+      logAndReportFatalError(
+          "NVIDIAGPU::SetBreakpoint(). Failed to set breakpoint at 0x{:x} "
+          "on device {}. {}",
+          addr, device_id, cudbgGetErrorString(res));
+  }
+
+  return Status();
+}
+
+Status NVIDIAGPU::RemoveBreakpoint(lldb::addr_t addr, bool hardware) {
+  for (DeviceState &device : m_devices.GetDevices()) {
+    uint32_t device_id = device.GetDeviceId();
+    CUDBGResult res = m_api->unsetBreakpoint(device_id, addr);
+    if (res != CUDBG_SUCCESS) 
+      logAndReportFatalError(
+          "NVIDIAGPU::RemoveBreakpoint(). Failed to remove breakpoint at 0x{:x} "
+          "on device {}. {}",
+          addr, device_id, cudbgGetErrorString(res));
+  }
+
+  return Status();
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
@@ -341,7 +370,10 @@ void NVIDIAGPU::OnAllDevicesSuspended(
 
   ReleaseAndClearThreads(m_threads);
 
+  // We report as the selected thread the one the first one that has an
+  // exception, or the first one that is at a breakpoint.
   std::optional<lldb::tid_t> exception_thread_id;
+  std::optional<lldb::tid_t> breakpoint_thread_id;
 
   for (DeviceState &device : m_devices.GetDevices()) {
     for (SMState &sm : device.GetActiveSMs()) {
@@ -349,9 +381,11 @@ void NVIDIAGPU::OnAllDevicesSuspended(
         for (ThreadState &thread_state : warp.GetValidThreads()) {
           ThreadNVIDIAGPU &thread = thread_state.GetThreadNVIDIAGPU();
 
-          // We report as the selected thread the one the first one that has an
-          // exception.
-          if (!exception_thread_id && thread_state.HasException())
+          StopReason stop_reason = thread.GetStopReason();
+          if (stop_reason == lldb::eStopReasonBreakpoint &&
+              !breakpoint_thread_id)
+            breakpoint_thread_id = thread.GetID();
+          else if (stop_reason == lldb::eStopReasonNone && !exception_thread_id)
             exception_thread_id = thread.GetID();
 
           /// The threads are owned by the DeviceStateRegistry, but we need to
@@ -371,7 +405,8 @@ void NVIDIAGPU::OnAllDevicesSuspended(
         std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
   }
 
-  SetCurrentThreadID(exception_thread_id.value_or(m_threads.front()->GetID()));
+  SetCurrentThreadID(exception_thread_id.value_or(
+      breakpoint_thread_id.value_or(m_threads.front()->GetID())));
   ChangeStateToStopped();
 }
 
