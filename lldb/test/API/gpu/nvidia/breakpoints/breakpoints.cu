@@ -10,6 +10,7 @@ __global__ void breakpoints(int value) {
     if (fault_here)
       printf("Fault here\n");
   }
+  __syncthreads();
 }
 
 int main(void) {
@@ -24,5 +25,5 @@ int main(void) {
 
   cudaDeviceSynchronize();
 
-  return 0;
+  return 0; // breakpoint before exit
 }
