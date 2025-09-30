@@ -33,8 +33,10 @@ std::string ThreadNVIDIAGPU::GetName() {
     return "Invalid thread";
 
   const CuDim3 &thread_idx = m_thread_state->GetThreadIdx();
-  return llvm::formatv("threadIdx(x={} y={} z={})", thread_idx.x, thread_idx.y,
-                       thread_idx.z);
+  const CuDim3 &block_idx = m_thread_state->GetWarpState().GetBlockIdx();
+  return llvm::formatv("blockIdx(x={} y={} z={}) threadIdx(x={} y={} z={})",
+                       block_idx.x, block_idx.y, block_idx.z,
+                       thread_idx.x, thread_idx.y, thread_idx.z);
 }
 
 lldb::StateType ThreadNVIDIAGPU::GetState() { return m_state; }

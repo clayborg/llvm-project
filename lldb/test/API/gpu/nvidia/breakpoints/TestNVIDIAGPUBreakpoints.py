@@ -30,5 +30,10 @@ class TestNVIDIAGPUBreakpoints(NvidiaGpuTestCaseBase):
 
         self.expect(
             "thread list",
-            substrs=[f"at {source}:{gpu_bp_line}, name = 'threadIdx(x=0 y=0 z=0)', stop reason = breakpoint"],
+            substrs=[
+                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint",
+                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=1 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint",
+                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=2 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint",
+                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=3 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint",
+            ],
         )
