@@ -14,7 +14,6 @@
 
 #include "../Utils/Utils.h"
 #include "DeviceState.h"
-#include "NVIDIAGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 
 using namespace lldb_private::lldb_server;
@@ -116,6 +115,7 @@ size_t WarpState::DecodeWarpInfoBuffer(
       std::numeric_limits<uint32_t>::max());
   bool thread_attributes_present = false;
 
+  m_block_idx = warp_info.blockIdx;
   m_regs_calculated = false;
   m_current_num_regular_registers = std::nullopt;
   m_exception = std::nullopt;
