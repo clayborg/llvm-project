@@ -118,7 +118,8 @@ void ThreadState::Dump(Stream &s) {
   s.Format("x = {}, y = {}, z = {}\n", m_thread_idx.x, m_thread_idx.y,
            m_thread_idx.z);
   s.Indent();
-  s.Format("pc = 0x{:x}\n", m_pc);
+  s.Format("pc = 0x{:x}, is_active = {}, stop_reason = {}\n", m_pc, m_is_active,
+           StopReasonToString(m_thread_nvidiagpu.GetStopReason()));
   if (m_exception) {
     s.Indent();
     s.Format("exception = {}\n", m_exception->exception);
@@ -154,14 +155,6 @@ void WarpState::Dump(Stream &s) {
     s.IndentLess();
   }
   s.IndentLess();
-}
-
-const ThreadState *WarpState::FindSomeThreadWithException() const {
-  for (const ThreadState &thread : m_threads)
-    if (thread.IsValid() && thread.HasException())
-      return &thread;
-
-  return nullptr;
 }
 
 size_t WarpState::GetCurrentNumRegularRegisters() {
@@ -279,14 +272,6 @@ void SMState::Dump(Stream &s) {
     s.IndentLess();
   }
   s.IndentLess();
-}
-
-const ThreadState *SMState::FindSomeThreadWithException() const {
-  for (const WarpState &warp : m_warps)
-    if (warp.IsValid() && warp.HasException())
-      return warp.FindSomeThreadWithException();
-
-  return nullptr;
 }
 
 DeviceState::DeviceState(NVIDIAGPU &gpu, uint32_t device_id)
@@ -434,14 +419,6 @@ const CUDBGGridInfo &DeviceState::GetGridInfo(uint64_t grid_id) {
   return m_grid_info.insert({grid_id, grid_info}).first->second;
 }
 
-const ThreadState *DeviceState::FindSomeThreadWithException() const {
-  for (uint32_t sm_id = 0; sm_id < m_sms.size(); ++sm_id)
-    if (m_sm_active_mask.Get(sm_id) && m_sm_exception_mask.Get(sm_id))
-      return m_sms[sm_id].FindSomeThreadWithException();
-
-  return nullptr;
-}
-
 size_t DeviceState::GetMaxNumSupportedThreads() const {
   return m_num_threads_per_warp * m_num_warps_per_sm * m_num_sms;
 }
@@ -474,14 +451,6 @@ std::string DeviceStateRegistry::Dump() {
   StreamString s;
   Dump(s);
   return s.GetData();
-}
-
-const ThreadState *DeviceStateRegistry::FindSomeThreadWithException() const {
-  for (const DeviceState &device : m_devices)
-    if (const ThreadState *thread = device.FindSomeThreadWithException())
-      return thread;
-
-  return nullptr;
 }
 
 size_t DeviceStateRegistry::GetMaxNumSupportedThreads() const {

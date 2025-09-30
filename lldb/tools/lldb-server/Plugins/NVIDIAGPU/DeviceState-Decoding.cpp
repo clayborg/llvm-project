@@ -78,6 +78,7 @@ size_t ThreadState::DecodeThreadInfoBuffer(
   m_pc = thread_info.virtualPC;
   m_thread_idx = thread_idx;
   m_thread_nvidiagpu.GetRegisterContext().InvalidateAllRegisters();
+  m_is_active = is_active;
 
   // Is this thread is active, then we know exactly its stop reason, otherwise
   // we just set it to stopped without a particular reason.
