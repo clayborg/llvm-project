@@ -102,12 +102,15 @@ std::string ExceptionInfo::ToString() const {
   return result;
 }
 
-ThreadState::ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords)
-    : m_physical_coords(physical_coords), m_thread_nvidiagpu(gpu, this) {}
+ThreadState::ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords,
+                         WarpState &warp_state)
+    : m_physical_coords(physical_coords), m_thread_nvidiagpu(gpu, this),
+      m_warp_state(&warp_state) {}
 
 ThreadState::ThreadState(ThreadState &&other)
     : m_physical_coords(other.GetPhysicalCoords()),
-      m_thread_nvidiagpu(other.m_thread_nvidiagpu.GetGPU(), this) {
+      m_thread_nvidiagpu(other.m_thread_nvidiagpu.GetGPU(), this),
+      m_warp_state(other.m_warp_state) {
   logAndReportFatalError("ThreadState is not movable. Ensure that this "
                          "constructor is never called by reserving the "
                          "appropriate amount of space in parent container.");
@@ -135,7 +138,7 @@ WarpState::WarpState(NVIDIAGPU &gpu, uint32_t num_threads, uint32_t device_id,
   m_threads.reserve(num_threads);
   for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
     m_threads.emplace_back(
-        gpu, PhysicalCoords(device_id, sm_id, warp_id, thread_id));
+        gpu, PhysicalCoords(device_id, sm_id, warp_id, thread_id), *this);
 }
 
 void WarpState::Dump(Stream &s) {
