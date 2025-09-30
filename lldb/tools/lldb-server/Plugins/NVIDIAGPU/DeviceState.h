@@ -165,6 +165,9 @@ private:
   /// Whether this thread is valid in the GPU.
   bool m_is_valid = false;
 
+  /// Whether this thread is in the active thread set.
+  bool m_is_active = false;
+
   /// The program counter value for this thread.
   uint64_t m_pc = 0;
 
@@ -235,12 +238,6 @@ public:
   /// \return
   ///     True if the warp has an exception, false otherwise.
   bool HasException() const { return m_exception.has_value(); }
-
-  /// Find a thread within this warp that has an exception.
-  ///
-  /// \return
-  ///     Pointer to a thread state with an exception, or nullptr if none found.
-  const ThreadState *FindSomeThreadWithException() const;
 
   /// \return
   ///     A reference to the collection of threads.
@@ -340,12 +337,6 @@ public:
   /// Output SM state information to a stream for debugging.
   void Dump(Stream &s);
 
-  /// Find a thread within this SM that has an exception.
-  ///
-  /// \return
-  ///     Pointer to a thread state with an exception, or nullptr if none found.
-  const ThreadState *FindSomeThreadWithException() const;
-
   /// \return
   ///     A reference to the collection of warps.
   llvm::MutableArrayRef<WarpState> GetWarps() { return m_warps; }
@@ -425,12 +416,6 @@ public:
   /// \return
   ///     A reference to the grid information structure.
   const CUDBGGridInfo &GetGridInfo(uint64_t grid_id);
-
-  /// Find a thread within this device that has an exception.
-  ///
-  /// \return
-  ///     Pointer to a thread state with an exception, or nullptr if none found.
-  const ThreadState *FindSomeThreadWithException() const;
 
   /// \return
   ///     A reference to the collection of SM states.
@@ -537,12 +522,6 @@ public:
   /// \return
   ///     A string containing the registry state information.
   std::string Dump();
-
-  /// Find a thread across all devices that has an exception.
-  ///
-  /// \return
-  ///     Pointer to a thread state with an exception, or nullptr if none found.
-  const ThreadState *FindSomeThreadWithException() const;
 
   /// Access a device state by index.
   ///

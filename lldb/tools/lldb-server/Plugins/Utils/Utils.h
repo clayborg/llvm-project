@@ -49,6 +49,9 @@ template <typename... Args>
 /// Get a user-friendly string representation of a state.
 llvm::StringRef StateToString(lldb::StateType state);
 
+/// Get a user-friendly string representation of a stop reason.
+llvm::StringRef StopReasonToString(lldb::StopReason reason);
+
 /// Helper class to provide range-based iteration over
 /// std::vector<std::unique_ptr<NativeThreadProtocol>> with automatic casting to
 /// the underlying thread `T&` type.
