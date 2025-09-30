@@ -27,7 +27,7 @@ class NvidiaGpuTestCaseBase(GpuTestCaseBase):
 
     def find_thread_by_name(self, name: str) -> lldb.SBThread:
         """ Find a thread by name. It raises if no threads have the given name."""
-        return next(filter(lambda thread: thread.GetName() == name, self.gpu_process.threads))
+        return next(filter(lambda thread: name in thread.GetName(), self.gpu_process.threads))
 
     def find_thread_by_stop_reason(self, stop_reason: int) -> lldb.SBThread:
         """ Find a thread by stop reason. It raises if no threads have the given stop reason."""
