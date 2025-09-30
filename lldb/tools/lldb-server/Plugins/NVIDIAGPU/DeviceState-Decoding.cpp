@@ -335,9 +335,8 @@ void DeviceState::DecodeDeviceInfoBuffer(
 void DeviceState::BatchUpdate(
     std::function<void(llvm::StringRef message)> log_to_client_callback) {
   uint32_t data_length = 0;
-  // TODO: handle CUDBG_RESPONSE_TYPE_UPDATE
   CUDBGResult res = m_api->getDeviceInfo(
-      m_device_id, CUDBG_RESPONSE_TYPE_FULL, m_device_info_buffer.data(),
+      m_device_id, CUDBG_RESPONSE_TYPE_UPDATE, m_device_info_buffer.data(),
       m_device_info_sizes.requiredBufferSize, &data_length);
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError(log_to_client_callback,
