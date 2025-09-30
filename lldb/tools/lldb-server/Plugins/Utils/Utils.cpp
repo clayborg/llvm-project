@@ -42,6 +42,48 @@ llvm::StringRef StateToString(lldb::StateType state) {
   return "unknown";
 }
 
+llvm::StringRef StopReasonToString(lldb::StopReason reason) {
+  switch (reason) {
+  case eStopReasonInvalid:
+    return "invalid";
+  case eStopReasonNone:
+    return "none";
+  case eStopReasonTrace:
+    return "trace";
+  case eStopReasonBreakpoint:
+    return "breakpoint";
+  case eStopReasonWatchpoint:
+    return "watchpoint";
+  case eStopReasonSignal:
+    return "signal";
+  case eStopReasonException:
+    return "exception";
+  case eStopReasonExec:
+    return "exec";
+  case eStopReasonFork:
+    return "fork";
+  case eStopReasonVFork:
+    return "vfork";
+  case eStopReasonVForkDone:
+    return "vfork done";
+  case eStopReasonPlanComplete:
+    return "plan complete";
+  case eStopReasonThreadExiting:
+    return "thread exiting";
+  case eStopReasonInstrumentation:
+    return "instrumentation break";
+  case eStopReasonProcessorTrace:
+    return "processor trace";
+  case eStopReasonInterrupt:
+    return "async interrupt";
+  case eStopReasonHistoryBoundary:
+    return "history boundary";
+  case eStopReasonDynamicLoader:
+    return "dynamic loader";
+  }
+  return "unknown";
+}
+
 void logAndReportFatalError(llvm::StringRef err_msg) {
   Log *log = GetLog(process_gdb_remote::GDBRLog::Plugin);
   LLDB_LOG(log, "{0}", err_msg);
