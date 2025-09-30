@@ -86,7 +86,8 @@ public:
   /// \param[in] physical_coords
   ///     This physical coordinates won't change for the lifetime of this
   ///     object.
-  ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords);
+  ThreadState(NVIDIAGPU &gpu, const PhysicalCoords &physical_coords,
+              WarpState &warp_state);
 
   /// Non-copyable.
   ThreadState(const ThreadState &) = delete;
@@ -161,6 +162,10 @@ public:
   ///     The ThreadNVIDIAGPU object associated with this thread.
   ThreadNVIDIAGPU &GetThreadNVIDIAGPU() { return m_thread_nvidiagpu; }
 
+  /// \return
+  ///     The warp state associated with this thread.
+  WarpState &GetWarpState() const { return *m_warp_state; }
+
 private:
   /// Whether this thread is valid in the GPU.
   bool m_is_valid = false;
@@ -183,6 +188,8 @@ private:
   /// The ThreadNVIDIAGPU object associated with this thread. This object is the
   /// interface LLGS wants to interact with.
   ThreadNVIDIAGPU m_thread_nvidiagpu;
+
+  WarpState *m_warp_state;
 };
 
 /// Represents the state of a CUDA warp.
@@ -267,6 +274,8 @@ public:
   ///     A reference to the registers for this warp.
   const WarpRegistersWithValidity &GetRegisters();
 
+  const CuDim3 &GetBlockIdx() const { return m_block_idx; }
+
 private:
   /// Whether this warp is valid in the GPU.
   bool m_is_valid = false;
@@ -286,6 +295,9 @@ private:
 
   /// Whether the registers for this warp have been calculated.
   bool m_regs_calculated = false;
+
+  /// The block index for this warp.
+  CuDim3 m_block_idx;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).

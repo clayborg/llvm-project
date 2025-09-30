@@ -13,12 +13,12 @@ namespace lldb_private {
 class TCPSocket;
 
 namespace lldb_server {
+class MainLoopEventNotifier;
 class NVIDIAGPU;
 class ThreadNVIDIAGPU;
 class ThreadState;
+class WarpState;
 struct ExceptionInfo;
-class MainLoopEventNotifier;
-
 } // namespace lldb_server
 
 } // namespace lldb_private
