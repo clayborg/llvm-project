@@ -69,13 +69,11 @@ Status NVIDIAGPU::Resume(const ResumeActionList &resume_actions) {
           cudbgGetErrorString(res));
     }
   } else {
-    // According to Andrew, resume device takes ~25 ms.
-    CUDBGResult res = GetCudaAPI().resumeDevice(/*device_id=*/0);
-
-    Status status;
-    if (res != CUDBG_SUCCESS) {
-      LLDB_LOG(log, "NVIDIAGPU::Resume(). Failed to resume device: {}", res);
-      return Status::FromErrorString("Failed to resume device");
+    for (DeviceState &device : m_devices.GetDevices()) {
+      CUDBGResult res = GetCudaAPI().resumeDevice(device.GetDeviceId());
+      if (res != CUDBG_SUCCESS)
+        logAndReportFatalError("Failed to resume device: {}",
+                               cudbgGetErrorString(res));
     }
   }
 
