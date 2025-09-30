@@ -131,6 +131,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.runCmd("r")
 
         self.assertTrue(self.gpu_process.IsValid())
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,
