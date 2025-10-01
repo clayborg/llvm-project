@@ -336,17 +336,17 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
-static void
-ReadRegularRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                               const PhysicalCoords &physical_coords,
-                               ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetSMs()[physical_coords.sm_id]
-                        .GetWarps()[physical_coords.warp_id]
+static void ReadRegularRegistersFromDevice(DeviceState &device_info,
+                                           CUDBGAPI api,
+                                           const ThreadCoords &thread_coords,
+                                           ThreadRegistersWithValidity &regs) {
+  size_t num_regs = device_info.GetSMs()[thread_coords.sm_id]
+                        .GetWarps()[thread_coords.warp_id]
                         .GetCurrentNumRegularRegisters();
 
   CUDBGResult res = api->readRegisterRange(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      physical_coords.thread_id, 0, num_regs, regs.val.regular);
+      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
+      thread_coords.thread_id, 0, num_regs, regs.val.regular);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
@@ -359,15 +359,15 @@ ReadRegularRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
 
 static void
 ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                 const PhysicalCoords &physical_coords,
+                                 const ThreadCoords &thread_coords,
                                  ThreadRegistersWithValidity &regs) {
   size_t num_regs = device_info.GetNumPredicateRegisters();
   if (num_regs == 0)
     return;
 
   CUDBGResult res = api->readPredicates(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      physical_coords.thread_id, num_regs, regs.val.predicate);
+      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
+      thread_coords.thread_id, num_regs, regs.val.predicate);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
@@ -397,7 +397,7 @@ RegisterContextNVGPU::ReadAllRegsFromDevice() {
   }
 
   CUDBGAPI api = GetDebuggerAPI();
-  const PhysicalCoords &physical_coords = thread_state->GetPhysicalCoords();
+  const ThreadCoords &thread_coords = thread_state->GetCoords();
 
   {
     regs.val.PC = thread_state->GetPC();
@@ -412,31 +412,31 @@ RegisterContextNVGPU::ReadAllRegsFromDevice() {
     }
   }
 
-    DeviceState &device_info =
-        GetGPUThread().GetGPU().GetAllDevices()[physical_coords.dev_id];
+  DeviceState &device_info =
+      GetGPUThread().GetGPU().GetAllDevices()[thread_coords.dev_id];
 
-    ReadRegularRegistersFromDevice(device_info, api, physical_coords, regs);
-    ReadPredicateRegistersFromDevice(device_info, api, physical_coords, regs);
+  ReadRegularRegistersFromDevice(device_info, api, thread_coords, regs);
+  ReadPredicateRegistersFromDevice(device_info, api, thread_coords, regs);
 
-    WarpState &warp_state = device_info.GetSMs()[physical_coords.sm_id]
-                                .GetWarps()[physical_coords.warp_id];
-    const WarpRegistersWithValidity &warp_regs = warp_state.GetRegisters();
+  WarpState &warp_state = device_info.GetSMs()[thread_coords.sm_id]
+                              .GetWarps()[thread_coords.warp_id];
+  const WarpRegistersWithValidity &warp_regs = warp_state.GetRegisters();
 
-    std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
-              regs.val.uniform);
-    std::copy(warp_regs.val.uniform_predicate,
-              warp_regs.val.uniform_predicate + kNumUPRegs,
-              regs.val.uniform_predicate);
-    std::copy(warp_regs.is_valid.uniform,
-              warp_regs.is_valid.uniform + kNumURRegs, regs.is_valid.uniform);
-    std::copy(warp_regs.is_valid.uniform_predicate,
-              warp_regs.is_valid.uniform_predicate + kNumUPRegs,
-              regs.is_valid.uniform_predicate);
+  std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
+            regs.val.uniform);
+  std::copy(warp_regs.val.uniform_predicate,
+            warp_regs.val.uniform_predicate + kNumUPRegs,
+            regs.val.uniform_predicate);
+  std::copy(warp_regs.is_valid.uniform, warp_regs.is_valid.uniform + kNumURRegs,
+            regs.is_valid.uniform);
+  std::copy(warp_regs.is_valid.uniform_predicate,
+            warp_regs.is_valid.uniform_predicate + kNumUPRegs,
+            regs.is_valid.uniform_predicate);
 
-    {
-      regs.val.regular_zero = 0;
-      regs.is_valid.regular_zero = true;
-    }
+  {
+    regs.val.regular_zero = 0;
+    regs.is_valid.regular_zero = true;
+  }
 
     {
       regs.val.uniform_zero = 0;
