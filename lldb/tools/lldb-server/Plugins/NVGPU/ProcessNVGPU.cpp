@@ -464,13 +464,13 @@ Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr, size);
 
-  auto GetPhysicalCoords = [&thread]() -> const PhysicalCoords & {
+  auto GetPhysicalCoords = [&thread]() -> const ThreadCoords & {
     ThreadNVGPU &nv_thread = *static_cast<ThreadNVGPU *>(thread);
     const ThreadState *thread_state = nv_thread.GetThreadState();
     if (!thread_state)
       logAndReportFatalError(
           "NVGPU::ReadMemoryWithSpace(). ThreadState is null");
-    return thread_state->GetPhysicalCoords();
+    return thread_state->GetCoords();
   };
   CUDBGResult res;
 
@@ -482,26 +482,26 @@ Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
     break;
   }
   case AddressSpace::LocalStorage: {
-    const PhysicalCoords &coords = GetPhysicalCoords();
+    const ThreadCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readLocalMemory(coords.dev_id, coords.sm_id,
                                        coords.warp_id, coords.thread_id, addr,
                                        buf, size);
     break;
   }
   case AddressSpace::ParamStorage: {
-    const PhysicalCoords &coords = GetPhysicalCoords();
+    const ThreadCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readParamMemory(coords.dev_id, coords.sm_id,
                                        coords.warp_id, addr, buf, size);
     break;
   }
   case AddressSpace::SharedStorage: {
-    const PhysicalCoords &coords = GetPhysicalCoords();
+    const ThreadCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readSharedMemory(coords.dev_id, coords.sm_id,
                                         coords.warp_id, addr, buf, size);
     break;
   }
   case AddressSpace::GenericStorage: {
-    const PhysicalCoords &coords = GetPhysicalCoords();
+    const ThreadCoords &coords = GetPhysicalCoords();
     res = GetCudaAPI().readGenericMemory(coords.dev_id, coords.sm_id,
                                          coords.warp_id, coords.thread_id, addr,
                                          buf, size);
