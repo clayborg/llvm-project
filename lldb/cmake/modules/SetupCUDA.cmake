@@ -12,27 +12,27 @@ endif()
 set(LLDB_SETUP_CUDA_INCLUDED TRUE)
 
 # Ensure the NVIDIA GPU plugin is explicitly enabled
-if(NOT LLDB_ENABLE_NVIDIAGPU_PLUGIN)
-  message(FATAL_ERROR "Attempting to use CUDA setup without enabling NVIDIA GPU support. Please set LLDB_ENABLE_NVIDIAGPU_PLUGIN=ON in your CMake configuration.")
+if(NOT LLDB_ENABLE_NVGPU_PLUGIN)
+  message(FATAL_ERROR "Attempting to use CUDA setup without enabling NVIDIA GPU support. Please set LLDB_ENABLE_NVGPU_PLUGIN=ON in your CMake configuration.")
 endif()
 
 # Set up CUDA debugger include directory
-set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC 
+set(NVGPU_DEBUGGER_INCLUDE_DIR_DESC 
     "Path to the folder containing the CUDA debugger header file (cudadebugger.h)")
-set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR CACHE STRING ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC})
+set(NVGPU_DEBUGGER_INCLUDE_DIR CACHE STRING ${NVGPU_DEBUGGER_INCLUDE_DIR_DESC})
 
 # Try to find CUDA Toolkit if include dir not explicitly set
-if(NOT NVIDIAGPU_DEBUGGER_INCLUDE_DIR)
+if(NOT NVGPU_DEBUGGER_INCLUDE_DIR)
   find_package(CUDAToolkit)
 
   if (CUDAToolkit_FOUND)
-    set(NVIDIAGPU_DEBUGGER_INCLUDE_DIR 
+    set(NVGPU_DEBUGGER_INCLUDE_DIR 
         "${CUDAToolkit_LIBRARY_ROOT}/extras/Debugger/include" 
-        CACHE STRING ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR_DESC} FORCE)
+        CACHE STRING ${NVGPU_DEBUGGER_INCLUDE_DIR_DESC} FORCE)
     
     # Set NVCC path if not already set (useful for some plugins)
-    if(NOT NVIDIAGPU_NVCC_PATH)
-      set(NVIDIAGPU_NVCC_PATH "${CUDAToolkit_NVCC_EXECUTABLE}" 
+    if(NOT NVGPU_NVCC_PATH)
+      set(NVGPU_NVCC_PATH "${CUDAToolkit_NVCC_EXECUTABLE}" 
           CACHE STRING "Path to the NVCC compiler." FORCE)
     endif()
   endif()
@@ -40,20 +40,20 @@ endif()
 
 # Error handling for missing CUDA debugger headers
 set(TROUBLESHOOTING_MESSAGE 
-    "Please (re)install the CUDA Toolkit or set a valid NVIDIAGPU_DEBUGGER_INCLUDE_DIR CMake variable.")
+    "Please (re)install the CUDA Toolkit or set a valid NVGPU_DEBUGGER_INCLUDE_DIR CMake variable.")
 
-if(NOT NVIDIAGPU_DEBUGGER_INCLUDE_DIR) 
-  message(FATAL_ERROR "NVIDIAGPU_DEBUGGER_INCLUDE_DIR not set. ${TROUBLESHOOTING_MESSAGE}")
-elseif(NOT EXISTS "${NVIDIAGPU_DEBUGGER_INCLUDE_DIR}")
+if(NOT NVGPU_DEBUGGER_INCLUDE_DIR) 
+  message(FATAL_ERROR "NVGPU_DEBUGGER_INCLUDE_DIR not set. ${TROUBLESHOOTING_MESSAGE}")
+elseif(NOT EXISTS "${NVGPU_DEBUGGER_INCLUDE_DIR}")
   message(FATAL_ERROR 
-      "NVIDIAGPU_DEBUGGER_INCLUDE_DIR (${NVIDIAGPU_DEBUGGER_INCLUDE_DIR}) not found. ${TROUBLESHOOTING_MESSAGE}")
+      "NVGPU_DEBUGGER_INCLUDE_DIR (${NVGPU_DEBUGGER_INCLUDE_DIR}) not found. ${TROUBLESHOOTING_MESSAGE}")
 endif()
 
 # Function to verify NVCC compiler is available
 # Some CUDA plugins require the NVCC compiler for runtime compilation
 function(lldb_verify_nvcc_available)
-  if(NOT NVIDIAGPU_NVCC_PATH)
-    message(FATAL_ERROR "NVIDIAGPU_NVCC_PATH not set. Please install the CUDA Toolkit or set a valid NVIDIAGPU_NVCC_PATH CMake variable.")
+  if(NOT NVGPU_NVCC_PATH)
+    message(FATAL_ERROR "NVGPU_NVCC_PATH not set. Please install the CUDA Toolkit or set a valid NVGPU_NVCC_PATH CMake variable.")
   endif()
 endfunction()
 
@@ -68,7 +68,7 @@ function(lldb_add_cuda_include_dirs target_name)
   # Mark that we've added includes to this target
   set_target_properties(${target_name} PROPERTIES LLDB_CUDA_INCLUDES_APPLIED TRUE)
   
-  target_include_directories(${target_name} ${ARGN} ${NVIDIAGPU_DEBUGGER_INCLUDE_DIR})
+  target_include_directories(${target_name} ${ARGN} ${NVGPU_DEBUGGER_INCLUDE_DIR})
 endfunction()
 
 # Function to apply CUDA environment variables as compile definitions to a target
@@ -84,26 +84,26 @@ function(lldb_apply_cuda_env_definitions target_name)
   # Mark that we've applied definitions to this target
   set_target_properties(${target_name} PROPERTIES LLDB_CUDA_ENV_DEFINITIONS_APPLIED TRUE)
   
-  if(NVIDIAGPU_CUDBG_INJECTION_PATH)
+  if(NVGPU_CUDBG_INJECTION_PATH)
     target_compile_definitions(${target_name} PRIVATE 
-      CMAKE_NVIDIAGPU_CUDBG_INJECTION_PATH="${NVIDIAGPU_CUDBG_INJECTION_PATH}")
+      CMAKE_NVGPU_CUDBG_INJECTION_PATH="${NVGPU_CUDBG_INJECTION_PATH}")
   endif()
-  if(NVIDIAGPU_CUDA_VISIBLE_DEVICES)
+  if(NVGPU_CUDA_VISIBLE_DEVICES)
     target_compile_definitions(${target_name} PRIVATE 
-      CMAKE_NVIDIAGPU_CUDA_VISIBLE_DEVICES="${NVIDIAGPU_CUDA_VISIBLE_DEVICES}")
+      CMAKE_NVGPU_CUDA_VISIBLE_DEVICES="${NVGPU_CUDA_VISIBLE_DEVICES}")
   endif()
-  if(NVIDIAGPU_CUDA_DEVICE_ORDER)
+  if(NVGPU_CUDA_DEVICE_ORDER)
     target_compile_definitions(${target_name} PRIVATE 
-      CMAKE_NVIDIAGPU_CUDA_DEVICE_ORDER="${NVIDIAGPU_CUDA_DEVICE_ORDER}")
+      CMAKE_NVGPU_CUDA_DEVICE_ORDER="${NVGPU_CUDA_DEVICE_ORDER}")
   endif()
-  if(NVIDIAGPU_CUDA_LAUNCH_BLOCKING)
+  if(NVGPU_CUDA_LAUNCH_BLOCKING)
     target_compile_definitions(${target_name} PRIVATE
-      CMAKE_NVIDIAGPU_CUDA_LAUNCH_BLOCKING="${NVIDIAGPU_CUDA_LAUNCH_BLOCKING}")
+      CMAKE_NVGPU_CUDA_LAUNCH_BLOCKING="${NVGPU_CUDA_LAUNCH_BLOCKING}")
   endif()
 
-  if(NOT NVIDIAGPU_INITIALIZATION_SYMBOL)
-    set(NVIDIAGPU_INITIALIZATION_SYMBOL "cuInit")
+  if(NOT NVGPU_INITIALIZATION_SYMBOL)
+    set(NVGPU_INITIALIZATION_SYMBOL "cuInit")
   endif()
   target_compile_definitions(${target_name} PRIVATE
-    CMAKE_NVIDIAGPU_INITIALIZATION_SYMBOL="${NVIDIAGPU_INITIALIZATION_SYMBOL}")
+    CMAKE_NVGPU_INITIALIZATION_SYMBOL="${NVGPU_INITIALIZATION_SYMBOL}")
 endfunction()
