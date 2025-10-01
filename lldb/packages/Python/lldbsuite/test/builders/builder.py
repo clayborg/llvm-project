@@ -250,10 +250,10 @@ class Builder:
         return []
 
     def getNvccArgs(self):
-        if "nvidiagpu" in configuration.enabled_plugins:
+        if "nvgpu" in configuration.enabled_plugins:
             if not configuration.nvcc_path:
                 raise build_exception.BuildError(
-                    "NVCC path is not configured but nvidiagpu plugin is enabled. "
+                    "NVCC path is not configured but nvgpu plugin is enabled. "
                     "Please set configuration.nvcc_path to a valid NVCC compiler path."
                 )
             return ["NVCC={}".format(configuration.nvcc_path)]

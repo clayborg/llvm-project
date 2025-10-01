@@ -18,7 +18,7 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
-#include "tools/lldb-server/Plugins/NVIDIAGPU/SASSRegisterNumbers.h"
+#include "tools/lldb-server/Plugins/NVGPU/SASSRegisterNumbers.h"
 
 using namespace lldb;
 using namespace lldb_private;
