@@ -16,7 +16,7 @@
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-std::string PhysicalCoords::Dump() const {
+std::string ThreadCoords::Dump() const {
   return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} thread_id = {}",
                        dev_id, sm_id, warp_id, thread_id);
 }
@@ -102,14 +102,13 @@ std::string ExceptionInfo::ToString() const {
   return result;
 }
 
-ThreadState::ThreadState(ProcessNVGPU &gpu,
-                         const PhysicalCoords &physical_coords,
+ThreadState::ThreadState(ProcessNVGPU &gpu, const ThreadCoords &thread_coords,
                          WarpState &warp_state)
-    : m_physical_coords(physical_coords), m_thread_nvgpu(gpu, this),
+    : m_thread_coords(thread_coords), m_thread_nvgpu(gpu, this),
       m_warp_state(&warp_state) {}
 
 ThreadState::ThreadState(ThreadState &&other)
-    : m_physical_coords(other.GetPhysicalCoords()),
+    : m_thread_coords(other.GetCoords()),
       m_thread_nvgpu(other.m_thread_nvgpu.GetGPU(), this),
       m_warp_state(other.m_warp_state) {
   logAndReportFatalError("ThreadState is not movable. Ensure that this "
@@ -141,7 +140,7 @@ WarpState::WarpState(ProcessNVGPU &gpu, uint32_t num_threads,
   m_threads.reserve(num_threads);
   for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
     m_threads.emplace_back(
-        gpu, PhysicalCoords(device_id, sm_id, warp_id, thread_id), *this);
+        gpu, ThreadCoords(device_id, sm_id, warp_id, thread_id), *this);
 }
 
 void WarpState::Dump(Stream &s) {
