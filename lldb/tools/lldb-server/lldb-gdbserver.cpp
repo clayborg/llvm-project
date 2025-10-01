@@ -52,8 +52,8 @@
 #include "Plugins/AMDGPU/LLDBServerPluginAMDGPU.h"
 #endif
 
-#if defined(LLDB_ENABLE_NVIDIAGPU_PLUGIN)
-#include "Plugins/NVIDIAGPU/LLDBServerPluginNVIDIAGPU.h"
+#if defined(LLDB_ENABLE_NVGPU_PLUGIN)
+#include "Plugins/NVGPU/LLDBServerPluginNVGPU.h"
 #endif
 
 #if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
@@ -482,10 +482,10 @@ int main_gdbserver(int argc, char *argv[]) {
       std::make_unique<lldb_private::lldb_server::LLDBServerPluginMockGPU>(
           gdb_server, gpu_mainloop));
 #endif
-#if defined(LLDB_ENABLE_NVIDIAGPU_PLUGIN)
+#if defined(LLDB_ENABLE_NVGPU_PLUGIN)
   MainLoop gpu_mainloop;
   gdb_server.InstallPlugin(
-      std::make_unique<lldb_private::lldb_server::LLDBServerPluginNVIDIAGPU>(
+      std::make_unique<lldb_private::lldb_server::LLDBServerPluginNVGPU>(
           gdb_server, gpu_mainloop));
 #endif
 
