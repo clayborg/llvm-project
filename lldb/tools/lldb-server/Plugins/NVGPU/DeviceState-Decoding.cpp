@@ -29,9 +29,9 @@ static uint64_t CalculateFlatThreadIdx(const CuDim3 &base_thread_idx,
 
 /// Calculate the thread index for a thread given its linearized thread index
 /// and the block dimension.
-static CuDim3 CalculateThreadIdx(uint64_t flat_thread_idx,
+static ThreadIdx CalculateThreadIdx(uint64_t flat_thread_idx,
                                  const CuDim3 &block_dim) {
-  CuDim3 thread_idx{0, 0, 0};
+  ThreadIdx thread_idx;
   if (block_dim.x == 0 || block_dim.y == 0 || block_dim.z == 0)
     return thread_idx;
 
@@ -51,7 +51,7 @@ size_t ThreadState::DecodeThreadInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
     bool thread_attributes_present, const ExceptionInfo *warp_exception,
-    CuDim3 thread_idx, bool at_breakpoint, bool is_active) {
+    const ThreadIdx &thread_idx, bool at_breakpoint, bool is_active) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   size_t buffer_offset = 0;
