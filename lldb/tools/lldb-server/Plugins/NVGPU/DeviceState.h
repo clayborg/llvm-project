@@ -32,14 +32,14 @@ struct WarpCoords {
 };
 
 /// This struct represents the physical coordinates of a HW thread in a GPU.
-struct PhysicalCoords {
+struct ThreadCoords {
   int64_t dev_id;
   int64_t sm_id;
   int64_t warp_id;
   int64_t thread_id;
 
-  PhysicalCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
-                 int64_t thread_id)
+  ThreadCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
+               int64_t thread_id)
       : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), thread_id(thread_id) {}
 
   /// \return
@@ -53,7 +53,26 @@ struct PhysicalCoords {
   std::string Dump() const;
 };
 
-/// Represents information about an exception that occurred during CUDA kernel execution.
+/// A 3D index object.
+struct Index3D {
+  uint32_t x;
+  uint32_t y;
+  uint32_t z;
+
+  Index3D(uint32_t x, uint32_t y, uint32_t z) : x(x), y(y), z(z) {}
+
+  Index3D(const CuDim3 &dim3) : x(dim3.x), y(dim3.y), z(dim3.z) {}
+
+  Index3D() : x(0), y(0), z(0) {}
+
+  const CuDim3 &ToCuDim3() const { return *(const CuDim3 *)(this); }
+};
+
+using ThreadIdx = Index3D;
+using BlockIdx = Index3D;
+
+/// Represents information about an exception that occurred during CUDA kernel
+/// execution.
 struct ExceptionInfo {
   /// The type of CUDA exception that occurred. It's guaranteed not to be CUDBG_EXCEPTION_NONE.
   CUDBGException_t exception;
@@ -83,10 +102,10 @@ public:
   ///
   /// \param[in] gpu
   ///     The GPU that this thread state belongs to.
-  /// \param[in] physical_coords
+  /// \param[in] thread_coords
   ///     This physical coordinates won't change for the lifetime of this
   ///     object.
-  ThreadState(ProcessNVGPU &gpu, const PhysicalCoords &physical_coords,
+  ThreadState(ProcessNVGPU &gpu, const ThreadCoords &thread_coords,
               WarpState &warp_state);
 
   /// Non-copyable.
@@ -124,7 +143,7 @@ public:
                                 const CUDBGDeviceInfoSizes &device_info_sizes,
                                 bool thread_attributes_present,
                                 const ExceptionInfo *warp_exception,
-                                CuDim3 thread_idx, bool at_breakpoint,
+                                const ThreadIdx &thread_idx, bool at_breakpoint,
                                 bool is_active);
 
   /// \return
@@ -139,11 +158,11 @@ public:
 
   /// \return
   ///     A reference to the physical coordinates structure.
-  const PhysicalCoords &GetPhysicalCoords() const { return m_physical_coords; }
+  const ThreadCoords &GetCoords() const { return m_thread_coords; }
 
   /// \return
   ///     A reference to the 3D thread index.
-  const CuDim3 &GetThreadIdx() const { return m_thread_idx; }
+  const ThreadIdx &GetThreadIdx() const { return m_thread_idx; }
 
   /// \return
   ///     Exception information of this thread, or nullptr if no exception
@@ -180,10 +199,10 @@ private:
   const ExceptionInfo *m_exception = nullptr;
 
   /// The 3D thread index within the thread block.
-  CuDim3 m_thread_idx;
+  ThreadIdx m_thread_idx;
 
   /// The physical coordinates of this thread on the device.
-  PhysicalCoords m_physical_coords;
+  ThreadCoords m_thread_coords;
 
   /// The ThreadNVGPU object associated with this thread. This object is the
   /// interface LLGS wants to interact with.
@@ -276,7 +295,7 @@ public:
   ///     A reference to the registers for this warp.
   const WarpRegistersWithValidity &GetRegisters();
 
-  const CuDim3 &GetBlockIdx() const { return m_block_idx; }
+  const BlockIdx &GetBlockIdx() const { return m_block_idx; }
 
   /// \return
   ///     A reference to the streaming multiprocessor state that this warp
@@ -287,7 +306,7 @@ public:
   ///     The warp coordinates of this warp.
   WarpCoords GetWarpCoords() const {
     // We use the first thread in the warp to get the warp coordinates.
-    return m_threads[0].GetPhysicalCoords().GetWarpCoords();
+    return m_threads[0].GetCoords().GetWarpCoords();
   }
 
 private:
@@ -311,7 +330,7 @@ private:
   bool m_regs_calculated = false;
 
   /// The block index for this warp.
-  CuDim3 m_block_idx;
+  BlockIdx m_block_idx;
 
   /// The streaming multiprocessor state that this warp belongs to.
   SMState *m_sm_state;
