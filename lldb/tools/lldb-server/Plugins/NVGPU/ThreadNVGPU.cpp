@@ -30,8 +30,8 @@ std::string ThreadNVGPU::GetName() {
   if (!m_thread_state)
     return "Invalid thread";
 
-  const CuDim3 &thread_idx = m_thread_state->GetThreadIdx();
-  const CuDim3 &block_idx = m_thread_state->GetWarpState().GetBlockIdx();
+  const ThreadIdx &thread_idx = m_thread_state->GetThreadIdx();
+  const BlockIdx &block_idx = m_thread_state->GetWarpState().GetBlockIdx();
   return llvm::formatv("blockIdx(x={} y={} z={}) threadIdx(x={} y={} z={})",
                        block_idx.x, block_idx.y, block_idx.z,
                        thread_idx.x, thread_idx.y, thread_idx.z);
