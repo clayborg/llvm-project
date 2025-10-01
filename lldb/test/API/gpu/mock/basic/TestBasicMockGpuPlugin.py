@@ -19,10 +19,8 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         super().setUp()
         self.build()
         self.source_spec = lldb.SBFileSpec(SOURCE_FILE, False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(
-                self, CPU_BEFORE_BREAKPOINT_COMMENT, self.source_spec
-            )
+        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = lldbutil.run_to_source_breakpoint(
+            self, CPU_BEFORE_BREAKPOINT_COMMENT, self.source_spec
         )
 
     def test_mock_gpu_two_targets(self):
@@ -35,9 +33,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.assertEqual(self.dbg.GetNumTargets(), 1, "There is one CPU target")
 
         # Continue to the breakpoint after GPU is initialized.
-        lldbutil.continue_to_source_breakpoint(
-            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
-        )
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
 
         # Check that there are two targets.
         self.assertEqual(self.dbg.GetNumTargets(), 2, "There are two targets")
@@ -63,9 +59,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         """
         self.common_setup()
         # Continue to the breakpoint after GPU is initialized.
-        lldbutil.continue_to_source_breakpoint(
-            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
-        )
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
 
         # Switch to the GPU target and read the registers.
         self.select_gpu()
@@ -74,9 +68,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         gpu_registers_raw = lldbutil.get_registers(gpu_frame, "general purpose")
 
         # Convert the registers to a dictionary for easier checking.
-        gpu_registers = {
-            reg.GetName(): reg.GetValueAsUnsigned() for reg in gpu_registers_raw
-        }
+        gpu_registers = {reg.GetName(): reg.GetValueAsUnsigned() for reg in gpu_registers_raw}
 
         expected_registers = {
             "R0": 0x0,
@@ -105,12 +97,10 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         # Switch to the GPU target and set a breakpoint.
         self.common_setup()
         self.select_gpu()
-        (gpu_target, gpu_process, gpu_thread, gpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(
-                self,
-                GPU_BREAKPOINT_COMMENT,
-                self.source_spec,
-            )
+        (gpu_target, gpu_process, gpu_thread, gpu_bkpt) = lldbutil.run_to_source_breakpoint(
+            self,
+            GPU_BREAKPOINT_COMMENT,
+            self.source_spec,
         )
 
         # Check the breakpoint was hit.
@@ -132,6 +122,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.assertTrue(self.gpu_process.IsValid())
 
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,
@@ -145,3 +136,33 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             "breakpoint list --internal",
             patterns=[r"name = 'gpu_first_stop'.*hit count = 1"],
         )
+
+    def test_mock_gpu_target_switch(self):
+        """Test that we can switch targets between CPU and GPU."""
+
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
+
+        self.select_gpu()
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch mock-gpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.gpu_target)
+
+        self.runCmd("target switch cpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+        self.runCmd("target switch cpu")
+        self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
