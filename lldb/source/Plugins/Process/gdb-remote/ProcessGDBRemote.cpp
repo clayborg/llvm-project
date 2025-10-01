@@ -1105,6 +1105,10 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
                                  process_sp->GetTarget().shared_from_this());
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
                 "created process!!!");
+  auto event_sp = std::make_shared<Event>(
+      Target::eBroadcastBitNewTargetCreated,
+      new Target::TargetEventData(gpu_target_sp, gpu_action.session_name));
+  GetTarget().BroadcastEvent(event_sp);
   return Status();
 }
 

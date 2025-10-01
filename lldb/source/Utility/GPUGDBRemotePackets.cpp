@@ -143,6 +143,7 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
               llvm::json::Path path) {
   ObjectMapper o(value, path);
   return o && o.map("plugin_name", data.plugin_name) &&
+         o.map("session_name", data.session_name) &&
          o.mapOptional("stop_id", data.stop_id) &&
          o.map("breakpoints", data.breakpoints) &&
          o.mapOptional("connect_info", data.connect_info) &&
@@ -157,6 +158,7 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
 llvm::json::Value toJSON(const GPUActions &data) {
   return json::Value(Object{
       {"plugin_name", data.plugin_name},
+      {"session_name", data.session_name},
       {"stop_id", data.stop_id},
       {"breakpoints", data.breakpoints},
       {"connect_info", data.connect_info},
