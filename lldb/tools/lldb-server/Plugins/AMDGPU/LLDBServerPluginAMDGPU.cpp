@@ -429,7 +429,8 @@ bool LLDBServerPluginAMDGPU::ReadyToSendConnectionRequest() {
   // The GPUActions are ignored on the initial stop when the process is first
   // launched so we wait until the second stop to send the connection request.
   const bool ready = m_amd_dbg_api_state == AmdDbgApiState::Attached &&
-                     !m_is_connected && !m_is_listening;
+                     !m_is_connected && !m_is_listening &&
+                     GetNativeProcess()->GetStopID() > 1;
 
   LLDB_LOGF(GetLog(GDBRLog::Plugin),
             "%s - ready: %d dbg_api_state: %d, connected: %d, listening: %d, "
