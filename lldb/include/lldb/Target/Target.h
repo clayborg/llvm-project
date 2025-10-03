@@ -1611,6 +1611,16 @@ public:
 
   bool IsGPUTarget() const { return !m_is_cpu_target; }
 
+  void SetShouldStepOverBreakpointsOnResume(
+      std::optional<bool> should_step_over_breakpoints_on_resume) {
+    m_should_step_over_breakpoints_on_resume =
+        should_step_over_breakpoints_on_resume;
+  }
+
+  std::optional<bool> ShouldStepOverBreakpointsOnResume() const {
+    return m_should_step_over_breakpoints_on_resume;
+  }
+
 protected:
   /// Implementing of ModuleList::Notifier.
 
@@ -1707,6 +1717,7 @@ protected:
   /// native target to resume as well, we can use this to make this happen.
   lldb::TargetWP m_native_target_gpu_wp;
   bool m_is_cpu_target = true;
+  std::optional<bool> m_should_step_over_breakpoints_on_resume = {};
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);

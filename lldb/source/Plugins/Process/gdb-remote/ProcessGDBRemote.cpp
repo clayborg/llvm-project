@@ -1087,6 +1087,9 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     CopyCPUBreakpointsToGPUTarget(gpu_target_sp,
                                   GetTarget().shared_from_this());
 
+  gpu_target_sp->SetShouldStepOverBreakpointsOnResume(
+      connection_info.should_step_over_breakpoints_on_resume);
+
   PlatformSP platform_sp = gpu_target_sp->GetPlatform();
   if (!platform_sp)
     return Status::FromErrorString("invalid platform for target needed for "

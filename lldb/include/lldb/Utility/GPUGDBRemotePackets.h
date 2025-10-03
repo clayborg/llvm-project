@@ -129,6 +129,8 @@ struct GPUPluginConnectionInfo {
   bool synchronous = false;
   /// Whether to copy the CPU breakpoints to the GPU target during attaching.
   bool copy_cpu_breakpoints_during_attaching = false;
+  /// Whether resume the GPU process require single-stepping over breakpoints.
+  std::optional<bool> should_step_over_breakpoints_on_resume;
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUPluginConnectionInfo &data,

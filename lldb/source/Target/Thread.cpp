@@ -621,6 +621,9 @@ void Thread::WillStop() {
 }
 
 bool Thread::SetupToStepOverBreakpointIfNeeded(RunDirection direction) {
+  if (!CalculateTarget()->ShouldStepOverBreakpointsOnResume().value_or(true))
+    return false;
+
   if (GetResumeState() != eStateSuspended) {
     // First check whether this thread is going to "actually" resume at all.
     // For instance, if we're stepping from one level to the next of an
