@@ -16,6 +16,31 @@ using namespace lldb_private::platform_NVGPU;
 
 LLDB_PLUGIN_DEFINE(PlatformNVGPU)
 
+namespace {
+#define LLDB_PROPERTIES_platformnvgpuuser
+#include "PlatformNVGPUUserProperties.inc"
+
+enum {
+#define LLDB_PROPERTIES_platformnvgpuuser
+#include "PlatformNVGPUUserPropertiesEnum.inc"
+};
+} // namespace
+
+PlatformNVGPU::PluginProperties::PluginProperties() {
+  m_collection_sp = std::make_shared<OptionValueProperties>(
+      PlatformNVGPU::GetPluginNameStatic(/*is_host=*/false));
+  m_collection_sp->Initialize(g_platformnvgpuuser_properties);
+}
+
+FileSpec PlatformNVGPU::PluginProperties::GetNvdisasmPath() {
+  return GetPropertyAtIndexAs<FileSpec>(ePropertyNvdisasmPath, {});
+}
+
+PlatformNVGPU::PluginProperties &PlatformNVGPU::GetGlobalProperties() {
+  static PluginProperties g_settings;
+  return g_settings;
+}
+
 static uint32_t g_initialize_count = 0;
 
 PlatformSP PlatformNVGPU::CreateInstance(bool force, const ArchSpec *arch) {
@@ -38,7 +63,17 @@ void PlatformNVGPU::Initialize() {
     PluginManager::RegisterPlugin(
         PlatformNVGPU::GetPluginNameStatic(false),
         PlatformNVGPU::GetPluginDescriptionStatic(false),
-        PlatformNVGPU::CreateInstance, nullptr);
+        PlatformNVGPU::CreateInstance, PlatformNVGPU::DebuggerInitialize);
+  }
+}
+
+void PlatformNVGPU::DebuggerInitialize(Debugger &debugger) {
+  if (!PluginManager::GetSettingForPlatformPlugin(
+          debugger, GetPluginNameStatic(/*is_host=*/false))) {
+    PluginManager::CreateSettingForPlatformPlugin(
+        debugger, GetGlobalProperties().GetValueProperties(),
+        "Properties for the NVGPU platform plugin.",
+        /*is_global_property=*/true);
   }
 }
 
