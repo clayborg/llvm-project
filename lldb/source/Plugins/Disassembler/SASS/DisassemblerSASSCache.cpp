@@ -9,12 +9,13 @@
 #include "DisassemblerSASSCache.h"
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
+#include "Plugins/Platform/NVGPU/PlatformNVGPU.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
-#include "llvm/Support/Program.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
+#include "llvm/Support/Program.h"
 #include <filesystem>
 
 using namespace lldb_private;
@@ -205,11 +206,21 @@ llvm::Expected<std::string> ModuleSM::FindSM(const Address &base_addr) {
 
 llvm::Expected<lldb_private::FileSpec>
 DisassemblerSASSCache::GetNvdisasmPath() {
+  Log *log = GetLog(LLDBLog::Disassembler);
+
+  // If the user has set the nvdisasm path in the nvgpu plugin properties, use
+  // it regardless of the cache and the predefinedsearch paths.
+  FileSpec nvdisasm_path =
+      platform_NVGPU::PlatformNVGPU::GetGlobalProperties().GetNvdisasmPath();
+  if (!nvdisasm_path.GetPath().empty()) {
+    LLDB_LOG(log, "Using nvdisasm from the nvgpu plugin properties: {0}",
+             nvdisasm_path);
+    return FileSpec(nvdisasm_path);
+  }
+
   // If we already found it successfully, return cached result
   if (m_cached_nvdisasm_path.has_value())
     return *m_cached_nvdisasm_path;
-
-  Log *log = GetLog(LLDBLog::Disassembler);
 
   // Helper lambda to handle successful nvdisasm discovery
   auto handle_nvdisasm_found = [&](const std::string &path,
