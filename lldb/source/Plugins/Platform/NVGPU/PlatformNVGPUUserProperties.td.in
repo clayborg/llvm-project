@@ -1,0 +1,9 @@
+include "../../../../include/lldb/Core/PropertiesBase.td"
+
+let Definition = "platformnvgpuuser" in {
+  def NvdisasmPath: Property<"nvdisasm-path", "FileSpec">,
+    Global,
+    DefaultStringValue<"@NVGPU_DISASSEMBLER_PATH@">,
+    Desc<"Custom path to the nvdisasm binary. When not specified, LLDB will "
+    "search for nvdisasm in the system in some predefined paths.">;
+}
