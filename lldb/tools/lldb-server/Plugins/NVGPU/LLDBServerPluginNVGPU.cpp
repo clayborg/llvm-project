@@ -179,6 +179,7 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
   if (sock) {
     GPUPluginConnectionInfo connection_info;
     connection_info.copy_cpu_breakpoints_during_attaching = true;
+    connection_info.should_step_over_breakpoints_on_resume = false;
     // connection_info.exe_path = "/pretend/path/to/NVGPU";
     connection_info.triple = "nvptx-nvidia-cuda";
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
