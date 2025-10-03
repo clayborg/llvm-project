@@ -336,13 +336,10 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
-static void ReadRegularRegistersFromDevice(DeviceState &device_info,
-                                           CUDBGAPI api,
+static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
                                            const ThreadCoords &thread_coords,
                                            ThreadRegistersWithValidity &regs) {
-  size_t num_regs = device_info.GetSMs()[thread_coords.sm_id]
-                        .GetWarps()[thread_coords.warp_id]
-                        .GetCurrentNumRegularRegisters();
+  size_t num_regs = warp_state.GetCurrentNumRegularRegisters();
 
   CUDBGResult res = api->readRegisterRange(
       thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
@@ -412,14 +409,13 @@ RegisterContextNVGPU::ReadAllRegsFromDevice() {
     }
   }
 
+  WarpState &warp_state = thread_state->GetWarpState();
   DeviceState &device_info =
-      GetGPUThread().GetGPU().GetAllDevices()[thread_coords.dev_id];
+      thread.GetGPU().GetAllDevices()[thread_coords.dev_id];
 
-  ReadRegularRegistersFromDevice(device_info, api, thread_coords, regs);
+  ReadRegularRegistersFromDevice(api, warp_state, thread_coords, regs);
   ReadPredicateRegistersFromDevice(device_info, api, thread_coords, regs);
 
-  WarpState &warp_state = device_info.GetSMs()[thread_coords.sm_id]
-                              .GetWarps()[thread_coords.warp_id];
   const WarpRegistersWithValidity &warp_regs = warp_state.GetRegisters();
 
   std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
