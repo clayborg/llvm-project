@@ -1796,6 +1796,16 @@ public:
 
   bool IsGPUTarget() const { return !m_is_cpu_target; }
 
+  void SetShouldStepOverBreakpointsOnResume(
+      std::optional<bool> should_step_over_breakpoints_on_resume) {
+    m_should_step_over_breakpoints_on_resume =
+        should_step_over_breakpoints_on_resume;
+  }
+
+  std::optional<bool> ShouldStepOverBreakpointsOnResume() const {
+    return m_should_step_over_breakpoints_on_resume;
+  }
+
 protected:
   /// Implementing of ModuleList::Notifier.
 
@@ -1908,6 +1918,7 @@ protected:
   bool m_is_cpu_target = true;
   /// Every target group this target belongs to.
   TargetGroupList m_target_groups;
+  std::optional<bool> m_should_step_over_breakpoints_on_resume = {};
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);
