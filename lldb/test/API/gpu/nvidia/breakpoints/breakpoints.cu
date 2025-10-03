@@ -2,9 +2,9 @@
 #include <iostream>
 
 __global__ void breakpoints(int value) {
-  printf("%d\n", value);
+  printf("%d\n", value); // gpu breakpoint 1
   if (threadIdx.x == 0) {
-    printf("will break %d\n", value); // gpu breakpoint
+    printf("will break %d\n", value); // gpu breakpoint 2
     int fault_here = *(volatile int *)0x03;
 
     if (fault_here)
