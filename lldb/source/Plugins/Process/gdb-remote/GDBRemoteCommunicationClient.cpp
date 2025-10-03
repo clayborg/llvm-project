@@ -916,10 +916,14 @@ lldb::pid_t GDBRemoteCommunicationClient::GetCurrentProcessID(bool allow_lazy) {
   return LLDB_INVALID_PROCESS_ID;
 }
 
-llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
+llvm::Expected<StringExtractorGDBRemote>
+GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
   if (!args.GetArgumentAtIndex(0))
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "Nothing to launch");
+
+  StringExtractorGDBRemote response;
+
   // try vRun first
   if (m_supports_vRun) {
     StreamString packet;
@@ -929,7 +933,6 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
       packet.PutStringAsRawHex8(arg.ref());
     }
 
-    StringExtractorGDBRemote response;
     if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
         PacketResult::Success)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -942,7 +945,7 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
     // FIXME: right now we just discard the packet and LLDB queries
     // for stop reason again
     if (!response.IsUnsupportedResponse())
-      return llvm::Error::success();
+      return response;
 
     m_supports_vRun = false;
   }
@@ -957,7 +960,6 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
     packet.PutStringAsRawHex8(arg.value().ref());
   }
 
-  StringExtractorGDBRemote response;
   if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
       PacketResult::Success) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -972,7 +974,7 @@ llvm::Error GDBRemoteCommunicationClient::LaunchProcess(const Args &args) {
                                    "Sending qLaunchSuccess packet failed");
   }
   if (response.IsOKResponse())
-    return llvm::Error::success();
+    return response;
   if (response.GetChar() == 'E') {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    response.GetStringRef().substr(1));
