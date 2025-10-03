@@ -16,7 +16,16 @@ namespace lldb_private::platform_NVGPU {
 
 class PlatformNVGPU : public Platform {
 public:
+  class PluginProperties : public Properties {
+  public:
+    PluginProperties();
+
+    FileSpec GetNvdisasmPath();
+  };
+
   PlatformNVGPU();
+
+  static PluginProperties &GetGlobalProperties();
 
   static void Initialize();
 
@@ -54,6 +63,9 @@ public:
                                               ConstString name) override;
 
   CompilerType GetSiginfoType(const llvm::Triple &triple) override;
+
+private:
+  static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
   std::vector<ArchSpec> m_supported_architectures;
 };
