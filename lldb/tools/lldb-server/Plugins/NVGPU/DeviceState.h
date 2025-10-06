@@ -207,8 +207,10 @@ public:
   ///     The streaming multiprocessor ID where this warp resides.
   /// \param[in] warp_id
   ///     The warp ID within the streaming multiprocessor.
+  /// \param[in] sm_state
+  ///     The streaming multiprocessor state that this warp belongs to.
   WarpState(ProcessNVGPU &gpu, uint32_t num_threads, uint32_t device_id,
-            uint32_t sm_id, uint32_t warp_id);
+            uint32_t sm_id, uint32_t warp_id, SMState &sm_state);
 
   /// Decode warp information from a buffer received from CUDA debugger API.
   ///
@@ -276,6 +278,18 @@ public:
 
   const CuDim3 &GetBlockIdx() const { return m_block_idx; }
 
+  /// \return
+  ///     A reference to the streaming multiprocessor state that this warp
+  ///     belongs to.
+  SMState &GetSMState() const { return *m_sm_state; }
+
+  /// \return
+  ///     The warp coordinates of this warp.
+  WarpCoords GetWarpCoords() const {
+    // We use the first thread in the warp to get the warp coordinates.
+    return m_threads[0].GetPhysicalCoords().GetWarpCoords();
+  }
+
 private:
   /// Whether this warp is valid in the GPU.
   bool m_is_valid = false;
@@ -298,6 +312,9 @@ private:
 
   /// The block index for this warp.
   CuDim3 m_block_idx;
+
+  /// The streaming multiprocessor state that this warp belongs to.
+  SMState *m_sm_state;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).
@@ -315,8 +332,10 @@ public:
   ///     The device ID where this SM resides.
   /// \param[in] sm_id
   ///     The SM ID within the device.
+  /// \param[in] device_state
+  ///     The device state that this SM belongs to.
   SMState(ProcessNVGPU &gpu, uint32_t num_warps, uint32_t num_threads_per_warp,
-          uint32_t device_id, uint32_t sm_id);
+          uint32_t device_id, uint32_t sm_id, DeviceState &device_state);
 
   /// Decode SM information from a buffer received from CUDA debugger API.
   ///
@@ -360,12 +379,19 @@ public:
         m_warps, [](WarpState &warp) { return warp.IsValid(); });
   }
 
+  /// \return
+  ///     A reference to the device state that this SM belongs to.
+  DeviceState &GetDeviceState() const { return *m_device_state; }
+
 private:
   /// Whether this SM is currently active in the GPU.
   bool m_is_active;
 
   /// All warps in this SM.
   std::vector<WarpState> m_warps;
+
+  /// The device state that this SM belongs to.
+  DeviceState *m_device_state;
 };
 
 /// Manages and caches information about a particular CUDA device.
@@ -443,6 +469,10 @@ public:
   /// \return
   ///     The maximum number of threads on this device supported by the HW.
   size_t GetMaxNumSupportedThreads() const;
+
+  /// \return
+  ///     A reference to the CUDA debugger API.
+  CUDBGAPI &GetAPI() { return m_api; }
 
 private:
   /// Decode device information from a buffer received from CUDA debugger API.
