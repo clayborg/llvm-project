@@ -135,7 +135,9 @@ void ThreadState::Dump(Stream &s) {
 }
 
 WarpState::WarpState(ProcessNVGPU &gpu, uint32_t num_threads,
-                     uint32_t device_id, uint32_t sm_id, uint32_t warp_id) {
+                     uint32_t device_id, uint32_t sm_id, uint32_t warp_id,
+                     SMState &sm_state)
+    : m_sm_state(&sm_state) {
   m_threads.reserve(num_threads);
   for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
     m_threads.emplace_back(
@@ -166,14 +168,10 @@ size_t WarpState::GetCurrentNumRegularRegisters() {
     return *m_current_num_regular_registers;
 
   CUDBGWarpResources resources;
-  // We get the coordinates and a handle to the API from the first thread in
-  // the warp. We do this to avoid storing additional copies at the warp level.
-  const PhysicalCoords &physical_coords = m_threads[0].GetPhysicalCoords();
-  ProcessNVGPU &gpu = m_threads[0].GetThreadNVGPU().GetGPU();
+  const WarpCoords &warp_coords = GetWarpCoords();
 
-  CUDBGResult res = gpu.GetDebuggerAPI()->readWarpResources(
-      physical_coords.dev_id, physical_coords.sm_id, physical_coords.warp_id,
-      &resources);
+  CUDBGResult res = GetSMState().GetDeviceState().GetAPI()->readWarpResources(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, &resources);
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("WarpState::GetCurrentNumRegularRegisters(). "
                            "readWarpResources failed: {}",
@@ -231,17 +229,12 @@ const WarpRegistersWithValidity &WarpState::GetRegisters() {
   if (m_regs_calculated)
     return m_regs;
 
-  ThreadState &thread = m_threads[0];
-  ThreadNVGPU &thread_nvgpu = thread.GetThreadNVGPU();
-  ProcessNVGPU &gpu = thread_nvgpu.GetGPU();
+  WarpCoords coords = GetWarpCoords();
+  DeviceState &device_info = GetSMState().GetDeviceState();
+  CUDBGAPI api = device_info.GetAPI();
 
-  WarpCoords coords = thread.GetPhysicalCoords().GetWarpCoords();
-  DeviceState &device_info = gpu.GetAllDevices()[coords.dev_id];
-
-  ReadUniformRegistersFromDevice(device_info, gpu.GetDebuggerAPI(), coords,
-                                 m_regs);
-  ReadUniformPredicateRegistersFromDevice(device_info, gpu.GetDebuggerAPI(),
-                                          coords, m_regs);
+  ReadUniformRegistersFromDevice(device_info, api, coords, m_regs);
+  ReadUniformPredicateRegistersFromDevice(device_info, api, coords, m_regs);
 
   m_regs_calculated = true;
   return m_regs;
@@ -249,11 +242,12 @@ const WarpRegistersWithValidity &WarpState::GetRegisters() {
 
 SMState::SMState(ProcessNVGPU &gpu, uint32_t num_warps,
                  uint32_t num_threads_per_warp, uint32_t device_id,
-                 uint32_t sm_id)
-    : m_is_active(false), m_warps() {
+                 uint32_t sm_id, DeviceState &device_state)
+    : m_is_active(false), m_warps(), m_device_state(&device_state) {
   m_warps.reserve(num_warps);
   for (uint32_t warp_id = 0; warp_id < num_warps; ++warp_id)
-    m_warps.emplace_back(gpu, num_threads_per_warp, device_id, sm_id, warp_id);
+    m_warps.emplace_back(gpu, num_threads_per_warp, device_id, sm_id, warp_id,
+                         *this);
 }
 
 void SMState::SetIsActive(bool is_active) { m_is_active = is_active; }
@@ -313,7 +307,7 @@ DeviceState::DeviceState(ProcessNVGPU &gpu, uint32_t device_id)
   m_sms.reserve(m_num_sms);
   for (uint32_t sm_id = 0; sm_id < m_num_sms; ++sm_id)
     m_sms.emplace_back(gpu, m_num_warps_per_sm, m_num_threads_per_warp,
-                       m_device_id, sm_id);
+                       m_device_id, sm_id, *this);
 }
 
 size_t DeviceState::GetNumPredicateRegisters() {
