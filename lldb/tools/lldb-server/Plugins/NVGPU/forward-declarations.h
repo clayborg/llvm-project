@@ -13,8 +13,10 @@ namespace lldb_private {
 class TCPSocket;
 
 namespace lldb_server {
+class DeviceState;
 class MainLoopEventNotifier;
 class ProcessNVGPU;
+class SMState;
 class ThreadNVGPU;
 class ThreadState;
 class WarpState;
