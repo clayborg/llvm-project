@@ -1111,6 +1111,39 @@ bool RegisterContextUnwind::ReadRegisterValueFromRegisterLocation(
     if (!other_reg_info)
       return false;
 
+    // If we're reading a register for PC/RA, check if there's a composite RA
+    // register that should be used instead. This handles cases like NVGPU where
+    // the return address spans multiple physical registers (R20-R21) but DWARF
+    // CFI can only reference the first component (R20).
+    //
+    // We directly check other_reg_info to see if it's part of a composite
+    // by examining if any register with the RA generic kind has this register
+    // as its first value_reg component.
+    if (reg_info &&
+        (reg_info->kinds[eRegisterKindGeneric] == LLDB_REGNUM_GENERIC_PC ||
+         reg_info->kinds[eRegisterKindGeneric] == LLDB_REGNUM_GENERIC_RA)) {
+      // Try to directly access the RA register using
+      // ConvertBetweenRegisterKinds which is safe to call during unwinding,
+      // unlike GetRegisterInfo which can trigger lazy initialization.
+      uint32_t ra_regnum = LLDB_INVALID_REGNUM;
+      if (m_thread.GetRegisterContext() &&
+          m_thread.GetRegisterContext()->ConvertBetweenRegisterKinds(
+              eRegisterKindGeneric, LLDB_REGNUM_GENERIC_RA, eRegisterKindLLDB,
+              ra_regnum) &&
+          ra_regnum != LLDB_INVALID_REGNUM) {
+        // Get the RA register info directly by its LLDB register number
+        const RegisterInfo *ra_reg_info = GetRegisterInfoAtIndex(ra_regnum);
+
+        // If the RA register is a composite (has value_regs), and its first
+        // component matches what we're being asked to read, use the composite
+        if (ra_reg_info && ra_reg_info->value_regs &&
+            ra_reg_info->value_regs[0] == regloc.location.register_number &&
+            ra_reg_info->value_regs[1] != LLDB_INVALID_REGNUM) {
+          other_reg_info = ra_reg_info;
+        }
+      }
+    }
+
     if (IsFrameZero()) {
       success =
           m_thread.GetRegisterContext()->ReadRegister(other_reg_info, value);
