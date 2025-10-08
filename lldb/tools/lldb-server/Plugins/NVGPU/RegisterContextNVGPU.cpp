@@ -172,9 +172,15 @@ static const RegisterSet g_reg_sets[] = {
     {"Uniform Predicate Registers", "up", kNumUPRegs,
      g_uniform_predicate_regnums}};
 
+// Define composite register components for RA (R20-R21)
+// The return address is stored across two 32-bit registers: R20 (low 32 bits)
+// and R21 (high 32 bits), forming a 64-bit address.
+static uint32_t g_ra_value_regs[] = {LLDB_R20, LLDB_R21, LLDB_INVALID_REGNUM};
+
 /// Define all of the information about all registers. The register info structs
 /// are accessed by the LLDB register numbers, which are defined above.
 static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
+    // Index 0: LLDB PC pseudo register
     {
         "PC",               // RegisterInfo::name
         nullptr,            // RegisterInfo::alt_name
@@ -194,6 +200,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
+    // Index 1: LLDB errorPC pseudo register
     {
         "errorPC",           // RegisterInfo::name
         nullptr,             // RegisterInfo::alt_name
@@ -213,25 +220,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
-    {
-        "RA",               // RegisterInfo::alt_name
-        "R[20-21]",         // RegisterInfo::name
-        8,                  // RegisterInfo::byte_size
-        R_REG_OFFSET(20),   // RegisterInfo::byte_offset
-        eEncodingUint,      // RegisterInfo::encoding
-        eFormatAddressInfo, // RegisterInfo::format
-        {
-            // RegisterInfo::kinds[]
-            EH_FRAME_RA,            // RegisterInfo::kinds[eRegisterKindEHFrame]
-            LLDB_INVALID_REGNUM,    // No DWARF number - RA spans R20-R21
-            LLDB_REGNUM_GENERIC_RA, // RegisterInfo::kinds[eRegisterKindGeneric]
-            LLDB_RA, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
-            LLDB_RA  // RegisterInfo::kinds[eRegisterKindLLDB]
-        },
-        nullptr, // RegisterInfo::value_regs
-        nullptr, // RegisterInfo::invalidate_regs
-        nullptr, // RegisterInfo::flags_type
-    },
+    // Index 2: LLDB SP pseudo register
     {
         "SP",               // RegisterInfo::name
         "R[1]",             // RegisterInfo::alt_name
@@ -251,6 +240,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
+    // Index 3: LLDB FP pseudo register
     {
         "FP",               // RegisterInfo::name
         "R[2]",             // RegisterInfo::alt_name
@@ -270,9 +260,29 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
         nullptr, // RegisterInfo::invalidate_regs
         nullptr, // RegisterInfo::flags_type
     },
+    // Index 4: LLDB RA pseudo register
+    {
+        "RA",               // RegisterInfo::name
+        "R[20-21]",         // RegisterInfo::alt_name
+        8,                  // RegisterInfo::byte_size (64-bit composite)
+        R_REG_OFFSET(20),   // RegisterInfo::byte_offset
+        eEncodingUint,      // RegisterInfo::encoding
+        eFormatAddressInfo, // RegisterInfo::format
+        {
+            // RegisterInfo::kinds[]
+            EH_FRAME_RA,            // RegisterInfo::kinds[eRegisterKindEHFrame]
+            LLDB_INVALID_REGNUM,    // No DWARF number - RA spans R20-R21
+            LLDB_REGNUM_GENERIC_RA, // RegisterInfo::kinds[eRegisterKindGeneric]
+            LLDB_RA, // RegisterInfo::kinds[eRegisterKindProcessPlugin]
+            LLDB_RA  // RegisterInfo::kinds[eRegisterKindLLDB]
+        },
+        g_ra_value_regs, // RegisterInfo::value_regs - composite of R20 and R21
+        nullptr,         // RegisterInfo::invalidate_regs
+        nullptr,         // RegisterInfo::flags_type
+    },
     // The number of elements in this list must match kNumRRegs (255).
     GENERATE_ALL_REGULAR_REGISTER_INFO(),
-    // R255 - zero register
+    // Index 260: R255 zero pseudo register
     {
         "RZ",                     // RegisterInfo::name
         "R255",                   // RegisterInfo::alt_name
@@ -298,7 +308,7 @@ static const RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
     GENERATE_ALL_PREDICATE_REGISTER_INFO(),
     // Uniform registers - all 255 uniform registers (UR0-UR254)
     GENERATE_ALL_UNIFORM_REGISTER_INFO(),
-    // UR255 - uniform zero register
+    // Index 524: UR255 uniform zero pseudo register
     {
         "URZ",                    // RegisterInfo::name
         "UR255",                  // RegisterInfo::alt_name
