@@ -125,6 +125,7 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
     def test_mock_gpu_target_switch(self):
         """Test that we can switch targets between CPU and GPU."""
 
+        self.common_setup()
         # Continue to the breakpoint after GPU is initialized.
         lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
 
