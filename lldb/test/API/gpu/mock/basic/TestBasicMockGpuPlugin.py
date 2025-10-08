@@ -156,9 +156,8 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         Test that we can hit the first breakpoint on the cpu target,
         Making sure we handle the GPUActions on the first stop-reply.
         """
-        lldbutil.continue_to_source_breakpoint(
-            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
-        )
+        self.common_setup()
+
         self.select_cpu()
         self.expect(
             "breakpoint list --internal",
