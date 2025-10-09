@@ -1,5 +1,5 @@
-add_lldb_library(lldbPluginPlatformNVidiaGPU PLUGIN
-  PlatformNVidiaGPU.cpp
+add_lldb_library(lldbPluginPlatformNVGPU PLUGIN
+  PlatformNVGPU.cpp
 
    LINK_LIBS
     lldbBreakpoint

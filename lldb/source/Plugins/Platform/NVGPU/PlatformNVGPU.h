@@ -1,4 +1,4 @@
-//===-- PlatformNVidiaGPU.h -----------------------------------------*- C++ -*-===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,17 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLDB_SOURCE_PLUGINS_PLATFORM_NVIDIAGPU_PLATFORMNVIDIAGPU_H
-#define LLDB_SOURCE_PLUGINS_PLATFORM_NVIDIAGPU_PLATFORMNVIDIAGPU_H
+#ifndef LLDB_SOURCE_PLUGINS_PLATFORM_NVGPU_PLATFORMNVGPU_H
+#define LLDB_SOURCE_PLUGINS_PLATFORM_NVGPU_PLATFORMNVGPU_H
 
-#include "lldb/Target/Platform.h"
 #include "lldb/Symbol/CompilerType.h"
+#include "lldb/Target/Platform.h"
 
-namespace lldb_private::platform_NVidiaGPU {
+namespace lldb_private::platform_NVGPU {
 
-class PlatformNVidiaGPU : public Platform {
+class PlatformNVGPU : public Platform {
 public:
-  PlatformNVidiaGPU();
+  PlatformNVGPU();
 
   static void Initialize();
 
@@ -26,7 +26,7 @@ public:
   static lldb::PlatformSP CreateInstance(bool force, const ArchSpec *arch);
 
   static llvm::StringRef GetPluginNameStatic(bool is_host) {
-    return is_host ? Platform::GetHostPlatformName() : "nvidia-gpu";
+    return is_host ? Platform::GetHostPlatformName() : "nvgpu";
   }
 
   static llvm::StringRef GetPluginDescriptionStatic(bool is_host);
@@ -40,10 +40,8 @@ public:
     return GetPluginDescriptionStatic(IsHost());
   }
 
-  lldb::ProcessSP Attach(ProcessAttachInfo &attach_info,
-                         Debugger &debugger,
-                         Target *target,
-                         Status &error) override;
+  lldb::ProcessSP Attach(ProcessAttachInfo &attach_info, Debugger &debugger,
+                         Target *target, Status &error) override;
 
   void GetStatus(Stream &strm) override;
 
@@ -60,6 +58,6 @@ public:
   std::vector<ArchSpec> m_supported_architectures;
 };
 
-} // namespace lldb_private::platform_NVidiaGPU
+} // namespace lldb_private::platform_NVGPU
 
-#endif // LLDB_SOURCE_PLUGINS_PLATFORM_NVIDIAGPU_PLATFORMNVIDIAGPU_H
+#endif // LLDB_SOURCE_PLUGINS_PLATFORM_NVGPU_PLATFORMNVGPU_H
