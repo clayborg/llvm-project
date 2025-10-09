@@ -40,6 +40,7 @@ protected:
   std::unique_ptr<GDBServer> m_gdb_server;
   bool m_is_listening = false;
   bool m_is_connected = false;
+  uint32_t m_gpuaction_identifier = 0;
 
 public:
   LLDBServerPlugin(GDBServer &native_process, MainLoop &main_loop);
@@ -47,6 +48,8 @@ public:
 
   /// Check if we are already connected.
   bool IsConnected() const { return m_is_connected; }
+
+  uint32_t GetNextGPUActionIdentifier() { return ++m_gpuaction_identifier; }
 
   virtual llvm::StringRef GetPluginName() = 0;
 
