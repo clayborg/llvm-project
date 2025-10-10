@@ -11,6 +11,7 @@
 
 #include "lldb/lldb-types.h"
 #include "llvm/Support/JSON.h"
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -176,19 +177,25 @@ llvm::json::Value toJSON(const GPUPluginConnectionInfo &data);
 /// process, and then auto resume the GPU process from this "fake" stop.
 ///-----------------------------------------------------------------------------
 struct GPUActions {
-  GPUActions() = default;
-  GPUActions(llvm::StringRef _plugin_name) : 
-      plugin_name(_plugin_name) {}
-  GPUActions(uint32_t i, llvm::StringRef _plugin_name)
-      : plugin_name(_plugin_name), identifier(i) {}
-  GPUActions(llvm::StringRef _plugin_name, uint32_t _stop_id) :
-      plugin_name(_plugin_name),  stop_id(_stop_id) {}
+  GPUActions() : identifier(GetNextID()) {}
+  GPUActions(llvm::StringRef _plugin_name)
+      : plugin_name(_plugin_name), identifier(GetNextID()) {}
+  GPUActions(llvm::StringRef _plugin_name, uint32_t _stop_id)
+      : plugin_name(_plugin_name), identifier(GetNextID()), stop_id(_stop_id) {}
 
   /// The name of the plugin.
   std::string plugin_name;
 
-  // unique identifier for every GPU action.
-  std::optional<uint32_t> identifier;
+  /// Unique identifier for every GPU action.
+  uint32_t identifier = 0;
+
+private:
+  static uint32_t GetNextID() {
+    static std::atomic<uint32_t> id = 0;
+    return ++id;
+  }
+
+public:
   /// The stop ID in the process that this action is associated with. If the
   /// wait_for_gpu_process_to_stop is true, this stop ID will be used to wait
   /// for. If the wait_for_gpu_process_to_resume is set to true it will wait
