@@ -11,7 +11,6 @@
 
 #include "lldb/lldb-types.h"
 #include "llvm/Support/JSON.h"
-#include <atomic>
 #include <string>
 #include <vector>
 
@@ -177,10 +176,9 @@ llvm::json::Value toJSON(const GPUPluginConnectionInfo &data);
 /// process, and then auto resume the GPU process from this "fake" stop.
 ///-----------------------------------------------------------------------------
 struct GPUActions {
-  GPUActions() : GPUActions("", {}) {}
-  GPUActions(llvm::StringRef _plugin_name) : GPUActions(_plugin_name, {}) {}
-  GPUActions(llvm::StringRef _plugin_name, std::optional<uint32_t> _stop_id)
-      : plugin_name(_plugin_name), identifier(GetNextID()), stop_id(_stop_id) {}
+  GPUActions() = default;
+  GPUActions(llvm::StringRef plugin_name, uint32_t gpu_action_id)
+      : plugin_name(plugin_name), identifier(gpu_action_id) {}
 
   /// The name of the plugin.
   std::string plugin_name;
@@ -209,12 +207,6 @@ struct GPUActions {
   /// Set this to true if the native plug-in sync with the GPU process and wait
   /// for it to return to a running state.
   bool wait_for_gpu_process_to_resume = false;
-
-  private:
-  static uint32_t GetNextID() {
-    static std::atomic<uint32_t> id = 0;
-    return ++id;
-  }
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,

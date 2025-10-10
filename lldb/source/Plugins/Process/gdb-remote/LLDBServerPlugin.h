@@ -40,6 +40,7 @@ protected:
   std::unique_ptr<GDBServer> m_gdb_server;
   bool m_is_listening = false;
   bool m_is_connected = false;
+  uint32_t m_gpu_action_identifier = 0;
 
 public:
   LLDBServerPlugin(GDBServer &native_process, MainLoop &main_loop);
@@ -47,6 +48,11 @@ public:
 
   /// Check if we are already connected.
   bool IsConnected() const { return m_is_connected; }
+
+  /// Create a new GPUActions with the next unique identifier and plugin name.
+  GPUActions GetNewGPUAction() {
+    return GPUActions(GetPluginName(), ++m_gpu_action_identifier);
+  }
 
   virtual llvm::StringRef GetPluginName() = 0;
 
