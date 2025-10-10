@@ -10,6 +10,7 @@
 #define LLDB_TOOLS_LLDB_DAP_DAP_H
 
 #include "DAPForward.h"
+#include "DAPSessionManager.h"
 #include "ExceptionBreakpoint.h"
 #include "FunctionBreakpoint.h"
 #include "InstructionBreakpoint.h"
@@ -45,6 +46,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -77,6 +79,8 @@ enum DAPBroadcasterBits {
 enum class ReplMode { Variable = 0, Command, Auto };
 
 struct DAP {
+  friend class DAPSessionManager;
+
   /// Path to the lldb-dap binary itself.
   static llvm::StringRef debug_adapter_path;
 
@@ -150,6 +154,10 @@ struct DAP {
 
   /// The set of features supported by the connected client.
   llvm::DenseSet<ClientFeature> clientFeatures;
+
+  /// Used by the test suite to prevent sourcing `.lldbinit` and changing its
+  /// behavior.
+  bool sourceInitFile = true;
 
   /// The initial thread list upon attaching.
   std::vector<protocol::Thread> initial_thread_list;
@@ -402,6 +410,18 @@ struct DAP {
   void StartEventThread();
   void StartProgressEventThread();
 
+  /// DAP debugger initialization functions
+  /// @{
+
+  /// Perform complete DAP initialization in one call
+  llvm::Error
+  InitializeDebugger(std::optional<uint32_t> target_idx = std::nullopt);
+
+  /// Start event handling threads based on client capabilities
+  llvm::Error StartEventThreads();
+
+  /// @}
+
   /// Sets the given protocol `breakpoints` in the given `source`, while
   /// removing any existing breakpoints in the given source if they are not in
   /// `breakpoint`.
@@ -438,7 +458,9 @@ private:
   void EventThread();
   void ProgressEventThread();
 
-  std::thread event_thread;
+  /// Event thread is a shared pointer in case we have a multiple
+  /// DAP instances sharing the same event thread
+  std::shared_ptr<ManagedEventThread> event_thread_sp;
   std::thread progress_event_thread;
   /// @}
 

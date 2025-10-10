@@ -282,13 +282,8 @@ serveConnection(const Socket::SocketProtocol &protocol, const std::string &name,
     g_loop.AddPendingCallback(
         [](MainLoopBase &loop) { loop.RequestTermination(); });
   });
-  std::condition_variable dap_sessions_condition;
-  std::mutex dap_sessions_mutex;
-  std::map<IOObject *, DAP *> dap_sessions;
   unsigned int clientCount = 0;
-  auto handle = listener->Accept(g_loop, [=, &dap_sessions_condition,
-                                          &dap_sessions_mutex, &dap_sessions,
-                                          &clientCount](
+  auto handle = listener->Accept(g_loop, [=, &clientCount](
                                              std::unique_ptr<Socket> sock) {
     std::string client_name = llvm::formatv("client_{0}", clientCount++).str();
     DAP_LOG(log, "({0}) client connected", client_name);
@@ -297,8 +292,7 @@ serveConnection(const Socket::SocketProtocol &protocol, const std::string &name,
 
     // Move the client into a background thread to unblock accepting the next
     // client.
-    std::thread client([=, &dap_sessions_condition, &dap_sessions_mutex,
-                        &dap_sessions]() {
+    std::thread client([=]() {
       llvm::set_thread_name(client_name + ".runloop");
       Transport transport(client_name, log, io, io);
       DAP dap(log, default_repl_mode, pre_init_commands, transport);
@@ -309,10 +303,8 @@ serveConnection(const Socket::SocketProtocol &protocol, const std::string &name,
         return;
       }
 
-      {
-        std::scoped_lock<std::mutex> lock(dap_sessions_mutex);
-        dap_sessions[io.get()] = &dap;
-      }
+      // Register the DAP session with the global manager
+      DAPSessionManager::GetInstance().RegisterSession(io, &dap);
 
       if (auto Err = dap.Loop()) {
         llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(),
@@ -321,9 +313,8 @@ serveConnection(const Socket::SocketProtocol &protocol, const std::string &name,
       }
 
       DAP_LOG(log, "({0}) client disconnected", client_name);
-      std::unique_lock<std::mutex> lock(dap_sessions_mutex);
-      dap_sessions.erase(io.get());
-      std::notify_all_at_thread_exit(dap_sessions_condition, std::move(lock));
+      // Unregister the DAP session from the global manager
+      DAPSessionManager::GetInstance().UnregisterSession(io);
     });
     client.detach();
   });
@@ -341,26 +332,11 @@ serveConnection(const Socket::SocketProtocol &protocol, const std::string &name,
       log,
       "lldb-dap server shutdown requested, disconnecting remaining clients...");
 
-  bool client_failed = false;
-  {
-    std::scoped_lock<std::mutex> lock(dap_sessions_mutex);
-    for (auto [sock, dap] : dap_sessions) {
-      if (llvm::Error error = dap->Disconnect()) {
-        client_failed = true;
-        llvm::errs() << "DAP client " << dap->transport.GetClientName()
-                     << " disconnected failed: "
-                     << llvm::toString(std::move(error)) << "\n";
-      }
-    }
-  }
+  // Disconnect all active sessions using the global manager
+  DAPSessionManager::GetInstance().DisconnectAllSessions();
 
   // Wait for all clients to finish disconnecting.
-  std::unique_lock<std::mutex> lock(dap_sessions_mutex);
-  dap_sessions_condition.wait(lock, [&] { return dap_sessions.empty(); });
-
-  if (client_failed)
-    return llvm::make_error<llvm::StringError>(
-        "disconnecting all clients failed", llvm::inconvertibleErrorCode());
+  DAPSessionManager::GetInstance().WaitForAllSessionsToDisconnect();
 
   return llvm::Error::success();
 }
@@ -560,6 +536,10 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  // Register the DAP session with the global manager for stdio mode
+  // This is needed for the event handling to find the correct DAP instance
+  DAPSessionManager::GetInstance().RegisterSession(input, &dap);
+
   // used only by TestVSCode_redirection_to_console.py
   if (getenv("LLDB_DAP_TEST_STDOUT_STDERR_REDIRECTION") != nullptr)
     redirection_test();
@@ -569,7 +549,9 @@ int main(int argc, char *argv[]) {
             llvm::toStringWithoutConsuming(Err));
     llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(),
                                 "DAP session error: ");
+    DAPSessionManager::GetInstance().UnregisterSession(input);
     return EXIT_FAILURE;
   }
+  DAPSessionManager::GetInstance().UnregisterSession(input);
   return EXIT_SUCCESS;
 }

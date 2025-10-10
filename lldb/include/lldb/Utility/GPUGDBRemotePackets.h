@@ -184,6 +184,8 @@ struct GPUActions {
 
   /// The name of the plugin.
   std::string plugin_name;
+  /// The name to give a DAP session
+  std::string session_name;
   /// The stop ID in the process that this action is associated with. If the
   /// wait_for_gpu_process_to_stop is true, this stop ID will be used to wait
   /// for. If the wait_for_gpu_process_to_resume is set to true it will wait
