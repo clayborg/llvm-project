@@ -71,18 +71,42 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   // Per SASS ABI: Before a function modifies a preserved (callee-save)
   // register, it must save the value. This includes R2 (when used as FP)
   // and R20-R21 (return address), which are stored in the Local Storage area.
-  // SASS frame pointer usage is optional - FP may be 0 if omitted.
-  // Since we can't detect FP=0 at plan creation time (no access to register
-  // values), and an FP-based plan would fail if FP=0, we return nullptr.
   //
-  // This forces LLDB to rely on:
-  // 1. DWARF CFI (if available) - most reliable.
-  // 2. Function entry unwind plan - uses SP, works without FP.
-  // 3. Architecture heuristics.
+  // DWARF has limitations with NVGPU register layout:
+  // 1. PC is 64-bit while other registers are 32-bit
+  // 2. Return address spans R20/R21 (composite) - DWARFv5 can't describe this
+  // today.
+  //    TODO: Add support for DWARFv6 composite descriptions (e.g. DW_OP_piece)
+  //    for return_address_register in the future.
   //
-  // This approach is similar to other architectures with optional frame
-  // pointers (e.g., SystemZ).
-  return nullptr;
+  // Solution: Use LLVM register numbers with our composite RA register
+
+  auto plan_sp = std::make_shared<UnwindPlan>(eRegisterKindLLDB);
+  plan_sp->SetSourceName("SASS default unwind plan");
+  plan_sp->SetSourcedFromCompiler(eLazyBoolNo);
+  plan_sp->SetUnwindPlanValidAtAllInstructions(eLazyBoolNo);
+  plan_sp->SetUnwindPlanForSignalTrap(eLazyBoolNo);
+
+  UnwindPlan::Row row;
+  const uint32_t lldb_sp = sass::LLDB_SP;
+  const uint32_t lldb_pc = sass::LLDB_PC;
+  const uint32_t lldb_ra =
+      sass::LLDB_RA; // This is our composite R20/R21 register
+
+  // CFA is the stack pointer
+  row.GetCFAValue().SetIsRegisterPlusOffset(lldb_sp, 0);
+  row.SetUnspecifiedRegistersAreUndefined(false);
+
+  // Set PC to be in the return address register
+  row.SetRegisterLocationToRegister(lldb_pc, lldb_ra, /*can_replace*/ true);
+
+  // Mark return address as "same" - it's preserved across calls
+  row.SetRegisterLocationToSame(lldb_ra, /*can_replace*/ true);
+
+  plan_sp->AppendRow(row);
+  plan_sp->SetReturnAddressRegister(lldb_ra);
+
+  return plan_sp;
 }
 
 bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
