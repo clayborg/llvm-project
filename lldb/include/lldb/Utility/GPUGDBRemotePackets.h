@@ -284,8 +284,8 @@ llvm::json::Value toJSON(const GPUDynamicLoaderLibraryInfo &data);
 ///-----------------------------------------------------------------------------
 struct GPUPluginBreakpointHitResponse {
   GPUPluginBreakpointHitResponse() = default;
-  GPUPluginBreakpointHitResponse(llvm::StringRef plugin_name, uint32_t stop_id)
-      : actions(plugin_name, stop_id) {}
+  GPUPluginBreakpointHitResponse(GPUActions gpu_actions)
+      : actions(std::move(gpu_actions)) {}
 
   ///< Set to true if this berakpoint should be disabled.
   bool disable_bp = false;

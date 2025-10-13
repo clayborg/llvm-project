@@ -176,8 +176,7 @@ LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
               bp_identifier, json_string.c_str());
   }
   NativeProcessProtocol *gpu_process = m_gdb_server->GetCurrentProcess();
-  GPUPluginBreakpointHitResponse response(GetPluginName(), 
-                                          gpu_process->GetStopID());
+  GPUPluginBreakpointHitResponse response(GetNewGPUAction());
   if (bp_identifier == BreakpointIDInitialize) {
     response.disable_bp = true;
     LLDB_LOGF(log, "LLDBServerPluginMockGPU::BreakpointWasHit(%u) disabling breakpoint", 

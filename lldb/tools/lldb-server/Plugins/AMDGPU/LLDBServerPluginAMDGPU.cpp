@@ -668,8 +668,7 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   LLDB_LOGF(log, "LLDBServerPluginAMDGPU::BreakpointWasHit(\"%d\"):\nJSON:\n%s",
             bp_identifier, json_string.c_str());
 
-  GPUPluginBreakpointHitResponse response;
-  response.actions.plugin_name = GetPluginName();
+  GPUPluginBreakpointHitResponse response(GetNewGPUAction());
   if (bp_identifier == kGpuLoaderBreakpointIdentifier) {
     // Make sure the breakpoint address matches the expected value when we set
     // it by name.
