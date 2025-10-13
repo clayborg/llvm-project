@@ -156,6 +156,11 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
 }
 
 llvm::json::Value toJSON(const GPUActions &data) {
+  // Fatal if identifier is 0 - this indicates the GPUActions was not properly
+  // initialized with a valid identifier.
+  assert(data.identifier != 0 &&
+         "GPUActions identifier must be set before serialization");
+
   return json::Value(Object{
       {"plugin_name", data.plugin_name},
       {"identifier", data.identifier},
