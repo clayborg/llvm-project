@@ -158,6 +158,11 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
 llvm::json::Value toJSON(const GPUActions &data) {
   // Fatal if identifier is 0 - this indicates the GPUActions was not properly
   // initialized with a valid identifier.
+  // GPU plugins should initialize their GPUActions objects by calling:
+  //   GPUActions actions = GetNewGPUAction();
+  // This method automatically fills in the plugin_name and assigns a unique
+  // identifier that ensures each action can be tracked and prevents duplicate
+  // processing.
   assert(data.identifier != 0 &&
          "GPUActions identifier must be set before serialization");
 
