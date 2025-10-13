@@ -40,11 +40,53 @@ namespace ELF = llvm::ELF;
 LLDB_PLUGIN_DEFINE(ProcessElfCore)
 
 llvm::StringRef ProcessElfCore::GetPluginDescriptionStatic() {
+  // sdf
   return "ELF core dump plug-in.";
 }
 
 void ProcessElfCore::Terminate() {
   PluginManager::UnregisterPlugin(ProcessElfCore::CreateInstance);
+}
+
+void ProcessElfCore::InitializeCoreModule(lldb::TargetSP target_sp) {
+  if (!m_core_module_sp && FileSystem::Instance().Exists(m_core_file)) {
+    ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
+    Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
+                                             nullptr, nullptr, nullptr));
+    if (error.Fail())
+      LLDB_LOGF(GetLog(LLDBLog::Process), "Error loading core module: %s",
+                error.AsCString("unknown error"));
+  }
+}
+
+std::optional<CoreNote> ProcessElfCore::GetAmdGpuNote() {
+  ObjectFileELF *core = (ObjectFileELF *)m_core_module_sp->GetObjectFile();
+  if (core == nullptr)
+    return std::nullopt;
+  llvm::ArrayRef<elf::ELFProgramHeader> program_headers = core->ProgramHeaders();
+  if (program_headers.size() == 0)
+    return std::nullopt;
+
+  for (const elf::ELFProgramHeader &H : program_headers) {
+    if (H.p_type == llvm::ELF::PT_NOTE) {
+      DataExtractor segment_data = core->GetSegmentData(H);
+      llvm::Expected<std::vector<CoreNote>> notes_or_error = parseSegment(segment_data);
+      if (!notes_or_error) {
+        llvm::consumeError(notes_or_error.takeError());
+        continue;
+      }
+      for (const auto &note : *notes_or_error) {
+        if (note.info.n_type == 33)
+          return note;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+bool ProcessElfCore::HasAmdGpuNotes() {
+  std::optional<CoreNote> amd_gpu_note_opt = GetAmdGpuNote();
+  return amd_gpu_note_opt.has_value();
 }
 
 lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
@@ -82,15 +124,12 @@ lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
 bool ProcessElfCore::CanDebug(lldb::TargetSP target_sp,
                               bool plugin_specified_by_name) {
   // For now we are just making sure the file exists for a given module
-  if (!m_core_module_sp && FileSystem::Instance().Exists(m_core_file)) {
-    ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
-    Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
-                                             nullptr, nullptr, nullptr));
-    if (m_core_module_sp) {
-      ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
-      if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
-        return true;
-    }
+  InitializeCoreModule(target_sp);
+  if (m_core_module_sp) {
+    ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
+    // If the core file has AMD GPU note, we let ProcessAmdGpuCore plugin to handle it.
+    if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile && !HasAmdGpuNotes())
+      return true;
   }
   return false;
 }

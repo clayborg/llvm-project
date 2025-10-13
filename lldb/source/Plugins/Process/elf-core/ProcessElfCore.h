@@ -97,6 +97,14 @@ public:
 
   bool GetProcessInfo(lldb_private::ProcessInstanceInfo &info) override;
 
+  // TODO: make it protected.
+  const std::vector<ThreadData>& GetThreadData() {
+    return m_thread_data;
+  }
+
+  // TODO: make this protected?
+  std::optional<lldb_private::CoreNote> GetAmdGpuNote();
+
 protected:
   void Clear();
 
@@ -107,7 +115,10 @@ protected:
   DoGetMemoryRegionInfo(lldb::addr_t load_addr,
                         lldb_private::MemoryRegionInfo &region_info) override;
 
-  bool SupportsMemoryTagging() override { return !m_core_tag_ranges.IsEmpty(); }
+  bool SupportsMemoryTagging() override { return !m_core_tag_ranges.IsEmpty(); } 
+
+  void InitializeCoreModule(lldb::TargetSP target_sp);
+  bool HasAmdGpuNotes();
 
 private:
   struct NT_FILE_Entry {
