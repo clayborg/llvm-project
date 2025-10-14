@@ -13,7 +13,10 @@ add_lldb_library(lldbServerPluginNVGPU
 include(SetupCUDA)
 
 # Verify NVCC is available (required for test compilation)
-lldb_verify_nvcc_available()
+if (LLDB_INCLUDE_TESTS)
+  lldb_verify_nvcc_available()
+endif()
+
 
 target_include_directories(lldbServerPluginNVGPU PRIVATE
   "${LLDB_SOURCE_DIR}/source" 
