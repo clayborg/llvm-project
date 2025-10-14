@@ -200,11 +200,12 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
 
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
+  std::string library_name = *args.breakpoint.name_info->shlib;
   // This method is invoked when a CPU breakpoint is hit signaling that the
   // driver is initializing. This is the perfect time to initialize the debugger
   // API. We are assuming that no kernels will run until we resume the CPU.
-  Expected<CUDADebuggerAPI> api_or =
-      CUDADebuggerAPI::Initialize(args, *m_native_process.GetCurrentProcess());
+  Expected<CUDADebuggerAPI> api_or = CUDADebuggerAPI::Initialize(
+      args, library_name, *m_native_process.GetCurrentProcess());
   if (!api_or)
     return api_or.takeError();
 
@@ -252,7 +253,11 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
   GPUActions init_actions(GetPluginName());
 
   init_actions.breakpoints.emplace_back(
-      CUDADebuggerAPI::GetInitializationBreakpointInfo());
+      CUDADebuggerAPI::GetInitializationBreakpointInfo(
+          CUDADebuggerAPI::LIBCUDA_LIBRARY_NAME));
+  init_actions.breakpoints.emplace_back(
+      CUDADebuggerAPI::GetInitializationBreakpointInfo(
+          CUDADebuggerAPI::LIBCUDA_LIBRARY_NAME_ALT));
   return init_actions;
 }
 

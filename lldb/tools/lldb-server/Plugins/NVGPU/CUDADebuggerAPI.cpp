@@ -144,28 +144,28 @@ WriteInitializationSymbolsToHost(const GPUPluginBreakpointHitArgs &bp_args,
 }
 
 static Error WriteConfigurationToLibcuda(void *libcuda, uint32_t pid,
-                                         uint32_t revision,
-                                         uint32_t session_id) {
+                                         uint32_t revision, uint32_t session_id,
+                                         StringRef libcuda_library_name) {
   auto *api_client_pid = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_APICLIENT_PID.c_str()));
   if (!api_client_pid)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_PID,
-                                CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
+                                libcuda_library_name);
 
   auto *api_client_revision = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_APICLIENT_REVISION.c_str()));
   if (!api_client_revision)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_REVISION,
-                                CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
+                                libcuda_library_name);
 
   auto *session_id_ptr = reinterpret_cast<uint32_t *>(
       dlsym(libcuda, Symbols::CUDBG_SESSION_ID.c_str()));
   if (!session_id_ptr)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_SESSION_ID,
-                                CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
+                                libcuda_library_name);
 
   *api_client_pid = pid;
   *api_client_revision = revision;
@@ -176,8 +176,8 @@ static Error WriteConfigurationToLibcuda(void *libcuda, uint32_t pid,
 
 static Error
 WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
-                            NativeProcessProtocol &linux_process,
-                            void *libcuda) {
+                            NativeProcessProtocol &linux_process, void *libcuda,
+                            StringRef libcuda_library_name) {
   auto write_c_str = [&](const std::string &symbol_name,
                          const char *value) -> Error {
     return WriteToHostSymbol(bp_args, linux_process, symbol_name, value);
@@ -191,21 +191,21 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
     if (!injection_path)
       return createStringErrorFmt("Failed to find symbol {} in {}",
                                   Symbols::CUDBG_INJECTION_PATH,
-                                  CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
+                                  libcuda_library_name);
     strcpy(injection_path, path);
   }
   return Error::success();
 }
 
-static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda) {
+static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda,
+                                            StringRef libcuda_library_name) {
   using CudbgGetAPIFn =
       CUDBGResult (*)(uint32_t, uint32_t, uint32_t, CUDBGAPI *);
   const CudbgGetAPIFn cudbgGetAPI = reinterpret_cast<CudbgGetAPIFn>(
       dlsym(libcuda, Symbols::CUDBG_GET_API.c_str()));
   if (!cudbgGetAPI)
     return createStringErrorFmt("Failed to find symbol {} in {}",
-                                Symbols::CUDBG_GET_API,
-                                CUDADebuggerAPI::CUDA_API_LIBRARY_NAME);
+                                Symbols::CUDBG_GET_API, libcuda_library_name);
 
   CUDBGAPI api;
   CUDBGResult res =
@@ -220,6 +220,7 @@ static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda) {
 
 Expected<CUDADebuggerAPI>
 CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
+                                StringRef libcuda_library_name,
                                 NativeProcessProtocol &linux_process) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "CUDADebuggerAPI::Initialize()");
@@ -232,18 +233,19 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
                                                    session_id, revision))
     return err;
 
-  void *libcuda = dlopen(CUDA_API_LIBRARY_NAME, RTLD_LAZY);
+  void *libcuda = dlopen(libcuda_library_name.str().c_str(), RTLD_LAZY);
   if (!libcuda)
-    return createStringErrorFmt("Failed to dlopen {}", CUDA_API_LIBRARY_NAME);
+    return createStringErrorFmt("Failed to dlopen {}", libcuda_library_name);
 
-  if (Error err =
-          WriteConfigurationToLibcuda(libcuda, pid, revision, session_id))
+  if (Error err = WriteConfigurationToLibcuda(libcuda, pid, revision,
+                                              session_id, libcuda_library_name))
     return err;
 
-  if (Error err = WriteInjectionPathToLibcuda(bp_args, linux_process, libcuda))
+  if (Error err = WriteInjectionPathToLibcuda(bp_args, linux_process, libcuda,
+                                              libcuda_library_name))
     return err;
 
-  Expected<CUDBGAPI> api_or = GetRawAPIInstance(libcuda);
+  Expected<CUDBGAPI> api_or = GetRawAPIInstance(libcuda, libcuda_library_name);
   if (!api_or)
     return api_or.takeError();
 
@@ -262,8 +264,10 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
 
 Expected<CUDADebuggerAPI>
 CUDADebuggerAPI::Initialize(const GPUPluginBreakpointHitArgs &args,
+                            StringRef libcuda_library_name,
                             NativeProcessProtocol &linux_process) {
-  Expected<CUDADebuggerAPI> api = InitializeImpl(args, linux_process);
+  Expected<CUDADebuggerAPI> api =
+      InitializeImpl(args, libcuda_library_name, linux_process);
   if (!api)
     return createStringErrorFmt(
         "Failed to initialize the CUDA Debugger API. {}",
@@ -271,9 +275,10 @@ CUDADebuggerAPI::Initialize(const GPUPluginBreakpointHitArgs &args,
   return api;
 }
 
-GPUBreakpointInfo CUDADebuggerAPI::GetInitializationBreakpointInfo() {
+GPUBreakpointInfo
+CUDADebuggerAPI::GetInitializationBreakpointInfo(StringRef library_name) {
   GPUBreakpointInfo bp;
-  bp.name_info = {CUDA_API_LIBRARY_NAME, Symbols::CUDA_INITIALIZATION_SYMBOL};
+  bp.name_info = {library_name.str(), Symbols::CUDA_INITIALIZATION_SYMBOL};
   bp.symbol_names.push_back(Symbols::CUDBG_IPC_FLAG_NAME);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_PID);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_REVISION);
