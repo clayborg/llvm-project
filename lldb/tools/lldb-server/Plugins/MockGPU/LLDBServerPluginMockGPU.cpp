@@ -161,7 +161,7 @@ std::optional<GPUActions> LLDBServerPluginMockGPU::NativeProcessIsStopping() {
     GPUActions actions;
     actions.plugin_name = GetPluginName();
     GPUBreakpointInfo bp;
-    bp.identifier = BreakpointIDThirdStop;
+    bp.identifier = BreakpointIDFirstStop;
     bp.name_info = {"a.out", "gpu_first_stop"};
     actions.breakpoints.emplace_back(std::move(bp));
     return actions;
