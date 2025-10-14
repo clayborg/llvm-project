@@ -371,7 +371,6 @@ Status PlatformRemoteGDBServer::LaunchProcess(ProcessLaunchInfo &launch_info) {
     Args args = launch_info.GetArguments();
     if (FileSpec exe_file = launch_info.GetExecutableFile())
       args.ReplaceArgumentAtIndex(0, exe_file.GetPath(false));
-    StringExtractorGDBRemote launch_response;
     llvm::Expected<StringExtractorGDBRemote> response =
         m_gdb_client_up->LaunchProcess(args);
     if (!response) {
