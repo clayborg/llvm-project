@@ -190,6 +190,38 @@ bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
   return true;
 }
 
+bool ABISASS::GetFallbackRegisterLocation(
+    const RegisterInfo *reg_info,
+    UnwindPlan::Row::AbstractRegisterLocation &unwind_regloc) {
+  /// Workaround for nvcc compiler bug in DWARF CFI generation.
+  ///
+  /// The CIE correctly marks SP (R1) as "same value" for the initial state.
+  /// However, when the FDE changes the CFA offset (e.g., from SP+0 to SP+8),
+  /// nvcc fails to emit a corresponding DW_CFA_val_offset or similar rule to
+  /// update SP, leaving the CIE's "same" rule in effect. This causes LLDB's
+  /// unwinder to believe SP doesn't change between frames, resulting in
+  /// identical CFA values and triggering loop detection.
+  ///
+  /// Evidence from cuobjdump output:
+  /// - CIE says: CFA=SP+0, SP=<same>  (correct at function entry)
+  /// - FDE says: CFA=SP+8, [no SP rule]  (missing DW_CFA_val_offset for SP!)
+  /// - Result: CFA=SP+8, SP=<same> (inherited from CIE, contradictory!)
+  ///
+  /// The FDE should have added: DW_CFA_val_offset R1, 0 (meaning SP=CFA).
+  /// Since we can't fix the compiler, we override the inherited "same value"
+  /// rule here by specifying that SP equals the CFA.
+  ///
+  /// This override is called from RegisterContextUnwind when DWARF marks SP as
+  /// "same", allowing us to substitute the missing rule: SP = CFA + 0.
+  if (reg_info->kinds[eRegisterKindGeneric] == LLDB_REGNUM_GENERIC_SP) {
+    unwind_regloc.SetIsCFAPlusOffset(0);
+    return true;
+  }
+
+  // For other registers, use the default ABI behavior
+  return ABI::GetFallbackRegisterLocation(reg_info, unwind_regloc);
+}
+
 // Static Functions.
 
 ABISP

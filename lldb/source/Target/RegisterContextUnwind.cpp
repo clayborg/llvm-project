@@ -1579,6 +1579,38 @@ RegisterContextUnwind::SavedLocationForRegister(
   }
 
   if (abs_regloc->IsSame()) {
+    // NVIDIA: Check if the ABI wants to override the "same" rule for this
+    // register. This allows ABIs to work around compiler bugs in DWARF CFI
+    // (e.g., nvcc's FDE for SASS doesn't emit DW_CFA_val_offset or other rules
+    // to update SP when the CFA offset changes, leaving the CIE's "same" rule
+    // in effect).
+    if (regnum.GetAsKind(eRegisterKindGeneric) == LLDB_REGNUM_GENERIC_SP) {
+      ProcessSP process_sp = m_thread.GetProcess();
+      ABI *abi = process_sp ? process_sp->GetABI().get() : nullptr;
+      if (abi) {
+        const RegisterInfo *reg_info =
+            GetRegisterInfoAtIndex(regnum.GetAsKind(eRegisterKindLLDB));
+        UnwindPlan::Row::AbstractRegisterLocation abi_regloc;
+        if (reg_info &&
+            abi->GetFallbackRegisterLocation(reg_info, abi_regloc)) {
+          // ABI provided an override (typically SP = CFA + 0)
+          if (abi_regloc.IsCFAPlusOffset()) {
+            int offset = abi_regloc.GetOffset();
+            regloc.type =
+                UnwindLLDB::ConcreteRegisterLocation::eRegisterValueInferred;
+            regloc.location.inferred_value = m_cfa + offset;
+            m_registers[regnum.GetAsKind(eRegisterKindLLDB)] = regloc;
+            UnwindLogMsg("supplying caller's register %s (%d) using ABI "
+                         "override: CFA plus offset %d [value is 0x%" PRIx64
+                         "]",
+                         regnum.GetName(), regnum.GetAsKind(eRegisterKindLLDB),
+                         offset, regloc.location.inferred_value);
+            return UnwindLLDB::RegisterSearchResult::eRegisterFound;
+          }
+        }
+      }
+    }
+
     if (IsFrameZero()) {
       regloc.type =
           UnwindLLDB::ConcreteRegisterLocation::eRegisterInLiveRegisterContext;
