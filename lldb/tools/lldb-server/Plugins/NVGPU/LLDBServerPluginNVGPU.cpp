@@ -345,7 +345,6 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
     LLDB_LOG(log, "CUDBG_EVENT_ALL_DEVICES_SUSPENDED {0:x} {1:x}",
              event.cases.allDevicesSuspended.brokenDevicesMask,
              event.cases.allDevicesSuspended.faultedDevicesMask);
-    bool was_halted;
     auto log_to_client_callback = [this](llvm::StringRef message) {
       // The structured data packet can only be sent when the client is waiting
       // for the stop reply packet. Otherwise, it might think that this is the
@@ -366,7 +365,9 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
     // native process so that the CPU's GPUActions can hit the GPU server.
     m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended,
                                  log_to_client_callback);
-    HaltNativeProcessIfNeeded(was_halted);
+    // Do not suspend the native process here. We do not want to force
+    // the two processes to be sync'ed unless we have to. Allow for a non-stop
+    // mode for the native process.
     break;
   }
   case CUDBG_EVENT_INVALID: {
