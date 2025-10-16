@@ -11,7 +11,10 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     def check_backtrace(self, test_name, expected_frames):
-        """Verify that the backtrace contains the expected frames."""
+        """Verify that the backtrace contains the expected frames.
+
+        expected_frames: list of (func_name, file_name, expected_line) tuples
+        """
         thread = self.gpu_process.thread[0]
 
         self.assertGreaterEqual(
@@ -20,7 +23,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
             f"{test_name}: Expected at least {len(expected_frames)} frames",
         )
 
-        for i, (expected_func, expected_file) in enumerate(expected_frames):
+        for i, (expected_func, expected_file, expected_line) in enumerate(expected_frames):
             frame = thread.GetFrameAtIndex(i)
             self.assertIsNotNone(frame, f"{test_name}: Frame {i} should exist")
 
@@ -45,6 +48,14 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
                     expected_file,
                     actual_file,
                     f"{test_name}: Frame {i} file mismatch",
+                )
+
+            if expected_line is not None:
+                actual_line = frame.GetLineEntry().GetLine()
+                self.assertEqual(
+                    expected_line,
+                    actual_line,
+                    f"{test_name}: Frame {i} expected line {expected_line}, got {actual_line}",
                 )
 
         # Verify backtrace terminates properly
@@ -77,12 +88,12 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
 
         expected_frames = [
-            ("breakpoint", "unwind.cu"),
-            ("level3", "unwind.cu"),
-            ("level2", "unwind.cu"),
-            ("level1", "unwind.cu"),
-            ("level0", "unwind.cu"),
-            ("unwind_test_kernel", "unwind.cu"),
+            ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
+            ("level3", "unwind.cu", line_number(source, "// frame_level3")),
+            ("level2", "unwind.cu", line_number(source, "// frame_level2")),
+            ("level1", "unwind.cu", line_number(source, "// frame_level1")),
+            ("level0", "unwind.cu", line_number(source, "// frame_level0")),
+            ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test1")),
         ]
         self.check_backtrace("test_unwind_no_arguments", expected_frames)
 
@@ -111,12 +122,12 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
 
         expected_frames = [
-            ("breakpoint", "unwind.cu"),
-            ("level3_with_arguments", "unwind.cu"),
-            ("level2_with_arguments", "unwind.cu"),
-            ("level1_with_arguments", "unwind.cu"),
-            ("level0_with_arguments", "unwind.cu"),
-            ("unwind_test_kernel", "unwind.cu"),
+            ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
+            ("level3_with_arguments", "unwind.cu", line_number(source, "// frame_level3_with_arguments")),
+            ("level2_with_arguments", "unwind.cu", line_number(source, "// frame_level2_with_arguments")),
+            ("level1_with_arguments", "unwind.cu", line_number(source, "// frame_level1_with_arguments")),
+            ("level0_with_arguments", "unwind.cu", line_number(source, "// frame_level0_with_arguments")),
+            ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test2")),
         ]
         self.check_backtrace("test_unwind_with_arguments", expected_frames)
 
@@ -124,14 +135,16 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.gpu_process.Continue()
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
 
+        # fmt: off
         expected_frames = [
-            ("breakpoint", "unwind.cu"),
-            ("level3_with_divergent_control_flow", "unwind.cu"),
-            ("level2_with_divergent_control_flow", "unwind.cu"),
-            ("level1_with_divergent_control_flow", "unwind.cu"),
-            ("level0_with_divergent_control_flow", "unwind.cu"),
-            ("unwind_test_kernel", "unwind.cu"),
+            ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
+            ("level3_with_divergent_control_flow", "unwind.cu", line_number(source, "// frame_level3_with_divergent_control_flow")),
+            ("level2_with_divergent_control_flow", "unwind.cu", line_number(source, "// frame_level2_with_divergent_control_flow")),
+            ("level1_with_divergent_control_flow", "unwind.cu", line_number(source, "// frame_level1_with_divergent_control_flow")),
+            ("level0_with_divergent_control_flow", "unwind.cu", line_number(source, "// frame_level0_with_divergent_control_flow")),
+            ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test3")),
         ]
+        # fmt: on
         self.check_backtrace("test_unwind_divergent_control_flow", expected_frames)
 
         # Test 4: Unwind with null function pointer (no breakpoint - hits fault directly)
@@ -141,12 +154,12 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
 
         expected_frames = [
-            (None, None),  # Invalid address
-            ("call_function", "unwind.cu"),
-            ("level3_null_call", "unwind.cu"),
-            ("level2_null_call", "unwind.cu"),
-            ("level1_null_call", "unwind.cu"),
-            ("level0_null_call", "unwind.cu"),
-            ("unwind_test_kernel", "unwind.cu"),
+            (None, None, None),  # Invalid address (no debug info)
+            ("call_function", "unwind.cu", line_number(source, "// frame_call_function")),
+            ("level3_null_call", "unwind.cu", line_number(source, "// frame_level3_null_call")),
+            ("level2_null_call", "unwind.cu", line_number(source, "// frame_level2_null_call")),
+            ("level1_null_call", "unwind.cu", line_number(source, "// frame_level1_null_call")),
+            ("level0_null_call", "unwind.cu", line_number(source, "// frame_level0_null_call")),
+            ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test4")),
         ]
-        # self.check_backtrace("test_unwind_null_function_ptr", expected_frames)
+        self.check_backtrace("test_unwind_null_function_ptr", expected_frames)
