@@ -1,4 +1,4 @@
-//===-- ProcessAmdGpuCore.h ----------------------------------------*- C++ -*-===//
+//===-- ProcessAmdGpuCore.h -----------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -17,16 +17,10 @@
 #define LLDB_SOURCE_PLUGINS_PROCESS_ELF_CORE_PROCESSAMDGPUCORE_H
 
 #include <amd-dbgapi/amd-dbgapi.h>
-#include "Plugins/Process/elf-core/ProcessElfCore.h"
+#include "ProcessElfGpuCore.h"
 
-class ProcessAmdGpuCore : public ProcessElfCore {
+class ProcessAmdGpuCore : public ProcessElfGpuCore {
 public:
-  // Constructors and Destructors
-  static lldb::ProcessSP
-  CreateInstance(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                 const lldb_private::FileSpec *crash_file_path,
-                 bool can_connect);
-
   static void Initialize();
 
   static void Terminate();
@@ -36,8 +30,10 @@ public:
   static llvm::StringRef GetPluginDescriptionStatic();
 
   // Constructors and Destructors
-  ProcessAmdGpuCore(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                 const lldb_private::FileSpec &core_file);
+  ProcessAmdGpuCore(lldb::TargetSP target_sp, ProcessElfCore *cpu_core_process, 
+    lldb::ListenerSP listener_sp,
+                    const lldb_private::FileSpec &core_file)
+    : ProcessElfGpuCore(target_sp, cpu_core_process, listener_sp, core_file) {}
 
   ~ProcessAmdGpuCore() override;
 
@@ -47,18 +43,24 @@ public:
   // Creating a new process, or attaching to an existing one
   lldb_private::Status DoLoadCore() override;
 
+  static llvm::Expected<lldb::ProcessSP>
+  LoadGpuCore(lldb_private::Debugger &debugger,
+              const lldb_private::FileSpec &core_file);
+
   lldb_private::DynamicLoader *GetDynamicLoader() override;
 
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
-protected:
+  std::optional<lldb_private::CoreNote> GetAmdGpuNote();
 
+protected:
   bool DoUpdateThreadList(lldb_private::ThreadList &old_thread_list,
                           lldb_private::ThreadList &new_thread_list) override;
 
 private:
-  bool initRocm();  
+  bool initRocm();
+  
 
   amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
   amd_dbgapi_process_id_t m_gpu_pid = AMD_DBGAPI_PROCESS_NONE;

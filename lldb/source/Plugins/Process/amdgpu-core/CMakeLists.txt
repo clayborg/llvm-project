@@ -7,6 +7,7 @@ include_directories(${ROCM_PATH}/include)
 
 add_lldb_library(lldbPluginProcessAmdGpuCore PLUGIN
   ProcessAmdGpuCore.cpp
+  ProcessElfGpuCore.cpp
 
   LINK_COMPONENTS
     BinaryFormat

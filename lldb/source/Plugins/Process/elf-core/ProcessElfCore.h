@@ -102,8 +102,7 @@ public:
     return m_thread_data;
   }
 
-  // TODO: make this protected?
-  std::optional<lldb_private::CoreNote> GetAmdGpuNote();
+  ObjectFileELF *GetObjectFile();
 
 protected:
   void Clear();
@@ -118,7 +117,9 @@ protected:
   bool SupportsMemoryTagging() override { return !m_core_tag_ranges.IsEmpty(); } 
 
   void InitializeCoreModule(lldb::TargetSP target_sp);
-  bool HasAmdGpuNotes();
+
+  llvm::Expected<std::vector<lldb_private::CoreNote>>
+  parseSegment(const lldb_private::DataExtractor &segment);
 
 private:
   struct NT_FILE_Entry {
@@ -187,8 +188,6 @@ private:
   lldb::addr_t
   AddAddressRangeFromMemoryTagSegment(const elf::ELFProgramHeader &header);
 
-  llvm::Expected<std::vector<lldb_private::CoreNote>>
-  parseSegment(const lldb_private::DataExtractor &segment);
   llvm::Error parseFreeBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
   llvm::Error parseNetBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
   llvm::Error parseOpenBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
