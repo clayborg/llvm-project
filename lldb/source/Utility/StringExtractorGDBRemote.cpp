@@ -497,7 +497,7 @@ bool StringExtractorGDBRemote::IsErrorResponse() const {
 }
 
 bool StringExtractorGDBRemote::IsStopReply(
-    uint32_t mask = StopReplyMask::Any) const {
+    uint32_t mask) const {
   if (!IsNormalResponse())
     return false;
 

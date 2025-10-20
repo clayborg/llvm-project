@@ -217,8 +217,7 @@ public:
     Any = ((Syscall << 1) - 1u),
   };
 
-  bool IsStopReply() const;
-  bool IsStopReply(uint32_t mask) const;
+  bool IsStopReply(uint32_t mask = StopReplyMask::Any) const;
 
   // Returns zero if the packet isn't a EXX packet where XX are two hex digits.
   // Otherwise the error encoded in XX is returned.
