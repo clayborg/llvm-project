@@ -9,10 +9,12 @@
 #include "SymbolFileDWARF.h"
 #include "clang/Basic/ABI.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/DWARF/DWARFAddressRange.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"
+#include "llvm/DebugInfo/GSYM/FileWriter.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileUtilities.h"
@@ -34,6 +36,7 @@
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/Timer.h"
+#include "lldb/Utility/TrieStrtab.h"
 
 #include "Plugins/ExpressionParser/Clang/ClangModulesDeclVendor.h"
 #include "Plugins/Language/CPlusPlus/CPlusPlusLanguage.h"
@@ -531,6 +534,32 @@ void SymbolFileDWARF::InitializeObject() {
 
   InitializeFirstCodeAddress();
 
+  TrieBuilder trie;
+  const size_t num_strs = trie.AddStringsFromData(m_context.getOrLoadStrData());
+  if (num_strs > 0) {
+    llvm::SmallString<1024> strtab_data;
+    llvm::raw_svector_ostream strtab_strm(strtab_data);
+    llvm::gsym::FileWriter file(strtab_strm, llvm::endianness::little);
+    if (trie.Encode(file)) {
+      trie.DumpStats();
+      puts("Dumping strings fetched from the trie:");
+      TrieStrtab strtab(strtab_data.data(), strtab_data.size(),
+                        eByteOrderLittle);
+      const auto &str_offsets = trie.GetStringOffsets();
+      size_t count = 0;
+      for (auto strp : str_offsets) {
+        if (++count > 100)
+          break;
+        llvm::Expected<std::string> expected_str = strtab.GetString(strp);
+        if (expected_str)
+          printf("0x%" PRIx64 ": \"%s\"\n", strp, expected_str->c_str());
+        else
+          printf("error: %s\n",
+                 llvm::toString(expected_str.takeError()).c_str());
+      }
+    }
+  }
+
   if (!GetGlobalPluginProperties().IgnoreFileIndexes()) {
     StreamString module_desc;
     GetObjectFile()->GetModule()->GetDescription(module_desc.AsRawOstream(),
@@ -567,7 +596,6 @@ void SymbolFileDWARF::InitializeObject() {
                      "Unable to read .debug_names data: {0}");
     }
   }
-
   m_index =
       std::make_unique<ManualDWARFIndex>(*GetObjectFile()->GetModule(), *this);
 }

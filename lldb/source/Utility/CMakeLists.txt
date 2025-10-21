@@ -71,6 +71,7 @@ add_lldb_library(lldbUtility NO_INTERNAL_DEPENDENCIES
   Timer.cpp
   TraceGDBRemotePackets.cpp
   TraceIntelPTGDBRemotePackets.cpp
+  TrieStrtab.cpp
   UnimplementedError.cpp
   UUID.cpp
   UriParser.cpp
