@@ -25,6 +25,44 @@ struct Edge {
   struct TrieNode *child;
 };
 
+//===----------------------------------------------------------------------===//
+// The TrieNode objects are created and then encoded into a binary file.
+//
+// BINARY ENCODING:
+// TrieNode
+//    ULEB128 parent_node_offset
+//
+//      The offset to subtract from the offset of this node's offset to get to
+//      the parent TrieNode. If this value is zero, then it is the root node.
+//
+//    ULEB128 parent_edge_idx
+//      An index into the parent node's edge array that gives the string that
+//      should prefix the current string value.
+//
+//    UINT8   terminal_and_edge_count
+//      If this value is zero or one, then this value is only a boolean value
+//      that indicates if this node is a termination of a string. If the value
+//      is greater than 1, then bit zero contains the boolean value for terminal
+//      and the value shifted right by 1 and subtracted by 1 contains the number
+//      of edge strings that follow in this TrieNode. This allows us to encode
+//      a terminal boolean and and edge count up to 126 in a single byte. If
+//      this value is > 1, then we can decode the terminal value and edge count
+//      with this code:
+//
+//        const uint8_t terminal_and_edge_count = m_data.GetU8(&offset);
+//        bool terminal = (terminal_and_edge_count & 1) != 0;
+//        size_t edge_count = 0;
+//        if (terminal_and_edge_count > 1)
+//          edge_count = (terminal_and_edge_count >> 1) - 1;
+//        else
+//          edge_count = m_data.GetULEB128(&offset)
+//
+//    ULEB128 edge_count (only encoded if terminal_and_edge_count <= 1)
+//      The number of edge strings that follow this value.
+//
+//    Array<CString>[edge_count]
+//      We need to decode edge_count NULL terminated C strings for each edge.
+//===----------------------------------------------------------------------===//
 struct TrieNode {
   static uint64_t total_parent_offset_size;
   static uint64_t total_parent_offsets_count;
