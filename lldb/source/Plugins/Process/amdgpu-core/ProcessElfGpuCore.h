@@ -38,6 +38,7 @@ public:
 
   ProcessElfCore *GetCpuProcess() { return m_cpu_core_process; }
 protected:
+  // TODO: make this a weak reference.
   ProcessElfCore *m_cpu_core_process;
 };
 

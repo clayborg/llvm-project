@@ -11,7 +11,7 @@
 
 #include <memory>
 
-#include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
+#include "Plugins/DynamicLoader/GpuCore-DYLD/DynamicLoaderGpuCoreDYLD.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
@@ -20,7 +20,6 @@
 #include "lldb/Utility/Log.h"
 #include "llvm/Support/Threading.h"
 
-#include "Plugins/Process/elf-core/ThreadElfCore.h"
 #include "ProcessAmdGpuCore.h"
 
 using namespace lldb_private;
@@ -43,6 +42,14 @@ void ProcessAmdGpuCore::Initialize() {
 
 void ProcessAmdGpuCore::Terminate() {
   PluginManager::UnregisterPlugin(ProcessAmdGpuCore::CreateInstance);
+}
+
+lldb::ProcessSP ProcessAmdGpuCore::CreateInstance(lldb::TargetSP target_sp,
+                                                  lldb::ListenerSP listener_sp,
+                                                  const FileSpec *crash_file,
+                                                  bool can_connect) {
+  return std::make_shared<ProcessAmdGpuCore>(target_sp, listener_sp,
+                                             *crash_file);
 }
 
 bool ProcessAmdGpuCore::CanDebug(lldb::TargetSP target_sp,
@@ -212,37 +219,37 @@ bool ProcessAmdGpuCore::initRocm() {
   return true;
 }
 
-llvm::Expected<lldb::ProcessSP>
-ProcessAmdGpuCore::LoadGpuCore(Debugger &debugger, const FileSpec &core_file) {
-  Log *log = GetLog(LLDBLog::Process);
-  LLDB_LOG(log, "ProcessAmdGpuCore::LoadGpuCore()");
+// llvm::Expected<lldb::ProcessSP>
+// ProcessAmdGpuCore::LoadGpuCore(Debugger &debugger, const FileSpec &core_file) {
+//   Log *log = GetLog(LLDBLog::Process);
+//   LLDB_LOG(log, "ProcessAmdGpuCore::LoadGpuCore()");
 
-  TargetSP gpu_target_sp;
-  llvm::StringRef exe_path;
-  llvm::StringRef triple;
-  OptionGroupPlatform *platform_options = nullptr;
-  // Create an empty target for our GPU.
-  Status error(debugger.GetTargetList().CreateTarget(
-      debugger, exe_path, triple, eLoadDependentsNo, platform_options,
-      gpu_target_sp));
-  if (error.Fail())
-    return error.ToError();
-  if (!gpu_target_sp)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "failed to create target");
+//   TargetSP gpu_target_sp;
+//   llvm::StringRef exe_path;
+//   llvm::StringRef triple;
+//   OptionGroupPlatform *platform_options = nullptr;
+//   // Create an empty target for our GPU.
+//   Status error(debugger.GetTargetList().CreateTarget(
+//       debugger, exe_path, triple, eLoadDependentsNo, platform_options,
+//       gpu_target_sp));
+//   if (error.Fail())
+//     return error.ToError();
+//   if (!gpu_target_sp)
+//     return llvm::createStringError(llvm::inconvertibleErrorCode(),
+//                                    "failed to create target");
 
-  ProcessSP gpu_process_sp =
-      CreateInstance(gpu_target_sp, debugger.GetListener(), &core_file, false);
-  if (!gpu_process_sp)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "failed to create GPU process");
+//   ProcessSP gpu_process_sp =
+//       CreateInstance(gpu_target_sp, debugger.GetListener(), &core_file, false);
+//   if (!gpu_process_sp)
+//     return llvm::createStringError(llvm::inconvertibleErrorCode(),
+//                                    "failed to create GPU process");
 
-  error = gpu_process_sp->DoLoadCore();
-  if (error.Fail())
-    return error.ToError();
+//   error = gpu_process_sp->DoLoadCore();
+//   if (error.Fail())
+//     return error.ToError();
 
-  return gpu_process_sp;
-}
+//   return gpu_process_sp;
+// }
 
 // Process Control
 Status ProcessAmdGpuCore::DoLoadCore() {
@@ -256,31 +263,73 @@ Status ProcessAmdGpuCore::DoLoadCore() {
 lldb_private::DynamicLoader *ProcessAmdGpuCore::GetDynamicLoader() {
   if (m_dyld_up.get() == nullptr)
     m_dyld_up.reset(DynamicLoader::FindPlugin(
-        this, DynamicLoaderPOSIXDYLD::GetPluginNameStatic()));
+        this, DynamicLoaderGpuCoreDYLD::GetPluginNameStatic()));
   return m_dyld_up.get();
+}
+
+llvm::Expected<lldb_private::LoadedModuleInfoList>
+ProcessAmdGpuCore::GetLoadedModuleList() {
+  Log *log = GetLog(LLDBLog::Process);
+  LLDB_LOGF(log, "ProcessAmdGpuCore::GetLoadedModuleList()");
+
+  amd_dbgapi_code_object_id_t *code_object_list;
+  size_t count;
+
+  amd_dbgapi_process_id_t gpu_pid{GetID()};
+  amd_dbgapi_status_t status = amd_dbgapi_process_code_object_list(
+      gpu_pid, &count, &code_object_list, nullptr);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(log, "Failed to get code object list: %d", status);
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "Failed to get code object list");
+  }
+  LoadedModuleInfoList module_list;
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t l_addr;
+    char *uri_bytes;
+
+    status = amd_dbgapi_code_object_get_info(
+        code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_LOAD_ADDRESS,
+        sizeof(l_addr), &l_addr);
+    if (status != AMD_DBGAPI_STATUS_SUCCESS)
+      continue;
+
+    status = amd_dbgapi_code_object_get_info(
+        code_object_list[i], AMD_DBGAPI_CODE_OBJECT_INFO_URI_NAME,
+        sizeof(uri_bytes), &uri_bytes);
+    if (status != AMD_DBGAPI_STATUS_SUCCESS)
+      continue;
+
+    LLDB_LOGF(log, "Code object %zu: %s at address %" PRIu64, i, uri_bytes,
+              l_addr);
+
+    LoadedModuleInfoList::LoadedModuleInfo module_info;
+    module_info.set_name(uri_bytes);
+    module_info.set_base(l_addr);
+    module_list.m_list.push_back(module_info);
+    s_dbgapi_callbacks.deallocate_memory(uri_bytes);
+  }  
+  return module_list;
 }
 
 bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
                                            ThreadList &new_thread_list) {
-  auto ret =
-      ProcessElfGpuCore::DoUpdateThreadList(old_thread_list, new_thread_list);
-  if (ret) {
-    size_t count;
-    amd_dbgapi_wave_id_t *wave_list;
-    amd_dbgapi_changed_t changed;
-    amd_dbgapi_status_t status =
-        amd_dbgapi_process_wave_list(m_gpu_pid, &count, &wave_list, &changed);
-    if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-      LLDB_LOGF(GetLog(LLDBLog::Process),
-                "amd_dbgapi_process_wave_list failed with status %d", status);
-      return false;
-    }
-
-    if (changed == AMD_DBGAPI_CHANGED_NO)
-      return ret;
-
-    // TODO: wrap with RAII
-    free(wave_list);
+  bool ret = false;
+  size_t count;
+  amd_dbgapi_wave_id_t *wave_list;
+  amd_dbgapi_changed_t changed;
+  amd_dbgapi_status_t status =
+      amd_dbgapi_process_wave_list(m_gpu_pid, &count, &wave_list, &changed);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(GetLog(LLDBLog::Process),
+              "amd_dbgapi_process_wave_list failed with status %d", status);
+    return false;
   }
+
+  if (changed == AMD_DBGAPI_CHANGED_NO)
+    return ret;
+
+  // TODO: wrap with RAII
+  free(wave_list);
   return ret;
 }

@@ -40,7 +40,8 @@ ProcessElfGpuCore::LoadGpuCore(ProcessElfCore *cpu_core_process,
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOG(log, "ProcessElfGpuCore::LoadGpuCore()");
 
-  lldb_private::Debugger &debugger = cpu_core_process->GetTarget().GetDebugger();
+  lldb_private::Debugger &debugger =
+      cpu_core_process->GetTarget().GetDebugger();
   TargetSP gpu_target_sp;
   llvm::StringRef exe_path;
   llvm::StringRef triple;
@@ -54,19 +55,30 @@ ProcessElfGpuCore::LoadGpuCore(ProcessElfCore *cpu_core_process,
   if (!gpu_target_sp)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "failed to create target");
+  cpu_core_process->GetTarget().SetGPUPluginTarget("amdgpu-core",
+                                                   gpu_target_sp);
+  // lldb::ProcessSP process_sp = std::make_shared<ProcessAmdGpuCore>(
+  //     gpu_target_sp, cpu_core_process, debugger.GetListener(), core_file);
 
-  lldb::ProcessSP process_sp = std::make_shared<ProcessAmdGpuCore>(
-      gpu_target_sp, cpu_core_process, debugger.GetListener(), core_file);
+  ObjectFile *core_objfile = cpu_core_process->GetObjectFile();
+  if (!core_objfile || core_objfile->GetType() != ObjectFile::eTypeCoreFile)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "invalid core file");
+
+  lldb::ProcessSP process_sp =
+      gpu_target_sp->CreateProcess(debugger.GetListener(), "amdgpu-core",
+                                   &core_objfile->GetFileSpec(), false);
   if (!process_sp)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "failed to create GPU process");
-
   std::shared_ptr<ProcessElfGpuCore> gpu_process_sp =
       std::static_pointer_cast<ProcessElfGpuCore>(process_sp);
   if (!gpu_process_sp)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "failed to create GPU process");
-  error = gpu_process_sp->DoLoadCore();
+  // TODO: make this part of the plugin interface.
+  gpu_process_sp->m_cpu_core_process = cpu_core_process;
+  error = gpu_process_sp->LoadCore();
   if (error.Fail())
     return error.ToError();
 
