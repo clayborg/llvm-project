@@ -16,6 +16,13 @@
 
 namespace lldb_private::lldb_server {
 
+// Verify if the provided version numbers are less than the current CUDA
+// Debugger API version.
+#define IS_CUGDB_API_VERSION_LT(major, minor, revision)                        \
+  (CUDBG_API_VERSION_MAJOR < major ||                                          \
+   (CUDBG_API_VERSION_MAJOR == major && CUDBG_API_VERSION_MINOR < minor) || \
+   (CUDBG_API_VERSION_MAJOR == major && CUDBG_API_VERSION_MINOR == minor && CUDBG_API_VERSION_REVISION < revision))
+
 /// Custom deleter for CUDBGAPI.
 void CUDBGAPIDeleter(CUDBGAPI api);
 
