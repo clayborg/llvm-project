@@ -349,18 +349,23 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
 static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
                                            const ThreadCoords &thread_coords,
                                            ThreadRegistersWithValidity &regs) {
-  size_t num_regs = warp_state.GetCurrentNumRegularRegisters();
+#if IS_CUGDB_API_VERSION_LT(13, 2, 100)
+  uint32_t num_regs_read = warp_state.GetCurrentNumRegularRegisters();
 
   CUDBGResult res = api->readRegisterRange(
       thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
-      thread_coords.thread_id, 0, num_regs, regs.val.regular);
-
+      thread_coords.thread_id, 0, num_regs_read, regs.val.regular);
+#else
+  uint32_t num_regs_read = 0;
+  CUDBGResult res = api->readRegisterRange(
+      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
+      thread_coords.thread_id, 0, kNumRRegs, regs.val.regular, &num_regs_read);
+#endif
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
                            "readRegisterRange failed: {}",
                            cudbgGetErrorString(res));
-
-  for (size_t i = 0; i < num_regs; ++i)
+  for (size_t i = 0; i < num_regs_read; ++i)
     regs.is_valid.regular[i] = true;
 }
 
@@ -444,12 +449,12 @@ RegisterContextNVGPU::ReadAllRegsFromDevice() {
     regs.is_valid.regular_zero = true;
   }
 
-    {
-      regs.val.uniform_zero = 0;
-      regs.is_valid.uniform_zero = true;
-    }
+  {
+    regs.val.uniform_zero = 0;
+    regs.is_valid.uniform_zero = true;
+  }
 
-    return regs;
+  return regs;
 }
 
 uint32_t RegisterContextNVGPU::GetRegisterSetCount() const {
