@@ -45,6 +45,11 @@ CMake variables
   section for more details.
 - `NVGPU_INITIALIZATION_SYMBOL`: an optional CPU symbol to use to identify
   that the CUDA runtime is being initialized.
+- `NVGPU_DISASSEMBLER_PATH`: a default path to the nvdisasm disassembler that
+  will be hardcoded in LLDB. It bypasses the regular disassembler discovery
+  logic.
+- `NVGPU_TEST_LD_LIBRARY_PATH`: a way to override LD_LIBRARY_PATH for NVGPU
+  tests. This doesn't affect regular builds.
 
 Environment variables
 ^^^^^^^^^^^^^^^^^^^^^
@@ -102,8 +107,8 @@ Running the tests
   ./bin/llvm-lit ../llvm-project/lldb/test/API/gpu/nvidia/ -a -v
 
 
-Remote platforms
-^^^^^^^^^^^^^^^^
+Remote platforms - Linux
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 You can connect to a remote platform and connect the the GPU lldb-server by
 setting up the following environment variables:
@@ -134,5 +139,33 @@ Then connect remotely to the lldb-server with the following command:
   lldb
   > platform select remote-linux
   > platform connect connect://10.112.215.212:12346
+  > file /remote/path/to/a/program
+  > run
+
+Remote platforms - Android
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Android support is much simpler than the regular Linux remote support as you
+don't need to set any environment variables.
+
+Example:
+
+First launch the lldb-server in platform mode on the Android device with the
+correct port forwarding set up:
+
+.. code-block:: bash
+
+  # On the host
+  adb forward tcp:5039 tcp:5039
+  # On the Android device
+  ./lldb-server platform --listen '*:5039' --server
+
+Then connect remotely to the lldb-server with the following command:
+
+.. code-block:: bash
+
+  lldb
+  > platform select remote-android
+  > platform connect connect://:5039
   > file /remote/path/to/a/program
   > run
