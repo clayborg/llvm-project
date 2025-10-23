@@ -7,6 +7,9 @@ System requirements
 You need to have the CUDA Driver and the CUDA Toolkit installed. They can be
 installed following the `official download page <https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_network>`_.
 
+The minimal version of the CUDA Toolkit and CUDA driver that is supported is
+13.0.0.
+
 CMake requirements
 ^^^^^^^^^^^^^^^^^^
 
