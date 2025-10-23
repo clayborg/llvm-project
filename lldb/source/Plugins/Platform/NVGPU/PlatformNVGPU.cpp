@@ -87,7 +87,7 @@ void PlatformNVGPU::Terminate() {
 
 PlatformNVGPU::PlatformNVGPU() : Platform(/*is_host=*/false) {
   m_supported_architectures = CreateArchList(
-      {llvm::Triple::nvptx, llvm::Triple::nvptx64}, llvm::Triple::UnknownOS);
+      {llvm::Triple::nvptx, llvm::Triple::nvptx64}, llvm::Triple::CUDA);
 }
 
 std::vector<ArchSpec>
