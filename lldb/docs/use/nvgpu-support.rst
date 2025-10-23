@@ -70,6 +70,9 @@ behavior when lldb-server starts:
   synchronous, which can be helpful for debugging by making kernel execution
   more predictable and easier to trace.
 
+- `NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP`: when set to "1", disables the automatic
+  suspension of the CPU process when the GPU is stopped.
+
 These environment variables can be set in the shell environment before
 starting lldb-server.
 
