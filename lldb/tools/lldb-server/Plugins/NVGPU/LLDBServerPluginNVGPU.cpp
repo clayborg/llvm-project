@@ -361,13 +361,14 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
                                                {"subtype", "log"},
                                                {"message", message}}));
     };
-    // Order is important here. We need to suspend the GPU first before the
-    // native process so that the CPU's GPUActions can hit the GPU server.
     m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended,
                                  log_to_client_callback);
-    // Do not suspend the native process here. We do not want to force
-    // the two processes to be sync'ed unless we have to. Allow for a non-stop
-    // mode for the native process.
+    // Here we can force the two processes to be in sync.
+    // Not synchronizing them allows for a non-stop mode for the native process.
+    if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
+      bool was_halted = false;
+      HaltNativeProcessIfNeeded(was_halted);
+    }
     break;
   }
   case CUDBG_EVENT_INVALID: {
