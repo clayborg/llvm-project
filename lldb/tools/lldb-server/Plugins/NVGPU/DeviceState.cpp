@@ -47,13 +47,13 @@ llvm::StringRef static ExceptionToString(CUDBGException_t exception) {
     return "Cluster - Out of range address";
   case CUDBG_EXCEPTION_WARP_STACK_CANARY:
     return "Warp - Stack canary";
-#if CUDBG_API_VERSION_MAJOR >= 13
   case CUDBG_EXCEPTION_WARP_TMEM_ACCESS_CHECK:
     return "Warp - TMEM access check";
   case CUDBG_EXCEPTION_WARP_TMEM_LEAK:
     return "Warp - TMEM leak";
   case CUDBG_EXCEPTION_WARP_CALL_REQUIRES_NEWER_DRIVER:
     return "Warp - Call requires newer driver";
+#if IS_CUGDB_API_VERSION_GTE(13, 2, 0)
   case CUDBG_EXCEPTION_WARP_MISALIGNED_PC:
     return "Warp - Misaligned PC";
   case CUDBG_EXCEPTION_WARP_PC_OVERFLOW:
