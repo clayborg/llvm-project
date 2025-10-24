@@ -238,19 +238,19 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         "Failed to set the event callback for the CUDA Debugger API. {}",
         cudbgGetErrorString(res));
 
-  GPUPluginBreakpointHitResponse response(GetPluginName(), kGpuInitializationBreakpoint);
-
   Expected<GPUPluginConnectionInfo> connection_info = CreateConnection();
   if (!connection_info)
     return connection_info.takeError();
 
-  response.actions.connect_info = std::move(*connection_info);
+  GPUActions actions = GetNewGPUAction();
+  actions.connect_info = std::move(*connection_info);
+  GPUPluginBreakpointHitResponse response(std::move(actions));
   response.disable_bp = true;
   return response;
 }
 
 GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
-  GPUActions init_actions(GetPluginName());
+  GPUActions init_actions = GetNewGPUAction();
 
   init_actions.breakpoints.emplace_back(
       CUDADebuggerAPI::GetInitializationBreakpointInfo(
