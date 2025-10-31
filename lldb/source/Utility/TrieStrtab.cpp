@@ -185,22 +185,22 @@ static std::optional<char> GetChar(StringRef str, size_t pos) {
     return std::nullopt;
   return str[pos];
 }
-static size_t GetAllMatchingChars(ArrayRef<llvm::StringRef> strs, size_t start,
+static size_t GetAllMatchingChars(ArrayRef<StringInfo> strs, size_t start,
                                   bool &terminal) {
   assert(!strs.empty());
   if (strs.size() == 1) {
     terminal = true;
-    return strs.front().size();
+    return strs.front().str.size();
   }
   size_t i = start;
   bool done = false;
   while (!done) {
-    std::optional<char> ch1 = GetChar(strs.front(), i);
+    std::optional<char> ch1 = GetChar(strs.front().str, i);
     if (ch1.has_value()) {
       const size_t num_strings = strs.size();
       size_t str_idx = 1;
       for (; str_idx < num_strings; ++str_idx) {
-        std::optional<char> ch2 = GetChar(strs[str_idx], i);
+        std::optional<char> ch2 = GetChar(strs[str_idx].str, i);
         terminal = !ch2.has_value();
         if (ch1 != ch2)
           break;
@@ -217,7 +217,7 @@ static size_t GetAllMatchingChars(ArrayRef<llvm::StringRef> strs, size_t start,
   return i;
 }
 
-void TrieBuilder::BuildImpl(ArrayRef<llvm::StringRef> strs, TrieNode *parent,
+void TrieBuilder::BuildImpl(ArrayRef<StringInfo> strs, TrieNode *parent,
                             const size_t edge_start) {
   if (strs.empty())
     return;
@@ -228,17 +228,17 @@ void TrieBuilder::BuildImpl(ArrayRef<llvm::StringRef> strs, TrieNode *parent,
   if (strs.size() == 1) {
     // Only one string, add the rest of the string and create a terminal node.
     terminal = true;
-    StringRef edge_str(strs.front().substr(edge_start));
+    StringRef edge_str(strs.front().str.substr(edge_start));
     MakeNode(parent, edge_str, terminal);
     return;
   }
 
   // Get the end index in the strs array whose first char matches.
-  std::optional<char> ch1 = GetChar(strs.front(), edge_end);
+  std::optional<char> ch1 = GetChar(strs.front().str, edge_end);
   if (ch1.has_value()) {
     const size_t num_strings = strs.size();
     for (; end_str_idx < num_strings; ++end_str_idx) {
-      std::optional<char> ch2 = GetChar(strs[end_str_idx], edge_end);
+      std::optional<char> ch2 = GetChar(strs[end_str_idx].str, edge_end);
       terminal = !ch2.has_value();
       if (ch1 != ch2)
         break;
@@ -250,15 +250,15 @@ void TrieBuilder::BuildImpl(ArrayRef<llvm::StringRef> strs, TrieNode *parent,
   }
 
   assert(edge_end > edge_start);
-  ArrayRef<StringRef> common_prefix_strs = strs.slice(0, end_str_idx);
-  ArrayRef<StringRef> non_common_prefix_strs = strs.slice(end_str_idx);
+  ArrayRef<StringInfo> common_prefix_strs = strs.slice(0, end_str_idx);
+  ArrayRef<StringInfo> non_common_prefix_strs = strs.slice(end_str_idx);
   assert(!common_prefix_strs.empty());
   // Match as many characters as possible within the common_prefix_strs
   if (!terminal)
     edge_end = GetAllMatchingChars(common_prefix_strs, edge_end, terminal);
 
   // Make a new child node for the current common_prefix_strs
-  StringRef edge_str(strs.front().substr(edge_start, edge_end - edge_start));
+  StringRef edge_str(strs.front().str.substr(edge_start, edge_end - edge_start));
   TrieNode *child = MakeNode(parent, edge_str, terminal);
   // assert(!terminal || common_prefix_strs.front().size() == edge_end);
   if (terminal)
@@ -299,7 +299,7 @@ void TrieBuilder::AddString(std::string &&s) {
   if (pair.second) {
     // String hasn't been added yet, add it.
     if (!pair.first->empty())
-      AddStringRef(StringRef(*pair.first));
+      AddString({StringRef(*pair.first), std::nullopt});
   } else {
     printf("duplicate string found in string table: \"%s\"\n", s.c_str());
   }
@@ -330,8 +330,9 @@ TrieBuilder::AddStringsFromData(const lldb_private::DataExtractor &data) {
   const size_t pre_existing_num_strings = m_string_refs.size();
   lldb::offset_t offset = 0;
   while (data.ValidOffsetForDataOfSize(offset, 1)) {
+    lldb::offset_t orig_offset = offset;
     StringRef str(data.GetCStr(&offset));
-    AddStringRef(str);
+    AddString({str, orig_offset});
   }
   return m_string_refs.size() - pre_existing_num_strings;
 }

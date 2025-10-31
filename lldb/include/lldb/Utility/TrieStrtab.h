@@ -38,6 +38,7 @@
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/lldb-types.h"
 
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -53,16 +54,28 @@ class FileWriter;
 
 namespace lldb_private {
 
+// A class that tracks the original string with optional offset. The original
+// offset helps maps old string offsets to new string offsets in the Trie.
+struct StringInfo {
+  llvm::StringRef str;
+  std::optional<uint32_t> orig_offset;
+
+  bool operator<(const StringInfo &rhs) const {
+    return str < rhs.str;
+  }
+};
+
 class TrieBuilder {
+
 public:
   ~TrieBuilder();
   /// Add a string reference to the string table.
   ///
   /// The strings added with this method are not copied and the lifetime of the
   /// strings must exceed the lifetime of this object.
-  void AddStringRef(llvm::StringRef s) {
+  void AddString(StringInfo s) {
     m_string_refs.push_back(s);
-    m_raw_strtab_size += s.size() + 1; // Include size with NULL
+    m_raw_strtab_size += s.str.size() + 1; // Include size with NULL
   }
   /// Add a string to the string table.
   ///
@@ -104,9 +117,10 @@ private:
   bool Build();
   TrieNode *MakeNode(TrieNode *parent, llvm::StringRef edge_str, bool terminal);
   void MakeEmptyTerminalNode(TrieNode *parent, size_t edge_idx);
-  void BuildImpl(llvm::ArrayRef<llvm::StringRef> vec, TrieNode *parent,
+  void BuildImpl(llvm::ArrayRef<StringInfo> vec, TrieNode *parent,
                  const size_t edge_start);
-  std::vector<llvm::StringRef> m_string_refs;
+  std::vector<StringInfo> m_string_refs;
+  std::map<uint32_t, uint32_t> m_orig_offset_to_new_offset;
   std::set<std::string> m_string_storage;
   std::vector<TrieNode *> m_nodes;
   std::vector<lldb::offset_t> m_str_offsets;
