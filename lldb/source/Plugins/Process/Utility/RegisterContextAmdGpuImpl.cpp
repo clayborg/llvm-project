@@ -1,4 +1,4 @@
-//===-- RegisterContextAMDGPU.cpp ----------------------------------------===//
+//===-- RegisterContextAmdGpuImpl.cpp -------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,45 +6,37 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "RegisterContextAMDGPU.h"
+#include "RegisterContextAmdGpuImpl.h"
 
-#include "LLDBServerPluginAMDGPU.h"
-#include "ProcessAMDGPU.h"
-#include "ThreadAMDGPU.h"
-#include "lldb/Host/HostInfo.h"
-#include "lldb/Host/common/NativeProcessProtocol.h"
-#include "lldb/Host/common/NativeThreadProtocol.h"
-#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
-#include "lldb/Utility/State.h"
 #include "lldb/Utility/Status.h"
 
-#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include <amd-dbgapi/amd-dbgapi.h>
 #include <unordered_map>
+#include <algorithm>
 
 using namespace lldb;
 using namespace lldb_private;
-using namespace lldb_private::lldb_server;
-using namespace lldb_private::process_gdb_remote;
 
-static size_t kNumRegs = 0;
-static std::vector<RegisterSet> g_reg_sets;
-/// Define all of the information about all registers. The register info structs
-/// are accessed by the LLDB register numbers, which are defined above.
-static std::vector<RegisterInfo> g_reg_infos;
-size_t g_register_buffer_size = 0;
-static uint32_t s_gpu_pc_reg_num = 0;
-static std::unordered_map<uint32_t, amd_dbgapi_register_id_t>
-    g_lldb_num_to_amd_reg_id;
+// Define static members
+std::vector<RegisterInfo> RegisterContextAmdGpuImpl::g_reg_infos;
+std::vector<RegisterSet> RegisterContextAmdGpuImpl::g_register_sets;
+std::unordered_map<uint32_t, amd_dbgapi_register_id_t>
+    RegisterContextAmdGpuImpl::g_lldb_num_to_amd_reg_id;
 
-bool RegisterContextAMDGPU::InitRegisterInfos() {
+RegisterContextAmdGpuImpl::RegisterContextAmdGpuImpl(
+    amd_dbgapi_architecture_id_t architecture_id)
+    : m_architecture_id(architecture_id) {}
+
+bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
+  // Only initialize once (check the static shared variable)
   if (!g_reg_infos.empty())
     return true;
+
   amd_dbgapi_status_t status;
-  ThreadAMDGPU *thread = (ThreadAMDGPU *)&m_thread;
-  amd_dbgapi_architecture_id_t architecture_id =
-      thread->GetProcess().m_debugger->m_architecture_id;
+
   // Define custom hash functions for register IDs
   struct RegisterClassIdHash {
     std::size_t operator()(const amd_dbgapi_register_class_id_t &id) const {
@@ -70,18 +62,18 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
     }
   };
 
-  /* Get register class ids.  */
+  // Get register class ids
   size_t register_class_count;
   amd_dbgapi_register_class_id_t *register_class_ids;
   status = amd_dbgapi_architecture_register_class_list(
-      architecture_id, &register_class_count, &register_class_ids);
+      m_architecture_id, &register_class_count, &register_class_ids);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin),
+    LLDB_LOGF(GetLog(LLDBLog::Thread),
               "Failed to get register class list from amd-dbgapi");
     return false;
   }
 
-  // Get register class names.
+  // Get register class names
   std::unordered_map<amd_dbgapi_register_class_id_t, std::string,
                      RegisterClassIdHash, RegisterClassIdEqual>
       register_class_names;
@@ -91,26 +83,24 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
         register_class_ids[i], AMD_DBGAPI_REGISTER_CLASS_INFO_NAME,
         sizeof(bytes), &bytes);
     if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-      LLDB_LOGF(GetLog(GDBRLog::Plugin),
+      LLDB_LOGF(GetLog(LLDBLog::Thread),
                 "Failed to get register class name from amd-dbgapi");
       return false;
     }
-
-    // gdb::unique_xmalloc_ptr<char> name(bytes);
     register_class_names.emplace(register_class_ids[i], bytes);
   }
 
-  /* Get all register count. */
+  // Get all register count
   size_t register_count;
   amd_dbgapi_register_id_t *register_ids;
   status = amd_dbgapi_architecture_register_list(
-      architecture_id, &register_count, &register_ids);
+      m_architecture_id, &register_count, &register_ids);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin),
+    LLDB_LOGF(GetLog(LLDBLog::Thread),
               "Failed to get register list from amd-dbgapi");
     return false;
   }
-  kNumRegs = register_count;
+  m_register_count = register_count;
 
   std::unordered_map<amd_dbgapi_register_class_id_t,
                      std::vector<amd_dbgapi_register_id_t>, RegisterClassIdHash,
@@ -125,7 +115,7 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
           register_class_state == AMD_DBGAPI_REGISTER_CLASS_STATE_MEMBER) {
         register_class_to_register_ids[register_class_ids[i]].push_back(
             register_ids[j]);
-        break; // TODO: can a register be in multiple classes?
+        break;
       }
     }
   }
@@ -138,7 +128,7 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
             register_ids[regnum], AMD_DBGAPI_REGISTER_INFO_PROPERTIES,
             sizeof(register_properties),
             &register_properties) != AMD_DBGAPI_STATUS_SUCCESS) {
-      LLDB_LOGF(GetLog(GDBRLog::Plugin),
+      LLDB_LOGF(GetLog(LLDBLog::Thread),
                 "Failed to get register properties from amd-dbgapi");
       return false;
     }
@@ -149,7 +139,7 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
                      RegisterIdEqual>
       register_names;
   for (size_t i = 0; i < register_count; ++i) {
-    /* Get register name.  */
+    // Get register name
     char *bytes;
     status = amd_dbgapi_register_get_info(
         register_ids[i], AMD_DBGAPI_REGISTER_INFO_NAME, sizeof(bytes), &bytes);
@@ -158,7 +148,7 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
       free(bytes);
     }
 
-    /* Get register DWARF number.  */
+    // Get register DWARF number
     uint64_t dwarf_num;
     status = amd_dbgapi_register_get_info(register_ids[i],
                                           AMD_DBGAPI_REGISTER_INFO_DWARF,
@@ -173,21 +163,23 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
 
   amd_dbgapi_register_id_t pc_register_id;
   status = amd_dbgapi_architecture_get_info(
-      architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_PC_REGISTER,
+      m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_PC_REGISTER,
       sizeof(pc_register_id), &pc_register_id);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin),
+    LLDB_LOGF(GetLog(LLDBLog::Thread),
               "Failed to get PC register from amd-dbgapi");
     return false;
   }
-  // Initialize g_reg_infos with register information from AMD dbgapi
+
+  // Initialize register infos
   g_reg_infos.resize(register_count);
 
   // Map from register class ID to register numbers for that class
   std::unordered_map<amd_dbgapi_register_class_id_t, std::vector<uint32_t>,
                      RegisterClassIdHash, RegisterClassIdEqual>
       register_class_to_lldb_regnums;
-  // Populate g_reg_infos with register information from AMD dbgapi
+
+  // Populate register infos with register information from AMD dbgapi
   for (size_t i = 0; i < register_count; ++i) {
     amd_dbgapi_register_id_t reg_id = register_ids[i];
     RegisterInfo &reg_info = g_reg_infos[i];
@@ -214,15 +206,14 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
     } else {
       reg_info.byte_size = 8; // Default to 64-bit registers
     }
-    reg_info.byte_offset = g_register_buffer_size; // Simple offset calculation
-    g_register_buffer_size += reg_info.byte_size;
+    reg_info.byte_offset = m_register_buffer_size;
+    m_register_buffer_size += reg_info.byte_size;
 
     // Set encoding and format based on register name
     std::string reg_name =
         name_it != register_names.end() ? name_it->second : "";
 
     // Check if register name contains indicators of its type
-    // TODO: is this the correct way to do this?
     if (reg_name.find("float") != std::string::npos ||
         reg_name.find("fp") != std::string::npos) {
       reg_info.encoding = eEncodingIEEE754;
@@ -232,7 +223,6 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
       reg_info.encoding = eEncodingVector;
       reg_info.format = eFormatVectorOfUInt8;
     } else if (reg_info.byte_size > 8) {
-      // TODO: check AMD_DBGAPI_REGISTER_INFO_TYPE and assign encoding/format.
       reg_info.encoding = eEncodingVector;
       reg_info.format = eFormatVectorOfUInt8;
     } else {
@@ -242,9 +232,8 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
     }
 
     // Set register kinds
-    reg_info.kinds[eRegisterKindLLDB] = i; // LLDB register number is the index
-    g_lldb_num_to_amd_reg_id[i] =
-        reg_id; // Map from LLDB register number to AMD
+    reg_info.kinds[eRegisterKindLLDB] = i;
+    g_lldb_num_to_amd_reg_id[i] = reg_id;
 
     // Set DWARF register number if available
     uint64_t dwarf_num;
@@ -265,10 +254,10 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
     // Check if this is the PC register
     if (reg_id.handle == pc_register_id.handle) {
       reg_info.kinds[eRegisterKindGeneric] = LLDB_REGNUM_GENERIC_PC;
-      s_gpu_pc_reg_num = i;
+      m_pc_register_num = i;
     }
 
-    // Add this register indices belong to its register classes
+    // Add this register to its register classes
     for (size_t j = 0; j < register_class_count; ++j) {
       amd_dbgapi_register_class_state_t register_class_state;
       status = amd_dbgapi_register_is_in_register_class(
@@ -281,26 +270,26 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
   }
 
   // Create register sets from register classes
-  g_reg_sets.clear();
+  g_register_sets.clear();
 
   for (size_t i = 0; i < register_class_count; ++i) {
     auto class_id = register_class_ids[i];
     auto name_it = register_class_names.find(class_id);
     if (name_it == register_class_names.end()) {
-      continue; // Skip if no name found
+      continue;
     }
 
     auto regnums_it = register_class_to_lldb_regnums.find(class_id);
     if (regnums_it == register_class_to_lldb_regnums.end() ||
         regnums_it->second.empty()) {
-      continue; // Skip if no registers in this class
+      continue;
     }
 
     // Create a new register set for this class
     RegisterSet reg_set;
     reg_set.name = strdup(name_it->second.c_str());
 
-    // Create short name from the full name (use first word or first few chars)
+    // Create short name from the full name
     std::string short_name = name_it->second;
     size_t space_pos = short_name.find(' ');
     if (space_pos != std::string::npos) {
@@ -315,59 +304,48 @@ bool RegisterContextAMDGPU::InitRegisterInfos() {
     // Get register numbers for this class
     const auto &regnums = regnums_it->second;
 
-    // Store register numbers in a static container to ensure they live
-    // for the duration of the program
+    // Store register numbers in a static container
     static std::vector<std::vector<uint32_t>> all_reg_nums;
     all_reg_nums.push_back(regnums);
 
-    // Point the RegisterSet's registers field to the data in our static vector
     reg_set.registers = all_reg_nums.back().data();
     reg_set.num_registers = all_reg_nums.back().size();
-    g_reg_sets.push_back(reg_set);
+    g_register_sets.push_back(reg_set);
   }
+
   return true;
 }
 
-RegisterContextAMDGPU::RegisterContextAMDGPU(
-    NativeThreadProtocol &native_thread)
-    : NativeRegisterContext(native_thread) {
-  InitRegisterInfos();
-  InitRegisters();
-  // Only doing this for the Mock GPU class, don't do this in real GPU classes.
-  // ReadRegs();
+void RegisterContextAmdGpuImpl::InitializeRegisterData() {
+  m_register_data.resize(m_register_buffer_size);
+  m_register_valid.resize(m_register_count, false);
 }
 
-void RegisterContextAMDGPU::InitRegisters() {
-  m_regs.data.resize(g_register_buffer_size);
-  m_regs_valid.resize(kNumRegs, false);
+void RegisterContextAmdGpuImpl::InvalidateAllRegisters() {
+  for (size_t i = 0; i < m_register_count; ++i)
+    m_register_valid[i] = false;
 }
 
-void RegisterContextAMDGPU::InvalidateAllRegisters() {
-  // Do what ever book keeping we need to do to indicate that all register
-  // values are now invalid.
-  for (uint32_t i = 0; i < kNumRegs; ++i)
-    m_regs_valid[i] = false;
-}
-
-Status RegisterContextAMDGPU::ReadReg(const RegisterInfo *reg_info) {
+Status RegisterContextAmdGpuImpl::ReadRegister(
+    std::optional<amd_dbgapi_wave_id_t> wave_id, const RegisterInfo *reg_info) {
   Status error;
   const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
-  assert(lldb_reg_num < kNumRegs);
-  auto amd_reg_id = g_lldb_num_to_amd_reg_id[lldb_reg_num];
-  ThreadAMDGPU *thread = (ThreadAMDGPU *)&m_thread;
+  assert(lldb_reg_num < m_register_count);
 
-  // Swallow the error for the shadow thread, as it doesn't have valid values.
-  if (thread->IsShadowThread())
+  auto amd_reg_id = g_lldb_num_to_amd_reg_id[lldb_reg_num];
+
+  if (!wave_id) {
+    // No wave ID, return without error (dummy values)
     return error;
-  amd_dbgapi_wave_id_t wave_id = thread->GetWaveID();
+  }
 
   amd_dbgapi_register_exists_t exists;
   amd_dbgapi_status_t amd_status =
-      amd_dbgapi_wave_register_exists(wave_id, amd_reg_id, &exists);
+      amd_dbgapi_wave_register_exists(wave_id.value(), amd_reg_id, &exists);
   if (amd_status != AMD_DBGAPI_STATUS_SUCCESS) {
-    error.FromErrorStringWithFormat(
-        "Failed to check register %s existence  due to error %d",
-        reg_info->name, amd_status);
+    error = Status::FromErrorStringWithFormat(
+        "Failed to check register %s existence due to error %d", reg_info->name,
+        amd_status);
     return error;
   }
   if (exists != AMD_DBGAPI_REGISTER_PRESENT) {
@@ -377,8 +355,8 @@ Status RegisterContextAMDGPU::ReadReg(const RegisterInfo *reg_info) {
     return error;
   }
 
-  amd_status = amd_dbgapi_prefetch_register(wave_id, amd_reg_id,
-                                            m_regs.data.size() - lldb_reg_num);
+  amd_status = amd_dbgapi_prefetch_register(wave_id.value(), amd_reg_id,
+                                            m_register_data.size() - lldb_reg_num);
   if (amd_status != AMD_DBGAPI_STATUS_SUCCESS) {
     error = Status::FromErrorStringWithFormat(
         "Failed to prefetch register %s due to error %d", reg_info->name,
@@ -388,133 +366,78 @@ Status RegisterContextAMDGPU::ReadReg(const RegisterInfo *reg_info) {
 
   // Read the register value
   amd_status =
-      amd_dbgapi_read_register(wave_id, amd_reg_id, 0, reg_info->byte_size,
-                               m_regs.data.data() + reg_info->byte_offset);
+      amd_dbgapi_read_register(wave_id.value(), amd_reg_id, 0, reg_info->byte_size,
+                               m_register_data.data() + reg_info->byte_offset);
   if (amd_status != AMD_DBGAPI_STATUS_SUCCESS) {
     error = Status::FromErrorStringWithFormat(
         "Failed to read register %s due to error %d", reg_info->name,
         amd_status);
     return error;
   }
-  m_regs_valid[lldb_reg_num] = true;
+  m_register_valid[lldb_reg_num] = true;
   return error;
 }
 
-Status RegisterContextAMDGPU::ReadRegs() {
-  ThreadAMDGPU *thread = (ThreadAMDGPU *)&m_thread;
-  if (thread != nullptr) {
-    const bool thread_stopped =
-        StateIsStoppedState(thread->GetState(), /*must_exist=*/true);
-    if (thread_stopped) {
-      for (uint32_t i = 0; i < g_reg_infos.size(); ++i) {
-        Status error = ReadReg(&g_reg_infos[i]);
-        if (error.Fail())
-          return error;
-      }
-    }
+Status
+RegisterContextAmdGpuImpl::WriteRegister(const RegisterInfo *reg_info,
+                                         const RegisterValue &reg_value) {
+  const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
+  const void *new_value = reg_value.GetBytes();
+  memcpy(m_register_data.data() + reg_info->byte_offset, new_value,
+         reg_info->byte_size);
+  m_register_valid[lldb_reg_num] = true;
+  return Status();
+}
+
+Status RegisterContextAmdGpuImpl::ReadAllRegisters(std::optional<amd_dbgapi_wave_id_t> wave_id) {
+  if (wave_id.has_value()) {
+    for (size_t i = 0; i < g_reg_infos.size(); ++i) {
+      Status error = ReadRegister(wave_id, &g_reg_infos[i]);
+      if (error.Fail())
+        return error;
+     }
   } else {
-    // Fill all registers with unique values.
+    // Fill all registers with unique values for testing
     for (uint32_t i = 0; i < g_reg_infos.size(); ++i) {
-      memcpy(m_regs.data.data() + g_reg_infos[i].byte_offset, &i, sizeof(i));
+      memcpy(m_register_data.data() + g_reg_infos[i].byte_offset, &i,
+             sizeof(i));
     }
   }
   return Status();
 }
 
-uint32_t RegisterContextAMDGPU::GetRegisterSetCount() const {
-  return g_reg_sets.size();
-}
-
-uint32_t RegisterContextAMDGPU::GetRegisterCount() const { return kNumRegs; }
-
-uint32_t RegisterContextAMDGPU::GetUserRegisterCount() const {
-  return GetRegisterCount();
+Status
+RegisterContextAmdGpuImpl::GetRegisterValue(const RegisterInfo *reg_info,
+                                            RegisterValue &reg_value) const {
+  reg_value.SetBytes(m_register_data.data() + reg_info->byte_offset,
+                     reg_info->byte_size, lldb::eByteOrderLittle);
+  return Status();
 }
 
 const RegisterInfo *
-RegisterContextAMDGPU::GetRegisterInfoAtIndex(uint32_t reg) const {
-  if (reg < kNumRegs)
+RegisterContextAmdGpuImpl::GetRegisterInfoAtIndex(size_t reg) const {
+  if (reg < m_register_count)
     return &g_reg_infos[reg];
   return nullptr;
 }
 
 const RegisterSet *
-RegisterContextAMDGPU::GetRegisterSet(uint32_t set_index) const {
-  if (set_index < GetRegisterSetCount())
-    return &g_reg_sets[set_index];
+RegisterContextAmdGpuImpl::GetRegisterSet(size_t set_index) const {
+  if (set_index < g_register_sets.size())
+    return &g_register_sets[set_index];
   return nullptr;
 }
 
-Status RegisterContextAMDGPU::ReadRegister(const RegisterInfo *reg_info,
-                                           RegisterValue &reg_value) {
-  Status error;
-  const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
-  if (!m_regs_valid[lldb_reg_num]) {
-    error = ReadReg(reg_info);
-  }
-  if (error.Fail())
-    return error;
-  reg_value.SetBytes(m_regs.data.data() + reg_info->byte_offset,
-                     reg_info->byte_size, lldb::eByteOrderLittle);
-  return Status();
+amd_dbgapi_register_id_t
+RegisterContextAmdGpuImpl::GetAMDRegisterID(uint32_t lldb_regnum) const {
+  auto it = g_lldb_num_to_amd_reg_id.find(lldb_regnum);
+  if (it != g_lldb_num_to_amd_reg_id.end())
+    return it->second;
+  return amd_dbgapi_register_id_t{0};
 }
 
-Status RegisterContextAMDGPU::WriteRegister(const RegisterInfo *reg_info,
-                                            const RegisterValue &reg_value) {
-  const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
-  const void *new_value = reg_value.GetBytes();
-  memcpy(m_regs.data.data() + reg_info->byte_offset, new_value,
-         reg_info->byte_size);
-  m_regs_valid[lldb_reg_num] = true;
-  return Status();
-}
-
-Status RegisterContextAMDGPU::ReadAllRegisterValues(
-    lldb::WritableDataBufferSP &data_sp) {
-  ReadRegs(); // Read all registers first
-  const size_t regs_byte_size = m_regs.data.size();
-  data_sp.reset(new DataBufferHeap(regs_byte_size, 0));
-  uint8_t *dst = data_sp->GetBytes();
-  memcpy(dst, &m_regs.data[0], regs_byte_size);
-  return Status();
-}
-
-Status RegisterContextAMDGPU::WriteAllRegisterValues(
-    const lldb::DataBufferSP &data_sp) {
-  const size_t regs_byte_size = m_regs.data.size();
-
-  if (!data_sp) {
-    return Status::FromErrorStringWithFormat(
-        "RegisterContextAMDGPU::%s invalid data_sp provided", __FUNCTION__);
-  }
-
-  if (data_sp->GetByteSize() != regs_byte_size) {
-    return Status::FromErrorStringWithFormat(
-        "RegisterContextAMDGPU::%s data_sp contained mismatched "
-        "data size, expected %" PRIu64 ", actual %" PRIu64,
-        __FUNCTION__, regs_byte_size, data_sp->GetByteSize());
-  }
-
-  const uint8_t *src = data_sp->GetBytes();
-  if (src == nullptr) {
-    return Status::FromErrorStringWithFormat(
-        "RegisterContextAMDGPU::%s "
-        "DataBuffer::GetBytes() returned a null "
-        "pointer",
-        __FUNCTION__);
-  }
-  memcpy(&m_regs.data[0], src, regs_byte_size);
-  return Status();
-}
-
-std::vector<uint32_t>
-RegisterContextAMDGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
-  static std::vector<uint32_t> g_expedited_regs;
-  if (g_expedited_regs.empty()) {
-    // We can't expedite all registers because that would cause jThreadsInfo to
-    // fetch registers from all stopped waves eagarly which would be too slow
-    // and unnecessary. 
-    g_expedited_regs.push_back(s_gpu_pc_reg_num);
-  }
-  return g_expedited_regs;
+bool RegisterContextAmdGpuImpl::IsRegisterValid(uint32_t lldb_regnum) const {
+  if (lldb_regnum < m_register_count)
+    return m_register_valid[lldb_regnum];
+  return false;
 }

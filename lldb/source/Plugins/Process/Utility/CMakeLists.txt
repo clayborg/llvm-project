@@ -1,7 +1,12 @@
 # TODO: Clean up this directory and its dependencies
 set_property(DIRECTORY PROPERTY LLDB_PLUGIN_KIND ProcessUtility)
 
-add_lldb_library(lldbPluginProcessUtility
+# Conditionally find AMD-dbgapi package
+set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
+find_package(amd-dbgapi QUIET CONFIG)
+
+# Set up source files list
+set(PROCESS_UTILITY_SOURCES
   AuxVector.cpp
   FreeBSDSignals.cpp
   GDBRemoteSignals.cpp
@@ -63,18 +68,34 @@ add_lldb_library(lldbPluginProcessUtility
   RegisterInfoPOSIX_riscv64.cpp
   StopInfoMachException.cpp
   ThreadMemory.cpp
+)
+
+# Conditionally add AMD GPU support if amd-dbgapi is found
+set(LINK_LIBS_LIST
+  lldbBreakpoint
+  lldbCore
+  lldbDataFormatters
+  lldbExpression
+  lldbHost
+  lldbSymbol
+  lldbTarget
+  lldbUtility
+  lldbValueObject
+)
+
+if(amd-dbgapi_FOUND)
+  message(STATUS "AMD-dbgapi found, enabling AMDGPU support in ProcessUtility")
+  list(APPEND PROCESS_UTILITY_SOURCES RegisterContextAmdGpuImpl.cpp)
+  list(APPEND LINK_LIBS_LIST amd-dbgapi)
+  include_directories(${ROCM_PATH}/include)
+endif()
+
+add_lldb_library(lldbPluginProcessUtility
+  ${PROCESS_UTILITY_SOURCES}
 
   LINK_COMPONENTS
     Support
     TargetParser
   LINK_LIBS
-    lldbBreakpoint
-    lldbCore
-    lldbDataFormatters
-    lldbExpression
-    lldbHost
-    lldbSymbol
-    lldbTarget
-    lldbUtility
-    lldbValueObject
+    ${LINK_LIBS_LIST}
   )

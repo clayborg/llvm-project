@@ -14,7 +14,7 @@
 
 #ifndef LLDB_TOOLS_LLDB_SERVER_WAVEAMDGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_WAVEAMDGPU_H
-#include "RegisterContextAMDGPU.h"
+
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-enumerations.h"
 #include <amd-dbgapi/amd-dbgapi.h>
