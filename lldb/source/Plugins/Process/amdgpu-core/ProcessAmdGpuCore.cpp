@@ -12,12 +12,15 @@
 #include <memory>
 
 #include "Plugins/DynamicLoader/GpuCore-DYLD/DynamicLoaderGpuCoreDYLD.h"
+#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Target/DynamicLoader.h"
+#include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Threading.h"
 
 #include "ProcessAmdGpuCore.h"
@@ -36,13 +39,15 @@ void ProcessAmdGpuCore::Initialize() {
   static llvm::once_flag g_once_flag;
 
   llvm::call_once(g_once_flag, []() {
-    PluginManager::RegisterPlugin(GetPluginNameStatic(),
-                                  GetPluginDescriptionStatic(), CreateInstance);
+    // Register as GPU Process plugin (for merged CPU+GPU cores)
+    // AMD only supports merged mode, not standalone GPU-only cores
+    PluginManager::RegisterGpuProcessPlugin(
+        GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
   });
 }
 
 void ProcessAmdGpuCore::Terminate() {
-  PluginManager::UnregisterPlugin(ProcessAmdGpuCore::CreateInstance);
+  PluginManager::UnregisterGpuProcessPlugin(ProcessAmdGpuCore::CreateInstance);
 }
 
 lldb::ProcessSP ProcessAmdGpuCore::CreateInstance(lldb::TargetSP target_sp,
@@ -55,13 +60,20 @@ lldb::ProcessSP ProcessAmdGpuCore::CreateInstance(lldb::TargetSP target_sp,
 
 bool ProcessAmdGpuCore::CanDebug(lldb::TargetSP target_sp,
                                  bool plugin_specified_by_name) {
-  // TODO: check target is a ELF core file.
-  return ProcessElfGpuCore::CanDebug(target_sp, plugin_specified_by_name);
+  // AMD GPU core plugin only supports merged CPU+GPU cores
+  // This is only called from ProcessElfGpuCore::LoadGpuCore()
+  // Since we're registered as GPU Process plugin, never called from
+  // normal Process::FindPlugin() discovery
+  auto cpu_process = GetCpuProcess();
+  assert(cpu_process && "how can we not have a CPU process in CPU+GPU cores?");
+
+  // Check if this core file has AMD GPU notes (type 33 =
+  // NT_AMDGPU_KFD_CORE_STATE)
+  return cpu_process->GetAmdGpuNote().has_value();
 }
 
 // Destructor
 ProcessAmdGpuCore::~ProcessAmdGpuCore() {
-  // TODO: clean up for AMD GPU.
   if (m_gpu_pid.handle != AMD_DBGAPI_PROCESS_NONE.handle) {
     amd_dbgapi_status_t status = amd_dbgapi_process_detach(m_gpu_pid);
     if (status != AMD_DBGAPI_STATUS_SUCCESS) {
@@ -69,6 +81,8 @@ ProcessAmdGpuCore::~ProcessAmdGpuCore() {
                 status);
     }
     m_gpu_pid = AMD_DBGAPI_PROCESS_NONE;
+    status = amd_dbgapi_finalize();
+    assert(status == AMD_DBGAPI_STATUS_SUCCESS);
   }
 }
 
@@ -91,7 +105,8 @@ static amd_dbgapi_status_t amd_dbgapi_client_process_get_info_callback(
   case AMD_DBGAPI_CLIENT_PROCESS_INFO_CORE_STATE: {
     amd_dbgapi_core_state_data_t *core_state_data =
         (amd_dbgapi_core_state_data_t *)value;
-    std::optional<CoreNote> amd_gpu_note_opt = process->GetAmdGpuNote();
+    std::optional<CoreNote> amd_gpu_note_opt =
+        process->GetCpuProcess()->GetAmdGpuNote();
 
     if (!amd_gpu_note_opt.has_value())
       return AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE;
@@ -143,6 +158,17 @@ static amd_dbgapi_status_t amd_dbgapi_xfer_global_memory_callback(
       reinterpret_cast<ProcessAmdGpuCore *>(client_process_id);
   if (!process)
     return AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE;
+
+  // Write operations are not supported for core files (which are read-only)
+  // Return ERROR_NOT_SUPPORTED to explicitly indicate this is not allowed
+  if (write_buffer != nullptr) {
+    LLDB_LOGF(GetLog(LLDBLog::Process),
+              "xfer_global_memory callback: write operation not supported for "
+              "read-only core file (address=0x%" PRIx64 ", size=%zu)",
+              global_address, *value_size);
+    return AMD_DBGAPI_STATUS_ERROR_NOT_SUPPORTED;
+  }
+
   Status error;
   std::shared_ptr<Process> cpu_process_sp = process->GetCpuProcess();
   if (!cpu_process_sp) {
@@ -151,7 +177,7 @@ static amd_dbgapi_status_t amd_dbgapi_xfer_global_memory_callback(
     return AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE;
   }
   size_t ret = cpu_process_sp->ReadMemory(global_address, read_buffer,
-                                                    *value_size, error);
+                                          *value_size, error);
   if (error.Fail() || ret != *value_size)
     return AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE;
   return AMD_DBGAPI_STATUS_SUCCESS;
@@ -172,43 +198,14 @@ static amd_dbgapi_callbacks_t s_dbgapi_callbacks = {
     amd_dbgapi_log_message_callback,
 };
 
-std::optional<CoreNote> ProcessAmdGpuCore::GetAmdGpuNote() {
-  ObjectFileELF *core = (ObjectFileELF *)GetCpuProcess()->GetObjectFile();
-  if (core == nullptr)
-    return std::nullopt;
-  llvm::ArrayRef<elf::ELFProgramHeader> program_headers =
-      core->ProgramHeaders();
-  if (program_headers.size() == 0)
-    return std::nullopt;
-
-  for (const elf::ELFProgramHeader &H : program_headers) {
-    if (H.p_type == llvm::ELF::PT_NOTE) {
-      DataExtractor segment_data = core->GetSegmentData(H);
-      llvm::Expected<std::vector<CoreNote>> notes_or_error =
-          parseSegment(segment_data);
-      if (!notes_or_error) {
-        llvm::consumeError(notes_or_error.takeError());
-        continue;
-      }
-      for (const auto &note : *notes_or_error) {
-        if (note.info.n_type == 33)
-          return note;
-      }
-    }
-  }
-  return std::nullopt;
-}
-
 bool ProcessAmdGpuCore::initRocm() {
   // Initialize AMD Debug API with callbacks
   amd_dbgapi_status_t status = amd_dbgapi_initialize(&s_dbgapi_callbacks);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
     LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to initialize AMD debug API");
-    exit(-1);
+    return false;
   }
 
-  // TODO: for debugging purpose. Move into lldb logging channel.
-  amd_dbgapi_set_log_level(AMD_DBGAPI_LOG_LEVEL_VERBOSE);
   // Attach to the process with AMD Debug API
   status = amd_dbgapi_process_attach(
       reinterpret_cast<amd_dbgapi_client_process_id_t>(
@@ -238,9 +235,8 @@ const ArchSpec &ProcessAmdGpuCore::GetArchitecture() {
   // Query the subtype from the dbgapi.
   uint32_t cpu_subtype = 0;
   amd_dbgapi_status_t status = amd_dbgapi_architecture_get_info(
-      m_architecture_id,
-      AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE, sizeof(cpu_subtype),
-      &cpu_subtype);
+      m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE,
+      sizeof(cpu_subtype), &cpu_subtype);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
     LLDB_LOGF(GetLog(LLDBLog::Process),
               "amd_dbgapi_architecture_get_info failed: %d", status);
@@ -256,7 +252,13 @@ Status ProcessAmdGpuCore::DoLoadCore() {
   // Status error = ProcessElfGpuCore::DoLoadCore();
   // if (error.Fail())
   //   return error;
-  initRocm();
+
+  if (!initRocm()) {
+    return Status::FromErrorString(
+        "Failed to initialize AMD ROCm debug API. Please ensure ROCm is "
+        "properly installed and the core file contains valid GPU state.");
+  }
+
   GetTarget().SetArchitecture(GetArchitecture());
   return Status{};
 }
@@ -319,9 +321,6 @@ bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
   amd_dbgapi_wave_id_t *wave_list;
   amd_dbgapi_changed_t changed;
 
-  // amd_dbgapi_status_t status = amd_dbgapi_process_set_progress(
-  //     m_gpu_pid, AMD_DBGAPI_PROGRESS_NO_FORWARD);
-  // assert(status == AMD_DBGAPI_STATUS_SUCCESS);
   amd_dbgapi_status_t status =
       amd_dbgapi_process_wave_list(m_gpu_pid, &count, &wave_list, &changed);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
@@ -329,6 +328,10 @@ bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
               "amd_dbgapi_process_wave_list failed with status %d", status);
     return false;
   }
+
+  // Ensure wave_list is always freed, even if we return early
+  auto wave_list_cleanup =
+      llvm::make_scope_exit([wave_list]() { free(wave_list); });
 
   if (changed == AMD_DBGAPI_CHANGED_NO)
     return ret;
@@ -339,10 +342,6 @@ bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
     new_thread_list.AddThread(std::move(thread));
   }
 
-  // status =
-  //     amd_dbgapi_process_set_progress(m_gpu_pid, AMD_DBGAPI_PROGRESS_NORMAL);
-  // TODO: wrap with RAII
-  free(wave_list);
   return ret;
 }
 

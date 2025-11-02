@@ -13,29 +13,46 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
-#include <amd-dbgapi/amd-dbgapi.h>
-#include <unordered_map>
 #include <algorithm>
+#include <amd-dbgapi/amd-dbgapi.h>
+#include <mutex>
+#include <unordered_map>
 
 using namespace lldb;
 using namespace lldb_private;
 
 // Define static members
-std::vector<RegisterInfo> RegisterContextAmdGpuImpl::g_reg_infos;
-std::vector<RegisterSet> RegisterContextAmdGpuImpl::g_register_sets;
-std::unordered_map<uint32_t, amd_dbgapi_register_id_t>
-    RegisterContextAmdGpuImpl::g_lldb_num_to_amd_reg_id;
+std::unordered_map<uint64_t,
+                   RegisterContextAmdGpuImpl::ArchitectureRegisterInfo>
+    RegisterContextAmdGpuImpl::s_architecture_register_infos;
+static std::unordered_map<uint64_t, std::once_flag> s_register_info_init_flags;
 
 RegisterContextAmdGpuImpl::RegisterContextAmdGpuImpl(
     amd_dbgapi_architecture_id_t architecture_id)
-    : m_architecture_id(architecture_id) {}
+    : m_architecture_id(architecture_id) {
+  InitializeRegisterInfo();
+  InitializeRegisterData();
+}
 
 bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
-  // Only initialize once (check the static shared variable)
-  if (!g_reg_infos.empty())
-    return true;
+  bool init_success = true;
 
+  uint64_t arch_id_value = m_architecture_id.handle;
+
+  // Thread-safe one-time initialization per architecture
+  std::call_once(
+      s_register_info_init_flags[arch_id_value],
+      [this, &init_success]() { init_success = InitializeRegisterInfoImpl(); });
+
+  return init_success;
+}
+
+bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
   amd_dbgapi_status_t status;
+
+  uint64_t arch_id_value = m_architecture_id.handle;
+  RegisterContextAmdGpuImpl::ArchitectureRegisterInfo &arch_info =
+      s_architecture_register_infos[arch_id_value];
 
   // Define custom hash functions for register IDs
   struct RegisterClassIdHash {
@@ -100,7 +117,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
               "Failed to get register list from amd-dbgapi");
     return false;
   }
-  m_register_count = register_count;
+  arch_info.register_count = register_count;
 
   std::unordered_map<amd_dbgapi_register_class_id_t,
                      std::vector<amd_dbgapi_register_id_t>, RegisterClassIdHash,
@@ -172,7 +189,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
   }
 
   // Initialize register infos
-  g_reg_infos.resize(register_count);
+  arch_info.reg_infos.resize(register_count);
 
   // Map from register class ID to register numbers for that class
   std::unordered_map<amd_dbgapi_register_class_id_t, std::vector<uint32_t>,
@@ -182,8 +199,9 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
   // Populate register infos with register information from AMD dbgapi
   for (size_t i = 0; i < register_count; ++i) {
     amd_dbgapi_register_id_t reg_id = register_ids[i];
-    RegisterInfo &reg_info = g_reg_infos[i];
+    RegisterInfo &reg_info = arch_info.reg_infos[i];
 
+    // TODO: free the strdup-ed strings
     // Set register name from AMD dbgapi
     auto name_it = register_names.find(reg_id);
     if (name_it != register_names.end()) {
@@ -206,8 +224,8 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
     } else {
       reg_info.byte_size = 8; // Default to 64-bit registers
     }
-    reg_info.byte_offset = m_register_buffer_size;
-    m_register_buffer_size += reg_info.byte_size;
+    reg_info.byte_offset = arch_info.register_buffer_size;
+    arch_info.register_buffer_size += reg_info.byte_size;
 
     // Set encoding and format based on register name
     std::string reg_name =
@@ -233,7 +251,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
 
     // Set register kinds
     reg_info.kinds[eRegisterKindLLDB] = i;
-    g_lldb_num_to_amd_reg_id[i] = reg_id;
+    arch_info.lldb_num_to_amd_reg_id[i] = reg_id;
 
     // Set DWARF register number if available
     uint64_t dwarf_num;
@@ -254,7 +272,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
     // Check if this is the PC register
     if (reg_id.handle == pc_register_id.handle) {
       reg_info.kinds[eRegisterKindGeneric] = LLDB_REGNUM_GENERIC_PC;
-      m_pc_register_num = i;
+      arch_info.pc_register_num = i;
     }
 
     // Add this register to its register classes
@@ -270,7 +288,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
   }
 
   // Create register sets from register classes
-  g_register_sets.clear();
+  arch_info.register_sets.clear();
 
   for (size_t i = 0; i < register_class_count; ++i) {
     auto class_id = register_class_ids[i];
@@ -310,19 +328,25 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfo() {
 
     reg_set.registers = all_reg_nums.back().data();
     reg_set.num_registers = all_reg_nums.back().size();
-    g_register_sets.push_back(reg_set);
+    arch_info.register_sets.push_back(reg_set);
   }
 
   return true;
 }
 
 void RegisterContextAmdGpuImpl::InitializeRegisterData() {
-  m_register_data.resize(m_register_buffer_size);
-  m_register_valid.resize(m_register_count, false);
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const RegisterContextAmdGpuImpl::ArchitectureRegisterInfo &arch_info =
+      s_architecture_register_infos[arch_id_value];
+  m_register_data.resize(arch_info.register_buffer_size);
+  m_register_valid.resize(arch_info.register_count, false);
 }
 
 void RegisterContextAmdGpuImpl::InvalidateAllRegisters() {
-  for (size_t i = 0; i < m_register_count; ++i)
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const RegisterContextAmdGpuImpl::ArchitectureRegisterInfo &arch_info =
+      s_architecture_register_infos[arch_id_value];
+  for (size_t i = 0; i < arch_info.register_count; ++i)
     m_register_valid[i] = false;
 }
 
@@ -330,9 +354,12 @@ Status RegisterContextAmdGpuImpl::ReadRegister(
     std::optional<amd_dbgapi_wave_id_t> wave_id, const RegisterInfo *reg_info) {
   Status error;
   const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
-  assert(lldb_reg_num < m_register_count);
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const RegisterContextAmdGpuImpl::ArchitectureRegisterInfo &arch_info =
+      s_architecture_register_infos[arch_id_value];
+  assert(lldb_reg_num < arch_info.register_count);
 
-  auto amd_reg_id = g_lldb_num_to_amd_reg_id[lldb_reg_num];
+  auto amd_reg_id = arch_info.lldb_num_to_amd_reg_id.at(lldb_reg_num);
 
   if (!wave_id) {
     // No wave ID, return without error (dummy values)
@@ -355,8 +382,8 @@ Status RegisterContextAmdGpuImpl::ReadRegister(
     return error;
   }
 
-  amd_status = amd_dbgapi_prefetch_register(wave_id.value(), amd_reg_id,
-                                            m_register_data.size() - lldb_reg_num);
+  amd_status = amd_dbgapi_prefetch_register(
+      wave_id.value(), amd_reg_id, m_register_data.size() - lldb_reg_num);
   if (amd_status != AMD_DBGAPI_STATUS_SUCCESS) {
     error = Status::FromErrorStringWithFormat(
         "Failed to prefetch register %s due to error %d", reg_info->name,
@@ -365,9 +392,9 @@ Status RegisterContextAmdGpuImpl::ReadRegister(
   }
 
   // Read the register value
-  amd_status =
-      amd_dbgapi_read_register(wave_id.value(), amd_reg_id, 0, reg_info->byte_size,
-                               m_register_data.data() + reg_info->byte_offset);
+  amd_status = amd_dbgapi_read_register(
+      wave_id.value(), amd_reg_id, 0, reg_info->byte_size,
+      m_register_data.data() + reg_info->byte_offset);
   if (amd_status != AMD_DBGAPI_STATUS_SUCCESS) {
     error = Status::FromErrorStringWithFormat(
         "Failed to read register %s due to error %d", reg_info->name,
@@ -389,17 +416,20 @@ RegisterContextAmdGpuImpl::WriteRegister(const RegisterInfo *reg_info,
   return Status();
 }
 
-Status RegisterContextAmdGpuImpl::ReadAllRegisters(std::optional<amd_dbgapi_wave_id_t> wave_id) {
+Status RegisterContextAmdGpuImpl::ReadAllRegisters(
+    std::optional<amd_dbgapi_wave_id_t> wave_id) {
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos[arch_id_value];
   if (wave_id.has_value()) {
-    for (size_t i = 0; i < g_reg_infos.size(); ++i) {
-      Status error = ReadRegister(wave_id, &g_reg_infos[i]);
+    for (size_t i = 0; i < arch_info.reg_infos.size(); ++i) {
+      Status error = ReadRegister(wave_id, &arch_info.reg_infos[i]);
       if (error.Fail())
         return error;
-     }
+    }
   } else {
     // Fill all registers with unique values for testing
-    for (uint32_t i = 0; i < g_reg_infos.size(); ++i) {
-      memcpy(m_register_data.data() + g_reg_infos[i].byte_offset, &i,
+    for (uint32_t i = 0; i < arch_info.reg_infos.size(); ++i) {
+      memcpy(m_register_data.data() + arch_info.reg_infos[i].byte_offset, &i,
              sizeof(i));
     }
   }
@@ -416,28 +446,60 @@ RegisterContextAmdGpuImpl::GetRegisterValue(const RegisterInfo *reg_info,
 
 const RegisterInfo *
 RegisterContextAmdGpuImpl::GetRegisterInfoAtIndex(size_t reg) const {
-  if (reg < m_register_count)
-    return &g_reg_infos[reg];
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  if (reg < arch_info.register_count)
+    return &arch_info.reg_infos[reg];
   return nullptr;
 }
 
 const RegisterSet *
 RegisterContextAmdGpuImpl::GetRegisterSet(size_t set_index) const {
-  if (set_index < g_register_sets.size())
-    return &g_register_sets[set_index];
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  if (set_index < arch_info.register_sets.size())
+    return &arch_info.register_sets[set_index];
   return nullptr;
 }
 
 amd_dbgapi_register_id_t
 RegisterContextAmdGpuImpl::GetAMDRegisterID(uint32_t lldb_regnum) const {
-  auto it = g_lldb_num_to_amd_reg_id.find(lldb_regnum);
-  if (it != g_lldb_num_to_amd_reg_id.end())
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  auto it = arch_info.lldb_num_to_amd_reg_id.find(lldb_regnum);
+  if (it != arch_info.lldb_num_to_amd_reg_id.end())
     return it->second;
   return amd_dbgapi_register_id_t{0};
 }
 
 bool RegisterContextAmdGpuImpl::IsRegisterValid(uint32_t lldb_regnum) const {
-  if (lldb_regnum < m_register_count)
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  if (lldb_regnum < arch_info.register_count)
     return m_register_valid[lldb_regnum];
   return false;
+}
+
+size_t RegisterContextAmdGpuImpl::GetRegisterCount() const {
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  return arch_info.register_count;
+}
+
+size_t RegisterContextAmdGpuImpl::GetRegisterBufferSize() const {
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  return arch_info.register_buffer_size;
+}
+
+uint32_t RegisterContextAmdGpuImpl::GetPCRegisterNumber() const {
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  return arch_info.pc_register_num;
+}
+
+size_t RegisterContextAmdGpuImpl::GetRegisterSetCount() const {
+  uint64_t arch_id_value = m_architecture_id.handle;
+  const auto &arch_info = s_architecture_register_infos.at(arch_id_value);
+  return arch_info.register_sets.size();
 }

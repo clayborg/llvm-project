@@ -22,8 +22,6 @@ RegisterContextAmdGpu::RegisterContextAmdGpu(Thread &thread)
       amdgpu_thread->GetArchitectureId();
 
   m_impl = std::make_unique<RegisterContextAmdGpuImpl>(architecture_id);
-  m_impl->InitializeRegisterInfo();
-  m_impl->InitializeRegisterData();
 }
 
 void RegisterContextAmdGpu::InvalidateAllRegisters() {

@@ -97,12 +97,7 @@ public:
 
   bool GetProcessInfo(lldb_private::ProcessInstanceInfo &info) override;
 
-  // TODO: make it protected.
-  const std::vector<ThreadData>& GetThreadData() {
-    return m_thread_data;
-  }
-
-  ObjectFileELF *GetObjectFile();
+  std::optional<lldb_private::CoreNote> GetAmdGpuNote();
 
 protected:
   void Clear();
@@ -114,12 +109,7 @@ protected:
   DoGetMemoryRegionInfo(lldb::addr_t load_addr,
                         lldb_private::MemoryRegionInfo &region_info) override;
 
-  bool SupportsMemoryTagging() override { return !m_core_tag_ranges.IsEmpty(); } 
-
-  void InitializeCoreModule(lldb::TargetSP target_sp);
-
-  llvm::Expected<std::vector<lldb_private::CoreNote>>
-  parseSegment(const lldb_private::DataExtractor &segment);
+  bool SupportsMemoryTagging() override { return !m_core_tag_ranges.IsEmpty(); }
 
 private:
   struct NT_FILE_Entry {
@@ -188,6 +178,8 @@ private:
   lldb::addr_t
   AddAddressRangeFromMemoryTagSegment(const elf::ELFProgramHeader &header);
 
+  llvm::Expected<std::vector<lldb_private::CoreNote>>
+  parseSegment(const lldb_private::DataExtractor &segment);
   llvm::Error parseFreeBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
   llvm::Error parseNetBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
   llvm::Error parseOpenBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);

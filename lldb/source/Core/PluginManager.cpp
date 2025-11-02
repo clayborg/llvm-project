@@ -1172,6 +1172,43 @@ void PluginManager::AutoCompleteProcessName(llvm::StringRef name,
   }
 }
 
+#pragma mark GpuProcess
+
+typedef PluginInstance<ProcessCreateInstance> GpuProcessInstance;
+typedef PluginInstances<GpuProcessInstance> GpuProcessInstances;
+
+static GpuProcessInstances &GetGpuProcessInstances() {
+  static GpuProcessInstances g_instances;
+  return g_instances;
+}
+
+bool PluginManager::RegisterGpuProcessPlugin(
+    llvm::StringRef name, llvm::StringRef description,
+    ProcessCreateInstance create_callback,
+    DebuggerInitializeCallback debugger_init_callback) {
+  return GetGpuProcessInstances().RegisterPlugin(
+      name, description, create_callback, debugger_init_callback);
+}
+
+bool PluginManager::UnregisterGpuProcessPlugin(
+    ProcessCreateInstance create_callback) {
+  return GetGpuProcessInstances().UnregisterPlugin(create_callback);
+}
+
+llvm::StringRef PluginManager::GetGpuProcessPluginNameAtIndex(uint32_t idx) {
+  return GetGpuProcessInstances().GetNameAtIndex(idx);
+}
+
+llvm::StringRef
+PluginManager::GetGpuProcessPluginDescriptionAtIndex(uint32_t idx) {
+  return GetGpuProcessInstances().GetDescriptionAtIndex(idx);
+}
+
+ProcessCreateInstance
+PluginManager::GetGpuProcessCreateCallbackAtIndex(uint32_t idx) {
+  return GetGpuProcessInstances().GetCallbackAtIndex(idx);
+}
+
 #pragma mark ProtocolServer
 
 typedef PluginInstance<ProtocolServerCreateInstance> ProtocolServerInstance;

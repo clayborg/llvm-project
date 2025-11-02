@@ -677,6 +677,8 @@ public:
 
   const lldb::ProcessSP &GetProcessSP() const;
 
+  void SetProcessSP(lldb::ProcessSP process_sp);
+
   bool IsValid() { return m_valid; }
 
   void Destroy();
@@ -1342,7 +1344,7 @@ public:
     StopHook(const StopHook &rhs);
     virtual ~StopHook() = default;
 
-    enum class StopHookKind  : uint32_t { CommandBased = 0, ScriptBased };
+    enum class StopHookKind : uint32_t { CommandBased = 0, ScriptBased };
     enum class StopHookResult : uint32_t {
       KeepStopped = 0,
       RequestContinue,

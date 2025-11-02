@@ -28,7 +28,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Threading.h"
 
-#include "../amdgpu-core/ProcessElfGpuCore.h"
+#include "ProcessElfGpuCore.h"
 #include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/Process/elf-core/RegisterUtilities.h"
@@ -41,23 +41,11 @@ namespace ELF = llvm::ELF;
 LLDB_PLUGIN_DEFINE(ProcessElfCore)
 
 llvm::StringRef ProcessElfCore::GetPluginDescriptionStatic() {
-  // sdf
   return "ELF core dump plug-in.";
 }
 
 void ProcessElfCore::Terminate() {
   PluginManager::UnregisterPlugin(ProcessElfCore::CreateInstance);
-}
-
-void ProcessElfCore::InitializeCoreModule(lldb::TargetSP target_sp) {
-  if (!m_core_module_sp && FileSystem::Instance().Exists(m_core_file)) {
-    ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
-    Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
-                                             nullptr, nullptr, nullptr));
-    if (error.Fail())
-      LLDB_LOGF(GetLog(LLDBLog::Process), "Error loading core module: %s",
-                error.AsCString("unknown error"));
-  }
 }
 
 lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
@@ -95,13 +83,15 @@ lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
 bool ProcessElfCore::CanDebug(lldb::TargetSP target_sp,
                               bool plugin_specified_by_name) {
   // For now we are just making sure the file exists for a given module
-  InitializeCoreModule(target_sp);
-  if (m_core_module_sp) {
-    ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
-    // If the core file has AMD GPU note, we let ProcessAmdGpuCore plugin to
-    // handle it.
-    if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
-      return true;
+  if (!m_core_module_sp && FileSystem::Instance().Exists(m_core_file)) {
+    ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
+    Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
+                                             nullptr, nullptr, nullptr));
+    if (m_core_module_sp) {
+      ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
+      if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
+        return true;
+    }
   }
   return false;
 }
@@ -165,10 +155,6 @@ lldb::addr_t ProcessElfCore::AddAddressRangeFromMemoryTagSegment(
       VMRangeToFileOffset::Entry(header.p_vaddr, header.p_memsz, file_range));
 
   return header.p_vaddr;
-}
-
-ObjectFileELF *ProcessElfCore::GetObjectFile() {
-  return (ObjectFileELF *)(m_core_module_sp->GetObjectFile());
 }
 
 // Process Control
@@ -289,7 +275,7 @@ Status ProcessElfCore::DoLoadCore() {
   }
   llvm::Expected<std::shared_ptr<ProcessElfGpuCore>> gpu_process =
       ProcessElfGpuCore::LoadGpuCore(
-          std::static_pointer_cast<ProcessElfGpuCore>(shared_from_this()),
+          std::static_pointer_cast<ProcessElfCore>(shared_from_this()),
           GetCoreFile());
   if (!gpu_process)
     return Status::FromError(gpu_process.takeError());
@@ -428,7 +414,7 @@ size_t ProcessElfCore::DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
   const lldb::addr_t file_start = address_range->data.GetRangeBase();
   const lldb::addr_t file_end = address_range->data.GetRangeEnd();
   size_t bytes_to_read = size; // Number of bytes to read from the core file
-  size_t bytes_copied = 0; // Number of bytes actually read from the core file
+  size_t bytes_copied = 0;   // Number of bytes actually read from the core file
   lldb::addr_t bytes_left =
       0; // Number of bytes available in the core file from the given address
 
@@ -511,7 +497,8 @@ lldb::addr_t ProcessElfCore::GetImageInfoAddress() {
 
 // Parse a FreeBSD NT_PRSTATUS note - see FreeBSD sys/procfs.h for details.
 static void ParseFreeBSDPrStatus(ThreadData &thread_data,
-                                 const DataExtractor &data, bool lp64) {
+                                 const DataExtractor &data,
+                                 bool lp64) {
   lldb::offset_t offset = 0;
   int pr_version = data.GetU32(&offset);
 
@@ -538,7 +525,8 @@ static void ParseFreeBSDPrStatus(ThreadData &thread_data,
 
 // Parse a FreeBSD NT_PRPSINFO note - see FreeBSD sys/procfs.h for details.
 static void ParseFreeBSDPrPsInfo(ProcessElfCore &process,
-                                 const DataExtractor &data, bool lp64) {
+                                 const DataExtractor &data,
+                                 bool lp64) {
   lldb::offset_t offset = 0;
   int pr_version = data.GetU32(&offset);
 
@@ -557,7 +545,8 @@ static void ParseFreeBSDPrPsInfo(ProcessElfCore &process,
 }
 
 static llvm::Error ParseNetBSDProcInfo(const DataExtractor &data,
-                                       uint32_t &cpi_nlwps, uint32_t &cpi_signo,
+                                       uint32_t &cpi_nlwps,
+                                       uint32_t &cpi_signo,
                                        uint32_t &cpi_siglwp,
                                        uint32_t &cpi_pid) {
   lldb::offset_t offset = 0;
@@ -725,8 +714,8 @@ llvm::Error ProcessElfCore::parseNetBSDNotes(llvm::ArrayRef<CoreNote> notes) {
 
     if (name == "NetBSD-CORE") {
       if (note.info.n_type == NETBSD::NT_PROCINFO) {
-        llvm::Error error =
-            ParseNetBSDProcInfo(note.data, nlwps, signo, siglwp, pr_pid);
+        llvm::Error error = ParseNetBSDProcInfo(note.data, nlwps, signo,
+                                                siglwp, pr_pid);
         if (error)
           return error;
         SetID(pr_pid);
@@ -952,9 +941,7 @@ llvm::Error ProcessElfCore::parseLinuxNotes(llvm::ArrayRef<CoreNote> notes) {
       Status status = prpsinfo.Parse(note.data, arch);
       if (status.Fail())
         return status.ToError();
-      thread_data.name.assign(
-          prpsinfo.pr_fname,
-          strnlen(prpsinfo.pr_fname, sizeof(prpsinfo.pr_fname)));
+      thread_data.name.assign (prpsinfo.pr_fname, strnlen (prpsinfo.pr_fname, sizeof (prpsinfo.pr_fname)));
       SetID(prpsinfo.pr_pid);
       break;
     }
@@ -1008,7 +995,7 @@ llvm::Error ProcessElfCore::ParseThreadContextsFromNoteSegment(
   assert(segment_header.p_type == llvm::ELF::PT_NOTE);
 
   auto notes_or_error = parseSegment(segment_data);
-  if (!notes_or_error)
+  if(!notes_or_error)
     return notes_or_error.takeError();
   switch (GetArchitecture().GetTriple().getOS()) {
   case llvm::Triple::FreeBSD:
@@ -1139,4 +1126,31 @@ bool ProcessElfCore::GetProcessInfo(ProcessInstanceInfo &info) {
                            add_exe_file_as_first_arg);
   }
   return true;
+}
+
+std::optional<CoreNote> ProcessElfCore::GetAmdGpuNote() {
+  ObjectFileELF *core = (ObjectFileELF *)(m_core_module_sp->GetObjectFile());
+  if (core == nullptr)
+    return std::nullopt;
+  llvm::ArrayRef<elf::ELFProgramHeader> program_headers =
+      core->ProgramHeaders();
+  if (program_headers.size() == 0)
+    return std::nullopt;
+
+  for (const elf::ELFProgramHeader &H : program_headers) {
+    if (H.p_type == llvm::ELF::PT_NOTE) {
+      DataExtractor segment_data = core->GetSegmentData(H);
+      llvm::Expected<std::vector<CoreNote>> notes_or_error =
+          parseSegment(segment_data);
+      if (!notes_or_error) {
+        llvm::consumeError(notes_or_error.takeError());
+        continue;
+      }
+      for (const auto &note : *notes_or_error) {
+        if (note.info.n_type == llvm::ELF::NT_AMDGPU_KFD_CORE_STATE)
+          return note;
+      }
+    }
+  }
+  return std::nullopt;
 }

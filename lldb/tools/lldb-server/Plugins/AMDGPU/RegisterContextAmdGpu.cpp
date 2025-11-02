@@ -8,9 +8,9 @@
 
 #include "RegisterContextAmdGpu.h"
 
-#include "ThreadAMDGPU.h"
-#include "ProcessAMDGPU.h"
 #include "LLDBServerPluginAMDGPU.h"
+#include "ProcessAMDGPU.h"
+#include "ThreadAMDGPU.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/RegisterValue.h"
 
@@ -26,8 +26,6 @@ RegisterContextAmdGpu::RegisterContextAmdGpu(
       thread->GetProcess().m_debugger->m_architecture_id;
 
   m_impl = std::make_unique<RegisterContextAmdGpuImpl>(architecture_id);
-  m_impl->InitializeRegisterInfo();
-  m_impl->InitializeRegisterData();
 }
 
 void RegisterContextAmdGpu::InvalidateAllRegisters() {
