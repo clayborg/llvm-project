@@ -58,7 +58,10 @@ namespace lldb_private {
 // offset helps maps old string offsets to new string offsets in the Trie.
 struct StringInfo {
   llvm::StringRef str;
+  /// The original offset in a string table for this string.
   std::optional<uint32_t> orig_offset;
+  /// Offset in the Trie string table for this string.
+  std::optional<uint32_t> new_offset;
 
   bool operator<(const StringInfo &rhs) const {
     return str < rhs.str;
@@ -85,9 +88,16 @@ public:
 
   // Returns a bool true if success.
   bool Encode(llvm::gsym::FileWriter &file);
-  const std::vector<lldb::offset_t> &GetStringOffsets() const {
-    return m_str_offsets;
+
+  // If the strings were encoded from a string table and they all had an offset
+  // in the original string table, this map will map the old offset to the new
+  // trie string table offset. This allows code to covert a string table from
+  // a standard string table to a new trie string table format and get the
+  // mapping between the old and new offsets.
+  const std::map<uint32_t, uint32_t> GetOffsetMap() const {
+    return m_offset_map;
   }
+
   /// Load all strings from the specified string table file at the specified
   /// offset and size.
   ///
@@ -115,15 +125,15 @@ public:
 
 private:
   bool Build();
-  TrieNode *MakeNode(TrieNode *parent, llvm::StringRef edge_str, bool terminal);
-  void MakeEmptyTerminalNode(TrieNode *parent, size_t edge_idx);
+  TrieNode *MakeNode(TrieNode *parent,
+                     llvm::StringRef edge_str,
+                     StringInfo *terminal_str_info);
   void BuildImpl(llvm::ArrayRef<StringInfo> vec, TrieNode *parent,
                  const size_t edge_start);
   std::vector<StringInfo> m_string_refs;
-  std::map<uint32_t, uint32_t> m_orig_offset_to_new_offset;
+  std::map<uint32_t, uint32_t> m_offset_map;
   std::set<std::string> m_string_storage;
   std::vector<TrieNode *> m_nodes;
-  std::vector<lldb::offset_t> m_str_offsets;
   uint64_t m_raw_strtab_size = 0;
   uint64_t m_encoded_size = 0;
 };

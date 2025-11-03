@@ -64,18 +64,20 @@ struct Edge {
 //      We need to decode edge_count NULL terminated C strings for each edge.
 //===----------------------------------------------------------------------===//
 struct TrieNode {
-  static uint64_t total_parent_offset_size;
-  static uint64_t total_parent_offsets_count;
-  static uint64_t max_parent_node_offset;
-  static uint64_t max_parent_node_offset_size;
-  static uint64_t max_parent_edge_idx;
-  static uint64_t max_edge_count;
-  TrieNode(TrieNode *p, size_t i, bool t)
-      : parent(p), parent_edge_idx(i), terminal(t) {}
+  // Statistics are gathered at encode time in these static variables
+  static uint64_t g_total_parent_offset_size;
+  static uint64_t g_total_parent_offsets_count;
+  static uint64_t g_max_parent_node_offset;
+  static uint64_t g_max_parent_node_offset_size;
+  static uint64_t g_max_parent_edge_idx;
+  static uint64_t g_max_edge_count;
+
+  TrieNode(TrieNode *p, size_t i, StringInfo *t)
+      : parent(p), parent_edge_idx(i), terminal_str_info(t) {}
   TrieNode *parent = nullptr;
   size_t parent_edge_idx = 0;
   std::vector<Edge> edges;
-  bool terminal = 0;
+  StringInfo *terminal_str_info = nullptr;
   mutable std::optional<lldb::offset_t> encoded_offset;
   mutable std::optional<lldb::offset_t> encoded_end_offset;
   void Encode(llvm::gsym::FileWriter &file) const;
@@ -85,17 +87,21 @@ struct TrieNode {
       return parent->GetDepth() + 1;
     return 0;
   }
+  bool IsTerminal() const { return terminal_str_info != nullptr; }
 };
 
-uint64_t TrieNode::total_parent_offset_size = 0;
-uint64_t TrieNode::total_parent_offsets_count = 0;
-uint64_t TrieNode::max_parent_node_offset = 0;
-uint64_t TrieNode::max_parent_node_offset_size = 0;
-uint64_t TrieNode::max_parent_edge_idx = 0;
-uint64_t TrieNode::max_edge_count = 0;
+uint64_t TrieNode::g_total_parent_offset_size = 0;
+uint64_t TrieNode::g_total_parent_offsets_count = 0;
+uint64_t TrieNode::g_max_parent_node_offset = 0;
+uint64_t TrieNode::g_max_parent_node_offset_size = 0;
+uint64_t TrieNode::g_max_parent_edge_idx = 0;
+uint64_t TrieNode::g_max_edge_count = 0;
 
 void TrieNode::Encode(llvm::gsym::FileWriter &file) const {
   encoded_offset = file.tell();
+  // Update the StringInfo with the encoded offset if this is a terminal string.
+  if (terminal_str_info)
+    terminal_str_info->new_offset = encoded_offset;
   // Encode the offset to subtract from this node's encoded_offset to get to
   // the parent Node. If offset is zero, then there is no parent.
   if (parent) {
@@ -103,33 +109,39 @@ void TrieNode::Encode(llvm::gsym::FileWriter &file) const {
     const lldb::offset_t parent_node_offset =
         *encoded_offset - *parent->encoded_offset;
     file.writeULEB(parent_node_offset);
-    if (max_parent_node_offset < parent_node_offset)
-      max_parent_node_offset = parent_node_offset;
+
+    // Keep statistics -- start
+    if (g_max_parent_node_offset < parent_node_offset)
+      g_max_parent_node_offset = parent_node_offset;
     const size_t parent_node_offset_size = file.tell() - *encoded_offset;
-    if (max_parent_node_offset_size < parent_node_offset_size)
-      max_parent_node_offset_size = parent_node_offset_size;
-    total_parent_offset_size += parent_node_offset_size;
-    ++total_parent_offsets_count;
+    if (g_max_parent_node_offset_size < parent_node_offset_size)
+      g_max_parent_node_offset_size = parent_node_offset_size;
+    g_total_parent_offset_size += parent_node_offset_size;
+    ++g_total_parent_offsets_count;
+    if (parent_edge_idx > g_max_parent_edge_idx)
+      g_max_parent_edge_idx = parent_edge_idx;
+    // Keep statistics -- end
+
     file.writeULEB(parent_edge_idx);
-    if (parent_edge_idx > max_parent_edge_idx)
-      max_parent_edge_idx = parent_edge_idx;
   } else {
-    file.writeU8(0); // This is a ULEB but it fits into a byte.
+    // No parent is indicated by a reverse offset of zero.
+    file.writeULEB(0);
   }
 
   const size_t num_edges = edges.size();
-  if (num_edges > max_edge_count)
-    max_edge_count = num_edges;
+  // Keep statistics -- start
+  if (num_edges > g_max_edge_count)
+    g_max_edge_count = num_edges;
   // bool indicating if this is terminal node.
   if (num_edges < 127) {
     // Emit both the edge count plus 1 and the terminal bool as one value. The
     // edge count can be zero, so we add one to the edge count so we can tell
     //
-    file.writeU8((num_edges + 1) << 1 | terminal);
+    file.writeU8((num_edges + 1) << 1 | IsTerminal());
   } else {
     // Edge count is >= 127, so we need to emit the terminal bool and edge count
     // separately
-    file.writeU8(terminal);
+    file.writeU8(IsTerminal());
     // Add number of children.
     file.writeULEB(num_edges);
   }
@@ -152,7 +164,7 @@ void TrieNode::Dump(llvm::ArrayRef<uint8_t> bytes) const {
   if (encoded_offset)
     printf("0x%" PRIx64 ": ", *encoded_offset);
   printf("%*s\"%s\" terminal=%i\n", depth * 2, "", node_name.str().c_str(),
-         terminal);
+         IsTerminal());
   if (encoded_offset && !bytes.empty()) {
     for (size_t i = *encoded_offset; i < *encoded_end_offset; ++i)
       printf("%2.2x ", bytes[i]);
@@ -169,11 +181,11 @@ TrieBuilder::~TrieBuilder() {
 }
 
 TrieNode *TrieBuilder::MakeNode(TrieNode *parent, StringRef edge_str,
-                                bool terminal) {
+                                StringInfo *terminal_str_info) {
   size_t edge_idx = 0;
   if (parent)
     edge_idx = parent->edges.size();
-  auto *node = new TrieNode(parent, edge_idx, terminal);
+  auto *node = new TrieNode(parent, edge_idx, terminal_str_info);
   if (parent)
     parent->edges.emplace_back(edge_str, node);
   m_nodes.emplace_back(node);
@@ -224,16 +236,15 @@ void TrieBuilder::BuildImpl(ArrayRef<StringInfo> strs, TrieNode *parent,
 
   size_t end_str_idx = 1;
   size_t edge_end = edge_start;
-  bool terminal = false;
   if (strs.size() == 1) {
     // Only one string, add the rest of the string and create a terminal node.
-    terminal = true;
     StringRef edge_str(strs.front().str.substr(edge_start));
-    MakeNode(parent, edge_str, terminal);
+    MakeNode(parent, edge_str, const_cast<StringInfo *>(&strs.front()));
     return;
   }
 
   // Get the end index in the strs array whose first char matches.
+  bool terminal = false;
   std::optional<char> ch1 = GetChar(strs.front().str, edge_end);
   if (ch1.has_value()) {
     const size_t num_strings = strs.size();
@@ -259,8 +270,9 @@ void TrieBuilder::BuildImpl(ArrayRef<StringInfo> strs, TrieNode *parent,
 
   // Make a new child node for the current common_prefix_strs
   StringRef edge_str(strs.front().str.substr(edge_start, edge_end - edge_start));
-  TrieNode *child = MakeNode(parent, edge_str, terminal);
-  // assert(!terminal || common_prefix_strs.front().size() == edge_end);
+  TrieNode *child = MakeNode(
+      parent, edge_str,
+      terminal ? const_cast<StringInfo *>(&strs.front()) : nullptr);
   if (terminal)
     BuildImpl(common_prefix_strs.slice(1), child, edge_end);
   else
@@ -272,7 +284,9 @@ bool TrieBuilder::Build() {
   if (m_string_refs.empty())
     return false;
 
-  TrieNode *root = MakeNode(nullptr, /*edge_str=*/{}, /*terminal=*/false);
+  TrieNode *root = MakeNode(nullptr,
+                            /*edge_str=*/{},
+                            /*terminal_str_info=*/nullptr);
   llvm::sort(m_string_refs);
   BuildImpl(m_string_refs, root, /*edge_start=*/0);
   return true;
@@ -282,11 +296,14 @@ bool TrieBuilder::Encode(llvm::gsym::FileWriter &file) {
   if (Build()) {
     for (TrieNode *node : m_nodes) {
       node->Encode(file);
-      // If the node is terminal, then add the offset of
-      // the node to the string offsets as it represents
-      // a unique string in the string table.
-      if (node->terminal)
-        m_str_offsets.push_back(*node->encoded_offset);
+      // If the node is terminal and the original string had an offset from a
+      // standard string table, keep the mapping of the old string to the new
+      // trie string table offset.
+      if (node->terminal_str_info &&
+          node->terminal_str_info->orig_offset.has_value()) {
+        m_offset_map[*node->terminal_str_info->orig_offset] =
+            *node->encoded_offset;
+      }
     }
     m_encoded_size = file.tell();
     return true;
@@ -299,7 +316,7 @@ void TrieBuilder::AddString(std::string &&s) {
   if (pair.second) {
     // String hasn't been added yet, add it.
     if (!pair.first->empty())
-      AddString({StringRef(*pair.first), std::nullopt});
+      AddString({StringRef(*pair.first), std::nullopt, std::nullopt});
   } else {
     printf("duplicate string found in string table: \"%s\"\n", s.c_str());
   }
@@ -332,7 +349,7 @@ TrieBuilder::AddStringsFromData(const lldb_private::DataExtractor &data) {
   while (data.ValidOffsetForDataOfSize(offset, 1)) {
     lldb::offset_t orig_offset = offset;
     StringRef str(data.GetCStr(&offset));
-    AddString({str, orig_offset});
+    AddString({str, orig_offset, std::nullopt});
   }
   return m_string_refs.size() - pre_existing_num_strings;
 }
@@ -343,12 +360,13 @@ void TrieBuilder::DumpStats() const {
   printf("Normal strtab size = %" PRIu64 "\n", m_raw_strtab_size);
   printf("Trie strtab size = %" PRIu64 " (%.2f%% smaller)\n", m_encoded_size,
          (1.0 - (float)m_encoded_size / (float)m_raw_strtab_size) * 100.0);
-  float avg_parent_offset_size = (float)TrieNode::total_parent_offset_size /
-                                 (float)TrieNode::total_parent_offsets_count;
+  float avg_parent_offset_size = (float)TrieNode::g_total_parent_offset_size /
+                                 (float)TrieNode::g_total_parent_offsets_count;
   printf("max_parent_offset_size = %" PRIu64 " (average = %.2f)\n",
-         TrieNode::max_parent_node_offset_size, avg_parent_offset_size);
-  printf("max_parent_edge_idx = %" PRIu64 "\n", TrieNode::max_parent_edge_idx);
-  printf("max_edge_count = %" PRIu64 "\n", TrieNode::max_edge_count);
+         TrieNode::g_max_parent_node_offset_size, avg_parent_offset_size);
+  printf("max_parent_edge_idx = %" PRIu64 "\n",
+         TrieNode::g_max_parent_edge_idx);
+  printf("max_edge_count = %" PRIu64 "\n", TrieNode::g_max_edge_count);
 }
 
 void TrieBuilder::Dump(llvm::ArrayRef<uint8_t> bytes) const {

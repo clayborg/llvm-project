@@ -535,7 +535,8 @@ void SymbolFileDWARF::InitializeObject() {
   InitializeFirstCodeAddress();
 
   TrieBuilder trie;
-  const size_t num_strs = trie.AddStringsFromData(m_context.getOrLoadStrData());
+  DWARFDataExtractor debug_str_data(m_context.getOrLoadStrData());
+  const size_t num_strs = trie.AddStringsFromData(debug_str_data);
   if (num_strs > 0) {
     llvm::SmallString<1024> strtab_data;
     llvm::raw_svector_ostream strtab_strm(strtab_data);
@@ -545,17 +546,29 @@ void SymbolFileDWARF::InitializeObject() {
       puts("Dumping strings fetched from the trie:");
       TrieStrtab strtab(strtab_data.data(), strtab_data.size(),
                         eByteOrderLittle);
-      const auto &str_offsets = trie.GetStringOffsets();
+      // Get the map
+      std::map<uint32_t, uint32_t> offset_map = trie.GetOffsetMap();
       size_t count = 0;
-      for (auto strp : str_offsets) {
-        if (++count > 100)
+      for (auto pair : offset_map) {
+        if (++count > 10)
           break;
-        llvm::Expected<std::string> expected_str = strtab.GetString(strp);
-        if (expected_str)
-          printf("0x%" PRIx64 ": \"%s\"\n", strp, expected_str->c_str());
-        else
+        const uint32_t debug_str_offset = pair.first;
+        const uint32_t trie_offset = pair.second;
+        llvm::Expected<std::string> exp_str = strtab.GetString(trie_offset);
+        lldb::offset_t offset = debug_str_offset;
+        llvm::StringRef debug_str_cstr(debug_str_data.GetCStr(&offset));
+        printf(".debug_str: 0x%8.8" PRIx32 ": \"%s\"\n", debug_str_offset,
+               debug_str_cstr.str().c_str());
+        if (exp_str) {
+          llvm::StringRef trie_str(*exp_str);
+          printf("  trie str: 0x%8.8" PRIx32 ": \"%s\"\n", trie_offset, exp_str->c_str());
+          if (trie_str != debug_str_cstr)
+            printf("error: string encoded in trie doesn't match the original "
+                   "string in the .debug_str section\n");
+        } else{
           printf("error: %s\n",
-                 llvm::toString(expected_str.takeError()).c_str());
+                 llvm::toString(exp_str.takeError()).c_str());
+        }
       }
     }
   }
