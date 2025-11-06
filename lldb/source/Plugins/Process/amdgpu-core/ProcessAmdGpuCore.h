@@ -29,21 +29,24 @@ public:
 
   static llvm::StringRef GetPluginDescriptionStatic();
 
-  static lldb::ProcessSP
-  CreateInstance(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                 const lldb_private::FileSpec *crash_file_path,
-                 bool can_connect);
+  static std::shared_ptr<ProcessElfGpuCore>
+  CreateInstance(std::shared_ptr<ProcessElfCore> cpu_core_process,
+                 lldb::ListenerSP listener_sp,
+                 const lldb_private::FileSpec *crash_file);
 
   // Constructors and Destructors
-  ProcessAmdGpuCore(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
+  ProcessAmdGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
+                    lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
                     const lldb_private::FileSpec &core_file)
-      : ProcessElfGpuCore(target_sp, /*cpu_core_process=*/nullptr, listener_sp,
-                          core_file) {}
+      : ProcessElfGpuCore(target_sp, /*cpu_core_process=*/cpu_core_process,
+                          listener_sp, core_file) {}
 
   ~ProcessAmdGpuCore() override;
 
   bool CanDebug(lldb::TargetSP target_sp,
-                bool plugin_specified_by_name) override;
+                bool plugin_specified_by_name) override {
+    return true;
+  }
 
   // Creating a new process, or attaching to an existing one
   lldb_private::Status DoLoadCore() override;

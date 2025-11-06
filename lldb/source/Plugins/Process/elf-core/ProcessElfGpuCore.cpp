@@ -13,87 +13,17 @@
 
 #include "ProcessElfGpuCore.h"
 
-#include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Target/DynamicLoader.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
-#include "llvm/Support/Threading.h"
 
 using namespace lldb_private;
 using namespace lldb;
 
-lldb::ProcessSP ProcessElfGpuCore::CreateInstance(lldb::TargetSP target_sp,
-                                                  lldb::ListenerSP listener_sp,
-                                                  const FileSpec *crash_file,
-                                                  bool can_connect) {
-  return ProcessElfCore::CreateInstance(target_sp, listener_sp, crash_file,
-                                        can_connect);
-}
-
-lldb::ProcessSP ProcessElfGpuCore::FindGpuPlugin(
-    lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-    const FileSpec *crash_file_path,
-    std::shared_ptr<ProcessElfCore> cpu_core_process) {
-  Log *log = GetLog(LLDBLog::Process);
-
-  ProcessSP process_sp;
-  ProcessCreateInstance create_callback = nullptr;
-
-  // Iterate through all registered GPU Process plugins
-  for (uint32_t idx = 0;
-       (create_callback =
-            PluginManager::GetGpuProcessCreateCallbackAtIndex(idx)) != nullptr;
-       ++idx) {
-
-    llvm::StringRef plugin_name =
-        PluginManager::GetGpuProcessPluginNameAtIndex(idx);
-    LLDB_LOGF(log, "FindGpuPlugin() - Trying GPU plugin: %s",
-              plugin_name.str().c_str());
-
-    // Try to create GPU process with this plugin
-    process_sp =
-        create_callback(target_sp, listener_sp, crash_file_path, false);
-
-    if (process_sp) {
-      // Set the CPU process BEFORE calling CanDebug so it has access to it.
-      // TODO: if we can extend ProcessCreateInstance to accept cpu process
-      // parameter this can be removed.
-      std::shared_ptr<ProcessElfGpuCore> gpu_process_sp =
-          std::static_pointer_cast<ProcessElfGpuCore>(process_sp);
-      if (gpu_process_sp) {
-        gpu_process_sp->SetCpuProcess(cpu_core_process);
-      }
-
-      // Now CanDebug can access the CPU process if needed
-      if (process_sp->CanDebug(target_sp, false)) {
-        LLDB_LOGF(log, "FindGpuPlugin() - Plugin %s accepted core",
-                  plugin_name.str().c_str());
-        break;
-      } else {
-        process_sp.reset();
-      }
-    }
-
-    LLDB_LOGF(log, "FindGpuPlugin() - Plugin %s declined core",
-              plugin_name.str().c_str());
-  }
-
-  return process_sp;
-}
-
-llvm::Expected<std::shared_ptr<ProcessElfGpuCore>>
-ProcessElfGpuCore::LoadGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
-                               const FileSpec &core_file) {
-  Log *log = GetLog(LLDBLog::Process);
-  LLDB_LOGF(
-      log,
-      "ProcessElfGpuCore::LoadGpuCore() - Looking for GPU data in core file");
-
-  lldb_private::Debugger &debugger =
-      cpu_core_process->GetTarget().GetDebugger();
+llvm::Expected<lldb::TargetSP>
+ProcessElfGpuCore::CreateGpuTarget(lldb_private::Debugger &debugger) {
 
   // Create target for GPU
   TargetSP gpu_target_sp;
@@ -112,41 +42,54 @@ ProcessElfGpuCore::LoadGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "failed to create GPU target");
 
-  // Use FindGpuPlugin to discover which GPU plugin can handle this core file
-  // This also automatically sets the CPU process on the GPU process
-  lldb::ProcessSP process_sp = ProcessElfGpuCore::FindGpuPlugin(
-      gpu_target_sp, debugger.GetListener(), &core_file,
-      cpu_core_process);
+  return gpu_target_sp;
+}
 
-  if (!process_sp) {
+llvm::Expected<std::shared_ptr<ProcessElfGpuCore>>
+ProcessElfGpuCore::LoadGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
+                               const FileSpec &core_file) {
+  Log *log = GetLog(LLDBLog::Process);
+  LLDB_LOGF(
+      log,
+      "ProcessElfGpuCore::LoadGpuCore() - Looking for GPU data in core file");
+
+  lldb_private::Debugger &debugger =
+      cpu_core_process->GetTarget().GetDebugger();
+
+  // First, try embedded core plugins (simpler callback mechanism)
+  // These don't require a GPU target upfront
+  std::shared_ptr<ProcessElfGpuCore> gpu_process_sp;
+  for (uint32_t idx = 0; GetEmbeddedCoreCreateCallbackAtIndex(idx) != nullptr;
+       ++idx) {
+    auto create_callback = GetEmbeddedCoreCreateCallbackAtIndex(idx);
+    llvm::StringRef plugin_name = GetEmbeddedCorePluginNameAtIndex(idx);
+
+    LLDB_LOGF(log, "LoadGpuCore() - Trying embedded core plugin: %s",
+              plugin_name.str().c_str());
+
+    gpu_process_sp =
+        create_callback(cpu_core_process, debugger.GetListener(), &core_file);
+
+    if (gpu_process_sp) {
+      LLDB_LOGF(log, "LoadGpuCore() - Embedded plugin %s created process",
+                plugin_name.str().c_str());
+      break;
+    }
+  }
+
+  if (!gpu_process_sp) {
     // No GPU plugin found - this is NOT an error, just means no GPU data
     LLDB_LOGF(log,
               "ProcessElfGpuCore::LoadGpuCore() - No GPU data found in core "
               "(this is OK, core may be CPU-only)");
-    // Clean up the GPU target we created since we won't be using it
-    debugger.GetTargetList().DeleteTarget(gpu_target_sp);
     return nullptr; // Return nullptr to indicate "no GPU" (graceful)
   }
-
-  // Set the process on the GPU target (this is critical!)
-  gpu_target_sp->SetProcessSP(process_sp);
-
-  // Cast to ProcessElfGpuCore
-  std::shared_ptr<ProcessElfGpuCore> gpu_process_sp =
-      std::static_pointer_cast<ProcessElfGpuCore>(process_sp);
-
-  if (!gpu_process_sp)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "GPU process is not a ProcessElfGpuCore");
 
   // Get the plugin name for the GPU target association
   llvm::StringRef plugin_name = gpu_process_sp->GetPluginName();
 
-  // Set up the CPU-GPU connection
-  cpu_core_process->GetTarget().SetGPUPluginTarget(plugin_name, gpu_target_sp);
-
   // Load the GPU core
-  error = gpu_process_sp->LoadCore();
+  Status error = gpu_process_sp->LoadCore();
   if (error.Fail()) {
     // This IS an error - GPU plugin accepted but failed to load
     LLDB_LOGF(log,
@@ -162,4 +105,65 @@ ProcessElfGpuCore::LoadGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
             "with plugin %s",
             plugin_name.str().c_str());
   return gpu_process_sp;
+}
+
+// Plugin management for embedded core plugins
+struct EmbeddedCorePluginInstance {
+  EmbeddedCorePluginInstance(
+      llvm::StringRef name, llvm::StringRef description,
+      ProcessElfGpuCore::ELFEmbeddedCoreCreateInstance create_callback)
+      : name(name), description(description), create_callback(create_callback) {
+  }
+
+  std::string name;
+  std::string description;
+  ProcessElfGpuCore::ELFEmbeddedCoreCreateInstance create_callback;
+};
+
+static std::vector<EmbeddedCorePluginInstance> &
+GetEmbeddedCorePluginInstances() {
+  static std::vector<EmbeddedCorePluginInstance> g_instances;
+  return g_instances;
+}
+
+void ProcessElfGpuCore::RegisterEmbeddedCorePlugin(
+    llvm::StringRef name, llvm::StringRef description,
+    ELFEmbeddedCoreCreateInstance create_callback) {
+  if (create_callback) {
+    auto &instances = GetEmbeddedCorePluginInstances();
+    instances.emplace_back(name, description, create_callback);
+  }
+}
+
+bool ProcessElfGpuCore::UnregisterEmbeddedCorePlugin(
+    ELFEmbeddedCoreCreateInstance create_callback) {
+  if (!create_callback)
+    return false;
+
+  auto &instances = GetEmbeddedCorePluginInstances();
+  auto pos = instances.begin();
+  auto end = instances.end();
+  for (; pos != end; ++pos) {
+    if (pos->create_callback == create_callback) {
+      instances.erase(pos);
+      return true;
+    }
+  }
+  return false;
+}
+
+ProcessElfGpuCore::ELFEmbeddedCoreCreateInstance
+ProcessElfGpuCore::GetEmbeddedCoreCreateCallbackAtIndex(uint32_t idx) {
+  auto &instances = GetEmbeddedCorePluginInstances();
+  if (idx < instances.size())
+    return instances[idx].create_callback;
+  return nullptr;
+}
+
+llvm::StringRef
+ProcessElfGpuCore::GetEmbeddedCorePluginNameAtIndex(uint32_t idx) {
+  auto &instances = GetEmbeddedCorePluginInstances();
+  if (idx < instances.size())
+    return instances[idx].name;
+  return llvm::StringRef();
 }

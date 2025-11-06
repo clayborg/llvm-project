@@ -7,262 +7,121 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file provides the base class for GPU core file debugging plugins.
+/// This file provides the base class for companion/embedded GPU core file
+/// debugging.
 ///
 /// OVERVIEW
 /// --------
-/// This architecture supports debugging GPU cores in two scenarios:
+/// This architecture supports debugging companion cores (e.g., GPU, DSP, or
+/// other accelerators) that are embedded within a primary CPU core file.
 ///
-/// 1. **Hybrid CPU+GPU Core Files** (e.g., AMD ROCm applications)
-///    - A single core file contains both CPU and GPU state
+/// **Use Case: Hybrid CPU+Companion Core Files**
+///    - A single core file contains both CPU and companion device state
 ///    - The CPU process (ProcessElfCore) loads first
-///    - GPU plugin(s) detect and load GPU-specific data from the same file
-///    - GPU processes are linked to the CPU process for unified debugging
+///    - Companion core plugin(s) detect and extract device-specific data
+///    - Companion cores are presented as separate processes for debugging
 ///
-/// 2. **Pure GPU Core Files** (e.g., standalone GPU dumps)
-///    - Core file contains only GPU state (no CPU process)
-///    - Regular process plugin loads as the primary/only process
-///    - No CPU process linking required
-///
-/// SCENARIO 1: GPU-ONLY CORE FILES (Simple Case)
-/// ----------------------------------------------
-///
-/// If your GPU vendor ONLY supports standalone GPU cores (no hybrid support):
+/// CREATING A COMPANION CORE PLUGIN
+/// ---------------------------------
 ///
 /// **Step 1: Create Your Plugin Class**
 ///
 /// \code
-/// class ProcessVendorGpuCore : public ProcessElfGpuCore {
+/// class ProcessVendorCompanionCore : public ProcessElfGpuCore {
 /// public:
-///   static lldb::ProcessSP CreateInstance(lldb::TargetSP target_sp,
-///                                         lldb::ListenerSP listener_sp,
-///                                         const FileSpec *crash_file,
-///                                         bool can_connect);
-///
-///   bool CanDebug(lldb::TargetSP target_sp,
-///                 bool plugin_specified_by_name) override;
+///   // Factory function for embedded core plugin registration
+///   static std::shared_ptr<ProcessElfGpuCore> CreateInstance(
+///       std::shared_ptr<ProcessElfCore> cpu_core_process,
+///       lldb::ListenerSP listener_sp,
+///       const lldb_private::FileSpec *crash_file);
 ///
 ///   llvm::StringRef GetPluginName() override {
-///     return "vendor-gpu-core";
+///     return "vendor-companion-core";
 ///   }
 ///
 /// protected:
-///   Status DoLoadCore() override;
+///   Status LoadCore() override;
 /// };
 /// \endcode
 ///
-/// **Step 2: Register as Regular Process Plugin**
+/// **Step 2: Register as Embedded Core Plugin**
 ///
-/// For GPU-only cores, register with RegisterPlugin() (NOT
-/// RegisterGpuProcessPlugin):
+/// Use RegisterEmbeddedCorePlugin() to register your companion core plugin:
 ///
 /// \code
-/// void ProcessVendorGpuCore::Initialize() {
-///   PluginManager::RegisterPlugin(
+/// void ProcessVendorCompanionCore::Initialize() {
+///   ProcessElfGpuCore::RegisterEmbeddedCorePlugin(
 ///       GetPluginNameStatic(),
 ///       GetPluginDescriptionStatic(),
 ///       CreateInstance);
 /// }
 /// \endcode
 ///
-/// **Step 3: Implement CanDebug()**
+/// **Step 3: Implement CreateInstance()**
+///
+/// Your factory function should check if the CPU core contains your companion
+/// device data. Return nullptr if not found (allows other plugins to try).
 ///
 /// \code
-/// bool ProcessVendorGpuCore::CanDebug(lldb::TargetSP target_sp,
-///                                     bool plugin_specified_by_name) {
-///   // Check if this is a pure GPU core file
-///   if (ObjectFile *obj = /* get object file from target */) {
-///     return IsVendorGpuCore(obj);
-///   }
-///   return false;
+/// std::shared_ptr<ProcessElfGpuCore>
+/// ProcessVendorCompanionCore::CreateInstance(
+///     std::shared_ptr<ProcessElfCore> cpu_core_process,
+///     lldb::ListenerSP listener_sp,
+///     const lldb_private::FileSpec *crash_file) {
+///   
+///   // Check if CPU core file contains vendor-specific companion data
+///   ObjectFile *obj = cpu_core_process->GetTarget().GetExecutableModulePointer()
+///                         ->GetObjectFile();
+///   if (!HasVendorCompanionData(obj))
+///     return nullptr;  // Not our companion core, let other plugins try
+///
+///   // Found our data! Create the companion target and process
+///   lldb::TargetSP target_sp;
+///   Status error = CreateGpuTarget(
+///       cpu_core_process->GetTarget().GetDebugger(), target_sp);
+///   if (error.Fail())
+///     return nullptr;
+///
+///   return std::make_shared<ProcessVendorCompanionCore>(
+///       target_sp, cpu_core_process, listener_sp, *crash_file);
 /// }
 /// \endcode
 ///
 /// **Step 4: Implement DoLoadCore()**
 ///
 /// \code
-/// Status ProcessVendorGpuCore::DoLoadCore() {
-///   Status error = ProcessElfCore::DoLoadCore();
-///   if (error.Fail())
-///     return error;
-///
-///   // Load GPU-specific state (threads, memory, registers, etc.)
-///   error = LoadGpuThreads();
-///   if (error.Fail())
-///     return error;
-///
+/// Status ProcessVendorCompanionCore::DoLoadCore() {
+///   Status error;
+///   ...
 ///   return error;
 /// }
 /// \endcode
 ///
-/// SCENARIO 2: HYBRID CPU+GPU SUPPORT (Advanced Case)
-/// ---------------------------------------------------
+/// HOW IT WORKS: Companion Core Loading Flow
+/// ------------------------------------------
 ///
-/// If your GPU vendor supports BOTH pure GPU cores AND hybrid CPU+GPU cores
-/// (e.g., AMD ROCm), you need to register BOTH plugin types:
-///
-/// **Step 1: Create Your Plugin Class (same as above)**
-///
-/// \code
-/// class ProcessVendorGpuCore : public ProcessElfGpuCore {
-///   // Same as GPU-only scenario
-/// };
-/// \endcode
-///
-/// **Step 2: Register BOTH Plugin Types**
-///
-/// \code
-/// void ProcessVendorGpuCore::Initialize() {
-///   // Register as regular process plugin for GPU-only cores
-///   PluginManager::RegisterPlugin(
-///       GetPluginNameStatic(),
-///       GetPluginDescriptionStatic(),
-///       CreateInstance);
-///
-///   // ALSO register as GPU process plugin for hybrid cores
-///   PluginManager::RegisterGpuProcessPlugin(
-///       GetPluginNameStatic(),
-///       GetPluginDescriptionStatic(),
-///       CreateInstance);
-/// }
-/// \endcode
-///
-/// **Step 3: Implement Smart CanDebug()**
-///
-/// Your CanDebug() must handle BOTH scenarios:
-///
-/// \code
-/// bool ProcessVendorGpuCore::CanDebug(lldb::TargetSP target_sp,
-///                                     bool plugin_specified_by_name) {
-///   // Scenario 1: Called via GPU plugin system (hybrid CPU+GPU)
-///   // GetCpuProcess() will be non-null because FindGpuPlugin() set it
-///   if (auto cpu_process = GetCpuProcess()) {
-///     ObjectFile *obj = cpu_process->GetObjectFile();
-///     // Check if CPU core file has our GPU data
-///     return HasVendorGpuData(obj);
-///   }
-///
-///   // Scenario 2: Called via regular plugin system (pure GPU core)
-///   // This is the FIRST time we're seeing the core file
-///   if (ObjectFile *obj = /* get object file from target */) {
-///     // Check if this is a pure GPU core
-///     if (IsVendorPureGpuCore(obj)) {
-///       // Return TRUE to load as regular process (GPU-only)
-///       return true;
-///     }
-///
-///     // Check if this is actually a hybrid core with CPU data
-///     if (HasCpuData(obj)) {
-///       // Return FALSE - yield to ProcessElfCore
-///       // ProcessElfCore will load the CPU, then call us via GPU plugin
-///       return false;
-///     }
-///   }
-///
-///   return false;
-/// }
-/// \endcode
-///
-/// **Step 4: Implement DoLoadCore() (same as GPU-only)**
-///
-/// \code
-/// Status ProcessVendorGpuCore::DoLoadCore() {
-///   Status error = ProcessElfCore::DoLoadCore();
-///   if (error.Fail())
-///     return error;
-///
-///   // Load GPU-specific state
-///   error = LoadGpuThreads();
-///   return error;
-/// }
-/// \endcode
-///
-/// HOW IT WORKS: Hybrid CPU+GPU Flow
-/// ----------------------------------
-///
-/// When user loads a hybrid core: `target create --core hybrid.core`
+/// When user loads a core with companion data: `target create --core app.core`
 ///
 /// 1. LLDB calls CanDebug() on all regular process plugins
-/// 2. Your CanDebug() sees no CPU process (GetCpuProcess() == nullptr)
-/// 3. Your CanDebug() detects hybrid core with CPU data
-/// 4. Your CanDebug() returns FALSE (yields to ProcessElfCore)
-/// 5. ProcessElfCore::CanDebug() returns TRUE and loads
-/// 6. ProcessElfCore::DoLoadCore() calls ProcessElfGpuCore::LoadGpuCore()
-/// 7. LoadGpuCore() calls FindGpuPlugin() to iterate GPU plugins
-/// 8. FindGpuPlugin() calls your CreateInstance() and sets CPU process
-/// 9. Your CanDebug() is called again, this time GetCpuProcess() != nullptr
-/// 10. Your CanDebug() returns TRUE (accepts GPU data)
-/// 11. LoadGpuCore() registers your GPU process with GPU target
-/// 12. Both CPU and GPU targets/processes exist side-by-side
-///
-/// HOW IT WORKS: Pure GPU Flow
-/// ----------------------------
-///
-/// When user loads a pure GPU core: `target create --core gpu.core`
-///
-/// 1. LLDB calls CanDebug() on all regular process plugins
-/// 2. Your CanDebug() sees no CPU process (GetCpuProcess() == nullptr)
-/// 3. Your CanDebug() detects pure GPU core (no CPU data)
-/// 4. Your CanDebug() returns TRUE
-/// 5. Your plugin loads as the primary/only process
-/// 6. DoLoadCore() loads GPU state
-/// 7. GetCpuProcess() returns nullptr (no CPU coordination)
-///
-/// COMPLETE EXAMPLE: AMD ROCm Plugin (Hybrid Support)
-/// ---------------------------------------------------
-///
-/// \code
-/// // ProcessAmdGpuCore supports BOTH pure GPU and hybrid CPU+GPU
-///
-/// void ProcessAmdGpuCore::Initialize() {
-///   // Register for pure GPU cores
-///   PluginManager::RegisterPlugin(..., CreateInstance);
-///   // Register for hybrid cores
-///   PluginManager::RegisterGpuProcessPlugin(..., CreateInstance);
-/// }
-///
-/// bool ProcessAmdGpuCore::CanDebug(lldb::TargetSP target_sp,
-///                                  bool plugin_specified_by_name) {
-///   // Hybrid scenario: called via GPU plugin
-///   if (auto cpu_process = GetCpuProcess()) {
-///     ObjectFile *obj = cpu_process->GetObjectFile();
-///     return HasAmdGpuNotes(obj);
-///   }
-///
-///   // Pure GPU or hybrid detection
-///   if (ObjectFile *obj = /* from target */) {
-///     // Pure AMD GPU core?
-///     if (IsAmdPureGpuCore(obj))
-///       return true;  // Accept as regular process
-///
-///     // Hybrid core with CPU?
-///     if (HasCpuThreads(obj))
-///       return false; // Yield to ProcessElfCore
-///   }
-///
-///   return false;
-/// }
-///
-/// Status ProcessAmdGpuCore::DoLoadCore() {
-///   Status error = ProcessElfCore::DoLoadCore();
-///   if (error.Fail())
-///     return error;
-///
-///   // Load AMD GPU threads, memory maps, registers
-///   error = LoadAmdGpuState();
-///   return error;
-/// }
-/// \endcode
+/// 2. ProcessElfCore::CanDebug() returns TRUE and loads the CPU core
+/// 3. ProcessElfCore::DoLoadCore() calls ProcessElfGpuCore::LoadGpuCore()
+/// 4. LoadGpuCore() iterates through registered embedded core plugins
+/// 5. Each plugin's CreateInstance() is called with the CPU process
+/// 6. Plugin checks if its companion data exists in the core file
+/// 7. If found, plugin returns a new companion process instance
+/// 8. If not found, plugin returns nullptr (next plugin tries)
+/// 9. LoadGpuCore() calls LoadCore() on the companion process
+/// 10. Companion process extracts its device-specific data
+/// 11. CPU and companion processes coexist for unified debugging
 ///
 /// KEY POINTS
 /// ----------
-/// - Override DoLoadCore()
-/// - GPU-only vendors: Use RegisterPlugin() only
-/// - Hybrid vendors: Use BOTH RegisterPlugin() AND RegisterGpuProcessPlugin()
-/// - CanDebug() logic differs based on GetCpuProcess() != nullptr
-/// - Hybrid cores: yield to ProcessElfCore first, then engage via GPU plugin
-/// - Pure GPU cores: accept directly via regular process plugin
-/// - GetCpuProcess() is nullptr for pure GPU, non-null for hybrid
+/// - Use RegisterEmbeddedCorePlugin() to register companion core plugins
+/// - CreateInstance() checks if companion data exists, returns nullptr if not
+/// - Multiple plugins can coexist; first match wins
+/// - GetCpuProcess() provides access to the CPU core for shared data access
+/// - Companion cores are automatically linked to the CPU process
+/// - DoLoadCore() extracts device-specific state from the CPU core file
 ///
 //===----------------------------------------------------------------------===//
 
@@ -273,12 +132,6 @@
 
 class ProcessElfGpuCore : public lldb_private::PostMortemProcess {
 public:
-  // Constructors and Destructors
-  static lldb::ProcessSP
-  CreateInstance(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                 const lldb_private::FileSpec *crash_file_path,
-                 bool can_connect);
-
   // Constructors and Destructors
   ProcessElfGpuCore(lldb::TargetSP target_sp,
                     std::shared_ptr<ProcessElfCore> cpu_core_process,
@@ -305,22 +158,23 @@ public:
     return 0;
   }
 
-private:
-  /// Find a GPU plugin that can handle the given core file similar to
-  /// Process::FindPlugin().
-  /// Automatically sets the CPU process on the GPU
-  /// process before calling CanDebug(), so CanDebug() has access to the CPU
-  /// process.
-  static lldb::ProcessSP
-  FindGpuPlugin(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                const lldb_private::FileSpec *crash_file_path,
-                std::shared_ptr<ProcessElfCore> cpu_core_process);
+  // Plugin code
+  typedef std::shared_ptr<ProcessElfGpuCore> (*ELFEmbeddedCoreCreateInstance)(
+      std::shared_ptr<ProcessElfCore> cpu_core_process,
+      lldb::ListenerSP listener_sp, const lldb_private::FileSpec *crash_file);
+  static void
+  RegisterEmbeddedCorePlugin(llvm::StringRef name, llvm::StringRef description,
+                             ELFEmbeddedCoreCreateInstance create_instance);
+  static bool
+  UnregisterEmbeddedCorePlugin(ELFEmbeddedCoreCreateInstance create_callback);
+  static ELFEmbeddedCoreCreateInstance
+  GetEmbeddedCoreCreateCallbackAtIndex(uint32_t idx);
+  static llvm::StringRef GetEmbeddedCorePluginNameAtIndex(uint32_t idx);
 
-  /// Set the CPU process for this GPU process. This establishes the link
-  /// between the GPU and CPU processes for merged core file debugging.
-  void SetCpuProcess(std::shared_ptr<ProcessElfCore> cpu_core_process) {
-    m_cpu_core_process = cpu_core_process;
-  }
+protected:
+  /// Create a GPU target for companion core debugging
+  static llvm::Expected<lldb::TargetSP>
+  CreateGpuTarget(lldb_private::Debugger &debugger);
 
 protected:
   std::weak_ptr<ProcessElfCore> m_cpu_core_process;

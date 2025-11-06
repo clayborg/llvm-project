@@ -41,35 +41,47 @@ void ProcessAmdGpuCore::Initialize() {
   llvm::call_once(g_once_flag, []() {
     // Register as GPU Process plugin (for merged CPU+GPU cores)
     // AMD only supports merged mode, not standalone GPU-only cores
-    PluginManager::RegisterGpuProcessPlugin(
+    ProcessElfGpuCore::RegisterEmbeddedCorePlugin(
         GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
   });
 }
 
 void ProcessAmdGpuCore::Terminate() {
-  PluginManager::UnregisterGpuProcessPlugin(ProcessAmdGpuCore::CreateInstance);
+  ProcessElfGpuCore::UnregisterEmbeddedCorePlugin(
+      ProcessAmdGpuCore::CreateInstance);
 }
 
-lldb::ProcessSP ProcessAmdGpuCore::CreateInstance(lldb::TargetSP target_sp,
-                                                  lldb::ListenerSP listener_sp,
-                                                  const FileSpec *crash_file,
-                                                  bool can_connect) {
-  return std::make_shared<ProcessAmdGpuCore>(target_sp, listener_sp,
-                                             *crash_file);
-}
-
-bool ProcessAmdGpuCore::CanDebug(lldb::TargetSP target_sp,
-                                 bool plugin_specified_by_name) {
-  // AMD GPU core plugin only supports merged CPU+GPU cores
-  // This is only called from ProcessElfGpuCore::LoadGpuCore()
-  // Since we're registered as GPU Process plugin, never called from
-  // normal Process::FindPlugin() discovery
-  auto cpu_process = GetCpuProcess();
-  assert(cpu_process && "how can we not have a CPU process in CPU+GPU cores?");
-
+std::shared_ptr<ProcessElfGpuCore> ProcessAmdGpuCore::CreateInstance(
+    std::shared_ptr<ProcessElfCore> cpu_core_process,
+    lldb::ListenerSP listener_sp, const FileSpec *crash_file) {
   // Check if this core file has AMD GPU notes (type 33 =
   // NT_AMDGPU_KFD_CORE_STATE)
-  return cpu_process->GetAmdGpuNote().has_value();
+  if (!cpu_core_process->GetAmdGpuNote().has_value()) {
+    return nullptr;
+  }
+  llvm::Expected<lldb::TargetSP> gpu_target_or_err =
+      CreateGpuTarget(cpu_core_process->GetTarget().GetDebugger());
+  if (!gpu_target_or_err) {
+    LLDB_LOGF(GetLog(LLDBLog::Process),
+              "Failed to create GPU target: %s",
+              llvm::toString(gpu_target_or_err.takeError()).c_str());
+    return nullptr;
+  }
+
+  TargetSP gpu_target_sp = *gpu_target_or_err;
+  auto gpu_process_sp = std::make_shared<ProcessAmdGpuCore>(
+      cpu_core_process, gpu_target_sp, listener_sp, *crash_file);
+  if (!gpu_process_sp) {
+    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to create GPU process");
+    return nullptr;
+  }
+  // Associate the GPU process on the GPU target (this is critical!)
+  gpu_target_sp->SetProcessSP(gpu_process_sp);
+
+  // Set up the CPU-GPU connection
+  cpu_core_process->GetTarget().SetGPUPluginTarget(
+      gpu_process_sp->GetPluginName(), gpu_target_sp);
+  return gpu_process_sp;
 }
 
 // Destructor
@@ -249,10 +261,6 @@ const ArchSpec &ProcessAmdGpuCore::GetArchitecture() {
 
 // Process Control
 Status ProcessAmdGpuCore::DoLoadCore() {
-  // Status error = ProcessElfGpuCore::DoLoadCore();
-  // if (error.Fail())
-  //   return error;
-
   if (!initRocm()) {
     return Status::FromErrorString(
         "Failed to initialize AMD ROCm debug API. Please ensure ROCm is "
