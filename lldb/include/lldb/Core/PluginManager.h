@@ -319,23 +319,6 @@ public:
 
   static llvm::StringRef GetProcessPluginDescriptionAtIndex(uint32_t idx);
 
-  // GPU Process (separate category from CPU Process plugins)
-  // GPU process plugins are only discovered via
-  // ProcessElfGpuCore::LoadGpuCore() and do not participate in normal
-  // Process::FindPlugin() discovery
-  static bool RegisterGpuProcessPlugin(
-      llvm::StringRef name, llvm::StringRef description,
-      ProcessCreateInstance create_callback,
-      DebuggerInitializeCallback debugger_init_callback = nullptr);
-
-  static bool UnregisterGpuProcessPlugin(ProcessCreateInstance create_callback);
-
-  static ProcessCreateInstance GetGpuProcessCreateCallbackAtIndex(uint32_t idx);
-
-  static llvm::StringRef GetGpuProcessPluginNameAtIndex(uint32_t idx);
-
-  static llvm::StringRef GetGpuProcessPluginDescriptionAtIndex(uint32_t idx);
-
   static void AutoCompleteProcessName(llvm::StringRef partial_name,
                                       CompletionRequest &request);
 
@@ -486,7 +469,8 @@ public:
       llvm::StringRef schema,
       DebuggerInitializeCallback debugger_init_callback);
 
-  static bool UnregisterPlugin(TraceCreateInstanceFromBundle create_callback);
+  static bool
+  UnregisterPlugin(TraceCreateInstanceFromBundle create_callback);
 
   static TraceCreateInstanceFromBundle
   GetTraceCreateCallback(llvm::StringRef plugin_name);

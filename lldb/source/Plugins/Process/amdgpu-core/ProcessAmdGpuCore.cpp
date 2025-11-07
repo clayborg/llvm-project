@@ -11,12 +11,14 @@
 
 #include <memory>
 
-#include "Plugins/DynamicLoader/GpuCore-DYLD/DynamicLoaderGpuCoreDYLD.h"
+#include "Plugins/DynamicLoader/ProcessModuleList-DYLD/DynamicLoaderProcessModuleList.h"
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/LoadedModuleInfoList.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Target/DynamicLoader.h"
+#include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
@@ -274,7 +276,7 @@ Status ProcessAmdGpuCore::DoLoadCore() {
 lldb_private::DynamicLoader *ProcessAmdGpuCore::GetDynamicLoader() {
   if (m_dyld_up.get() == nullptr)
     m_dyld_up.reset(DynamicLoader::FindPlugin(
-        this, DynamicLoaderGpuCoreDYLD::GetPluginNameStatic()));
+        this, DynamicLoaderProcessModuleList::GetPluginNameStatic()));
   return m_dyld_up.get();
 }
 
@@ -293,6 +295,11 @@ ProcessAmdGpuCore::GetLoadedModuleList() {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "Failed to get code object list");
   }
+
+  // Ensure code_object_list is always freed
+  auto code_object_cleanup =
+      llvm::make_scope_exit([code_object_list]() { free(code_object_list); });
+
   LoadedModuleInfoList module_list;
   for (size_t i = 0; i < count; ++i) {
     uint64_t l_addr;
@@ -313,10 +320,42 @@ ProcessAmdGpuCore::GetLoadedModuleList() {
     LLDB_LOGF(log, "Code object %zu: %s at address %" PRIu64, i, uri_bytes,
               l_addr);
 
-    LoadedModuleInfoList::LoadedModuleInfo module_info;
-    module_info.set_name(uri_bytes);
-    module_info.set_base(l_addr);
-    module_list.m_list.push_back(module_info);
+    // Use the shared ParseLibraryInfo function
+    AmdGpuCodeObject code_object(uri_bytes, l_addr, true);
+    if (auto lib_info = ParseLibraryInfo(code_object)) {
+      LoadedModuleInfoList::LoadedModuleInfo module_info;
+      module_info.set_name(lib_info->pathname);
+      if (lib_info->load_address.has_value())
+        module_info.set_base(lib_info->load_address.value());
+      if (lib_info->uuid_str.has_value())
+        module_info.set_uuid(lib_info->uuid_str.value());
+      if (lib_info->file_offset.has_value())
+        module_info.set_file_offset(lib_info->file_offset.value());
+      if (lib_info->file_size.has_value())
+        module_info.set_file_size(lib_info->file_size.value());
+      if (lib_info->native_memory_address.has_value())
+        module_info.set_native_memory_address(
+            lib_info->native_memory_address.value());
+      if (lib_info->native_memory_size.has_value())
+        module_info.set_native_memory_size(
+            lib_info->native_memory_size.value());
+
+      module_list.m_list.push_back(module_info);
+
+      LLDB_LOGF(
+          log,
+          "Parsed library: path=%s, load_addr=0x%" PRIx64
+          ", native_memory_address=%" PRIu64 ", native_memory_size=%" PRIu64
+          ", file_offset=%" PRIu64 ", file_size=%" PRIu64,
+          lib_info->pathname.c_str(), lib_info->load_address.value_or(0),
+          lib_info->native_memory_address.value_or(0),
+          lib_info->native_memory_size.value_or(0),
+          lib_info->file_offset.value_or(0), lib_info->file_size.value_or(0));
+    } else {
+      LLDB_LOGF(log, "Failed to parse URI for code object %zu: %s", i,
+                uri_bytes);
+    }
+
     s_dbgapi_callbacks.deallocate_memory(uri_bytes);
   }
   return module_list;

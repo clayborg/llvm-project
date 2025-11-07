@@ -27,6 +27,11 @@ public:
       e_has_base,
       e_has_dynamic,
       e_has_link_map,
+      e_has_uuid,
+      e_has_file_offset,
+      e_has_file_size,
+      e_has_native_memory_address,
+      e_has_native_memory_size,
       e_num
     };
 
@@ -77,6 +82,51 @@ public:
       return m_has[e_has_dynamic];
     }
 
+    void set_uuid(const std::string &uuid) {
+      m_uuid_str = uuid;
+      m_has[e_has_uuid] = true;
+    }
+    bool get_uuid(std::string &out) const {
+      out = m_uuid_str;
+      return m_has[e_has_uuid];
+    }
+
+    void set_file_offset(uint64_t offset) {
+      m_file_offset = offset;
+      m_has[e_has_file_offset] = true;
+    }
+    bool get_file_offset(uint64_t &out) const {
+      out = m_file_offset;
+      return m_has[e_has_file_offset];
+    }
+
+    void set_file_size(uint64_t size) {
+      m_file_size = size;
+      m_has[e_has_file_size] = true;
+    }
+    bool get_file_size(uint64_t &out) const {
+      out = m_file_size;
+      return m_has[e_has_file_size];
+    }
+
+    void set_native_memory_address(lldb::addr_t addr) {
+      m_native_memory_address = addr;
+      m_has[e_has_native_memory_address] = true;
+    }
+    bool get_native_memory_address(lldb::addr_t &out) const {
+      out = m_native_memory_address;
+      return m_has[e_has_native_memory_address];
+    }
+
+    void set_native_memory_size(lldb::addr_t size) {
+      m_native_memory_size = size;
+      m_has[e_has_native_memory_size] = true;
+    }
+    bool get_native_memory_size(lldb::addr_t &out) const {
+      out = m_native_memory_size;
+      return m_has[e_has_native_memory_size];
+    }
+
     bool has_info(e_data_point datum) const {
       assert(datum < e_num);
       return m_has[datum];
@@ -89,7 +139,12 @@ public:
       }
 
       return (m_base == rhs.m_base) && (m_link_map == rhs.m_link_map) &&
-             (m_dynamic == rhs.m_dynamic) && (m_name == rhs.m_name);
+             (m_dynamic == rhs.m_dynamic) && (m_name == rhs.m_name) &&
+             (m_uuid_str == rhs.m_uuid_str) &&
+             (m_file_offset == rhs.m_file_offset) &&
+             (m_file_size == rhs.m_file_size) &&
+             (m_native_memory_address == rhs.m_native_memory_address) &&
+             (m_native_memory_size == rhs.m_native_memory_size);
     }
 
   protected:
@@ -99,6 +154,11 @@ public:
     lldb::addr_t m_base = LLDB_INVALID_ADDRESS;
     bool m_base_is_offset = false;
     lldb::addr_t m_dynamic = LLDB_INVALID_ADDRESS;
+    std::string m_uuid_str;
+    uint64_t m_file_offset = 0;
+    uint64_t m_file_size = 0;
+    lldb::addr_t m_native_memory_address = LLDB_INVALID_ADDRESS;
+    lldb::addr_t m_native_memory_size = 0;
   };
 
   LoadedModuleInfoList() = default;

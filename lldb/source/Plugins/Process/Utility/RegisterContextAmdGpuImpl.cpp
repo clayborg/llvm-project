@@ -132,7 +132,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
           register_class_state == AMD_DBGAPI_REGISTER_CLASS_STATE_MEMBER) {
         register_class_to_register_ids[register_class_ids[i]].push_back(
             register_ids[j]);
-        break;
+        break; // TODO: can a register be in multiple classes?
       }
     }
   }
@@ -232,6 +232,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
         name_it != register_names.end() ? name_it->second : "";
 
     // Check if register name contains indicators of its type
+    // TODO: is this the correct way to do this?
     if (reg_name.find("float") != std::string::npos ||
         reg_name.find("fp") != std::string::npos) {
       reg_info.encoding = eEncodingIEEE754;
@@ -241,6 +242,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
       reg_info.encoding = eEncodingVector;
       reg_info.format = eFormatVectorOfUInt8;
     } else if (reg_info.byte_size > 8) {
+      // TODO: check AMD_DBGAPI_REGISTER_INFO_TYPE and assign encoding/format.
       reg_info.encoding = eEncodingVector;
       reg_info.format = eFormatVectorOfUInt8;
     } else {
@@ -250,7 +252,7 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
     }
 
     // Set register kinds
-    reg_info.kinds[eRegisterKindLLDB] = i;
+    reg_info.kinds[eRegisterKindLLDB] = i; // LLDB register number is the index
     arch_info.lldb_num_to_amd_reg_id[i] = reg_id;
 
     // Set DWARF register number if available
@@ -294,20 +296,20 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
     auto class_id = register_class_ids[i];
     auto name_it = register_class_names.find(class_id);
     if (name_it == register_class_names.end()) {
-      continue;
+      continue; // Skip if no name found
     }
 
     auto regnums_it = register_class_to_lldb_regnums.find(class_id);
     if (regnums_it == register_class_to_lldb_regnums.end() ||
         regnums_it->second.empty()) {
-      continue;
+      continue; // Skip if no registers in this class
     }
 
     // Create a new register set for this class
     RegisterSet reg_set;
     reg_set.name = strdup(name_it->second.c_str());
 
-    // Create short name from the full name
+    // Create short name from the full name (use first word or first few chars)
     std::string short_name = name_it->second;
     size_t space_pos = short_name.find(' ');
     if (space_pos != std::string::npos) {
@@ -322,10 +324,12 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
     // Get register numbers for this class
     const auto &regnums = regnums_it->second;
 
-    // Store register numbers in a static container
+    // Store register numbers in a static container to ensure they live
+    // for the duration of the program
     static std::vector<std::vector<uint32_t>> all_reg_nums;
     all_reg_nums.push_back(regnums);
 
+    // Point the RegisterSet's registers field to the data in our static vector
     reg_set.registers = all_reg_nums.back().data();
     reg_set.num_registers = all_reg_nums.back().size();
     arch_info.register_sets.push_back(reg_set);

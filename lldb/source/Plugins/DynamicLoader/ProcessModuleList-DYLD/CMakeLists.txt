@@ -1,5 +1,5 @@
-add_lldb_library(lldbPluginDynamicLoaderGpuCoreDYLD PLUGIN
-  DynamicLoaderGpuCoreDYLD.cpp
+add_lldb_library(lldbPluginDynamicLoaderProcessModuleList PLUGIN
+  DynamicLoaderProcessModuleList.cpp
 
   LINK_LIBS
     lldbCore
