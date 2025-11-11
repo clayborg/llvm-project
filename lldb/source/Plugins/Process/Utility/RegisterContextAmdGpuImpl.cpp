@@ -28,8 +28,8 @@ std::unordered_map<uint64_t,
 static std::unordered_map<uint64_t, std::once_flag> s_register_info_init_flags;
 
 RegisterContextAmdGpuImpl::RegisterContextAmdGpuImpl(
-    amd_dbgapi_architecture_id_t architecture_id)
-    : m_architecture_id(architecture_id) {
+    amd_dbgapi_architecture_id_t architecture_id, bool is_shadow_thread)
+    : m_architecture_id(architecture_id), m_is_shadow_thread(is_shadow_thread) {
   InitializeRegisterInfo();
   InitializeRegisterData();
 }
@@ -365,8 +365,8 @@ Status RegisterContextAmdGpuImpl::ReadRegister(
 
   auto amd_reg_id = arch_info.lldb_num_to_amd_reg_id.at(lldb_reg_num);
 
-  if (!wave_id) {
-    // No wave ID, return without error (dummy values)
+  if (!wave_id || m_is_shadow_thread) {
+    // No wave ID or shawdown thread, return without error (dummy values)
     return error;
   }
 

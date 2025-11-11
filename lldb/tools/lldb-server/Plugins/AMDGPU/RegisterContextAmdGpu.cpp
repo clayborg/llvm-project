@@ -25,7 +25,8 @@ RegisterContextAmdGpu::RegisterContextAmdGpu(
   amd_dbgapi_architecture_id_t architecture_id =
       thread->GetProcess().m_debugger->m_architecture_id;
 
-  m_impl = std::make_unique<RegisterContextAmdGpuImpl>(architecture_id);
+  m_impl = std::make_unique<RegisterContextAmdGpuImpl>(
+      architecture_id, /*is_shawdow_thread=*/thread->IsShadowThread());
 }
 
 void RegisterContextAmdGpu::InvalidateAllRegisters() {

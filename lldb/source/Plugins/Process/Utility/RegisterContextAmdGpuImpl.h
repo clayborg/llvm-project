@@ -28,7 +28,8 @@ class RegisterValue;
 /// register information and reading/writing register values.
 class RegisterContextAmdGpuImpl {
 public:
-  RegisterContextAmdGpuImpl(amd_dbgapi_architecture_id_t architecture_id);
+  RegisterContextAmdGpuImpl(amd_dbgapi_architecture_id_t architecture_id,
+                            bool is_shadow_thread);
   ~RegisterContextAmdGpuImpl() = default;
 
   /// Invalidate all register values.
@@ -94,6 +95,7 @@ private:
   // AMD dbgapi architecture ID
   amd_dbgapi_architecture_id_t m_architecture_id;
 
+  bool m_is_shadow_thread;
   // Register data and validity tracking (per-instance)
   std::vector<uint8_t> m_register_data;
   std::vector<bool> m_register_valid;
