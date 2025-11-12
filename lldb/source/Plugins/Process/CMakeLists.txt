@@ -26,7 +26,12 @@ add_subdirectory(scripted)
 add_subdirectory(gdb-remote)
 add_subdirectory(Utility)
 add_subdirectory(elf-core)
-add_subdirectory(amdgpu-core)
+
+# Only add amdgpu-core if AMDGPU plugin is enabled
+if(LLDB_ENABLE_AMDGPU_PLUGIN)
+  add_subdirectory(amdgpu-core)
+endif()
+
 add_subdirectory(mach-core)
 add_subdirectory(minidump)
 add_subdirectory(FreeBSDKernel)
