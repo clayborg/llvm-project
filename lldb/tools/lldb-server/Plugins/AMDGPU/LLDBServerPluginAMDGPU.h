@@ -62,8 +62,6 @@ public:
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
 
-  std::optional<LLDBSettings> GetLLDBSettings() override;
-
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
   }
