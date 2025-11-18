@@ -43,29 +43,42 @@ void ProcessAmdGpuCore::Initialize() {
   llvm::call_once(g_once_flag, []() {
     // Register as GPU Process plugin (for merged CPU+GPU cores)
     // AMD only supports merged mode, not standalone GPU-only cores
-    ProcessElfGpuCore::RegisterEmbeddedCorePlugin(
+    ProcessElfEmbeddedCore::RegisterEmbeddedCorePlugin(
         GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
   });
 }
 
 void ProcessAmdGpuCore::Terminate() {
-  ProcessElfGpuCore::UnregisterEmbeddedCorePlugin(
+  ProcessElfEmbeddedCore::UnregisterEmbeddedCorePlugin(
       ProcessAmdGpuCore::CreateInstance);
 }
 
-std::shared_ptr<ProcessElfGpuCore> ProcessAmdGpuCore::CreateInstance(
+static std::optional<CoreNote>
+GetAmdGpuNote(std::shared_ptr<ProcessElfCore> cpu_core_process) {
+  const auto &notes = cpu_core_process->GetCoreNotes();
+  auto it = std::find_if(notes.begin(), notes.end(), [](const CoreNote &note) {
+    return note.info.n_name == "AMDGPU" &&
+           note.info.n_type == llvm::ELF::NT_AMDGPU_KFD_CORE_STATE;
+  });
+
+  if (it != notes.end()) {
+    return *it;
+  }
+  return std::nullopt;
+}
+
+std::shared_ptr<ProcessElfEmbeddedCore> ProcessAmdGpuCore::CreateInstance(
     std::shared_ptr<ProcessElfCore> cpu_core_process,
     lldb::ListenerSP listener_sp, const FileSpec *crash_file) {
   // Check if this core file has AMD GPU notes (type 33 =
   // NT_AMDGPU_KFD_CORE_STATE)
-  if (!cpu_core_process->GetAmdGpuNote().has_value()) {
+  if (!GetAmdGpuNote(cpu_core_process).has_value()) {
     return nullptr;
   }
   llvm::Expected<lldb::TargetSP> gpu_target_or_err =
-      CreateGpuTarget(cpu_core_process->GetTarget().GetDebugger());
+      CreateEmbeddedCoreTarget(cpu_core_process->GetTarget().GetDebugger());
   if (!gpu_target_or_err) {
-    LLDB_LOGF(GetLog(LLDBLog::Process),
-              "Failed to create GPU target: %s",
+    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to create GPU target: %s",
               llvm::toString(gpu_target_or_err.takeError()).c_str());
     return nullptr;
   }
@@ -83,6 +96,15 @@ std::shared_ptr<ProcessElfGpuCore> ProcessAmdGpuCore::CreateInstance(
   // Set up the CPU-GPU connection
   cpu_core_process->GetTarget().SetGPUPluginTarget(
       gpu_process_sp->GetPluginName(), gpu_target_sp);
+
+  // Load the GPU core - report errors to user if loading fails
+  Status error = gpu_process_sp->LoadCore();
+  if (error.Fail()) {
+    cpu_core_process->GetTarget().GetDebugger().ReportError(
+        llvm::formatv("Failed to load AMD GPU core: {0}", error.AsCString()));
+    return nullptr;
+  }
+
   return gpu_process_sp;
 }
 
@@ -120,7 +142,7 @@ static amd_dbgapi_status_t amd_dbgapi_client_process_get_info_callback(
     amd_dbgapi_core_state_data_t *core_state_data =
         (amd_dbgapi_core_state_data_t *)value;
     std::optional<CoreNote> amd_gpu_note_opt =
-        process->GetCpuProcess()->GetAmdGpuNote();
+        GetAmdGpuNote(process->GetCpuProcess());
 
     if (!amd_gpu_note_opt.has_value())
       return AMD_DBGAPI_STATUS_ERROR_NOT_AVAILABLE;

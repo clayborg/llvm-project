@@ -16,10 +16,10 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_ELF_CORE_PROCESSAMDGPUCORE_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_ELF_CORE_PROCESSAMDGPUCORE_H
 
-#include "../elf-core/ProcessElfGpuCore.h"
+#include "../elf-core/ProcessElfEmbeddedCore.h"
 #include <amd-dbgapi/amd-dbgapi.h>
 
-class ProcessAmdGpuCore : public ProcessElfGpuCore {
+class ProcessAmdGpuCore : public ProcessElfEmbeddedCore {
 public:
   static void Initialize();
 
@@ -29,7 +29,7 @@ public:
 
   static llvm::StringRef GetPluginDescriptionStatic();
 
-  static std::shared_ptr<ProcessElfGpuCore>
+  static std::shared_ptr<ProcessElfEmbeddedCore>
   CreateInstance(std::shared_ptr<ProcessElfCore> cpu_core_process,
                  lldb::ListenerSP listener_sp,
                  const lldb_private::FileSpec *crash_file);
@@ -38,8 +38,8 @@ public:
   ProcessAmdGpuCore(std::shared_ptr<ProcessElfCore> cpu_core_process,
                     lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
                     const lldb_private::FileSpec &core_file)
-      : ProcessElfGpuCore(target_sp, /*cpu_core_process=*/cpu_core_process,
-                          listener_sp, core_file) {}
+      : ProcessElfEmbeddedCore(target_sp, /*cpu_core_process=*/cpu_core_process,
+                               listener_sp, core_file) {}
 
   ~ProcessAmdGpuCore() override;
 
@@ -58,8 +58,6 @@ public:
 
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
-
-  std::optional<lldb_private::CoreNote> GetAmdGpuNote();
 
 protected:
   bool DoUpdateThreadList(lldb_private::ThreadList &old_thread_list,
