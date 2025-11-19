@@ -22,7 +22,6 @@ add_lldb_library(lldbPluginProcessAmdGpuCore PLUGIN
   LINK_LIBS
     lldbCore
     lldbTarget
-    lldbPluginDynamicLoaderProcessModuleList
     lldbPluginObjectFileELF
     lldbPluginProcessUtility
     lldbPluginProcessElfCore

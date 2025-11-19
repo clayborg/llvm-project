@@ -11,14 +11,12 @@
 
 #include <memory>
 
-#include "Plugins/DynamicLoader/ProcessModuleList-DYLD/DynamicLoaderProcessModuleList.h"
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "lldb/Core/Debugger.h"
-#include "lldb/Core/LoadedModuleInfoList.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Target/DynamicLoader.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
+#include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
@@ -292,20 +290,20 @@ Status ProcessAmdGpuCore::DoLoadCore() {
   }
 
   GetTarget().SetArchitecture(GetArchitecture());
-  return Status{};
+
+  // Load modules directly
+  llvm::Error module_load_error = LoadModules();
+  return Status::FromError(std::move(module_load_error));
 }
 
 lldb_private::DynamicLoader *ProcessAmdGpuCore::GetDynamicLoader() {
-  if (m_dyld_up.get() == nullptr)
-    m_dyld_up.reset(DynamicLoader::FindPlugin(
-        this, DynamicLoaderProcessModuleList::GetPluginNameStatic()));
-  return m_dyld_up.get();
+  // We load modules directly in DoLoadCore, so no dynamic loader is needed
+  return nullptr;
 }
 
-llvm::Expected<lldb_private::LoadedModuleInfoList>
-ProcessAmdGpuCore::GetLoadedModuleList() {
+llvm::Error ProcessAmdGpuCore::LoadModules() {
   Log *log = GetLog(LLDBLog::Process);
-  LLDB_LOGF(log, "ProcessAmdGpuCore::GetLoadedModuleList()");
+  LLDB_LOGF(log, "ProcessAmdGpuCore::LoadModules()");
 
   amd_dbgapi_code_object_id_t *code_object_list;
   size_t count;
@@ -315,14 +313,17 @@ ProcessAmdGpuCore::GetLoadedModuleList() {
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
     LLDB_LOGF(log, "Failed to get code object list: %d", status);
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "Failed to get code object list");
+                                   "Failed to get code object list: %d",
+                                   status);
   }
 
   // Ensure code_object_list is always freed
   auto code_object_cleanup =
       llvm::make_scope_exit([code_object_list]() { free(code_object_list); });
 
-  LoadedModuleInfoList module_list;
+  Target &target = GetTarget();
+  ModuleList loaded_modules;
+
   for (size_t i = 0; i < count; ++i) {
     uint64_t l_addr;
     char *uri_bytes;
@@ -344,43 +345,96 @@ ProcessAmdGpuCore::GetLoadedModuleList() {
 
     // Use the shared ParseLibraryInfo function
     AmdGpuCodeObject code_object(uri_bytes, l_addr, true);
-    if (auto lib_info = ParseLibraryInfo(code_object)) {
-      LoadedModuleInfoList::LoadedModuleInfo module_info;
-      module_info.set_name(lib_info->pathname);
-      if (lib_info->load_address.has_value())
-        module_info.set_base(lib_info->load_address.value());
-      if (lib_info->uuid_str.has_value())
-        module_info.set_uuid(lib_info->uuid_str.value());
-      if (lib_info->file_offset.has_value())
-        module_info.set_file_offset(lib_info->file_offset.value());
-      if (lib_info->file_size.has_value())
-        module_info.set_file_size(lib_info->file_size.value());
-      if (lib_info->native_memory_address.has_value())
-        module_info.set_native_memory_address(
-            lib_info->native_memory_address.value());
-      if (lib_info->native_memory_size.has_value())
-        module_info.set_native_memory_size(
-            lib_info->native_memory_size.value());
-
-      module_list.m_list.push_back(module_info);
-
-      LLDB_LOGF(
-          log,
-          "Parsed library: path=%s, load_addr=0x%" PRIx64
-          ", native_memory_address=%" PRIu64 ", native_memory_size=%" PRIu64
-          ", file_offset=%" PRIu64 ", file_size=%" PRIu64,
-          lib_info->pathname.c_str(), lib_info->load_address.value_or(0),
-          lib_info->native_memory_address.value_or(0),
-          lib_info->native_memory_size.value_or(0),
-          lib_info->file_offset.value_or(0), lib_info->file_size.value_or(0));
-    } else {
+    std::optional<GPUDynamicLoaderLibraryInfo> lib_info =
+        ParseLibraryInfo(code_object);
+    if (!lib_info) {
       LLDB_LOGF(log, "Failed to parse URI for code object %zu: %s", i,
                 uri_bytes);
+      continue;
+    }
+
+    LLDB_LOGF(log,
+              "Parsed library: path=%s, load_addr=0x%" PRIx64
+              ", native_memory_address=%" PRIu64 ", native_memory_size=%" PRIu64
+              ", file_offset=%" PRIu64 ", file_size=%" PRIu64,
+              lib_info->pathname.c_str(), lib_info->load_address.value_or(0),
+              lib_info->native_memory_address.value_or(0),
+              lib_info->native_memory_size.value_or(0),
+              lib_info->file_offset.value_or(0),
+              lib_info->file_size.value_or(0));
+
+    // Load the module
+    std::shared_ptr<DataBufferHeap> data_sp;
+
+    // Read the object file from memory if available
+    if (lib_info->native_memory_address.has_value() &&
+        lib_info->native_memory_size.has_value()) {
+      lldb::addr_t native_mem_addr = lib_info->native_memory_address.value();
+      lldb::addr_t native_mem_size = lib_info->native_memory_size.value();
+
+      LLDB_LOG(log, "Reading \"{0}\" from memory at {1:x}", lib_info->pathname,
+               native_mem_addr);
+
+      TargetSP cpu_target_sp = target.GetNativeTargetForGPU();
+      if (!cpu_target_sp) {
+        LLDB_LOG(log, "Invalid CPU target for \"{0}\" from memory at {1:x}",
+                 lib_info->pathname, native_mem_addr);
+        continue;
+      }
+      ProcessSP cpu_process_sp = cpu_target_sp->GetProcessSP();
+      if (!cpu_process_sp) {
+        LLDB_LOG(log, "Invalid CPU process for \"{0}\" from memory at {1:x}",
+                 lib_info->pathname, native_mem_addr);
+        continue;
+      }
+      data_sp = std::make_shared<DataBufferHeap>(native_mem_size, 0);
+      Status error;
+      const size_t bytes_read = cpu_process_sp->ReadMemory(
+          native_mem_addr, data_sp->GetBytes(), data_sp->GetByteSize(), error);
+      if (bytes_read != native_mem_size) {
+        LLDB_LOG(log, "Failed to read \"{0}\" from memory at {1:x}: {2}",
+                 lib_info->pathname, native_mem_addr, error);
+        continue;
+      }
+    }
+
+    // Create a module specification from the info we got
+    UUID uuid;
+    ModuleSpec module_spec(FileSpec(lib_info->pathname), uuid, data_sp);
+
+    // Set file offset and size if available
+    if (lib_info->file_offset.has_value())
+      module_spec.SetObjectOffset(lib_info->file_offset.value());
+    if (lib_info->file_size.has_value())
+      module_spec.SetObjectSize(lib_info->file_size.value());
+
+    // Get or create the module from the module spec
+    ModuleSP module_sp = target.GetOrCreateModule(module_spec,
+                                                  /*notify=*/true);
+    if (module_sp) {
+      LLDB_LOG(log, "Created module for \"{0}\": {1:x}", lib_info->pathname,
+               module_sp.get());
+      bool changed = false;
+      LLDB_LOG(log, "Setting load address for module \"{0}\" to {1:x}",
+               lib_info->pathname, lib_info->load_address.value_or(0));
+
+      if (lib_info->load_address.has_value()) {
+        module_sp->SetLoadAddress(target, lib_info->load_address.value(),
+                                  /*value_is_offset=*/true, changed);
+        if (changed) {
+          LLDB_LOG(log, "Module \"{0}\" was loaded", lib_info->pathname);
+          loaded_modules.AppendIfNeeded(module_sp);
+        }
+      }
     }
 
     s_dbgapi_callbacks.deallocate_memory(uri_bytes);
   }
-  return module_list;
+
+  // Notify the target that modules have been loaded
+  target.ModulesDidLoad(loaded_modules);
+
+  return llvm::Error::success();
 }
 
 bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,

@@ -53,8 +53,7 @@ public:
 
   lldb_private::DynamicLoader *GetDynamicLoader() override;
 
-  llvm::Expected<lldb_private::LoadedModuleInfoList>
-  GetLoadedModuleList() override;
+  llvm::Error LoadModules() override;
 
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
