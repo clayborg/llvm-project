@@ -32,6 +32,7 @@
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/Process/elf-core/RegisterUtilities.h"
 #include "ProcessElfCore.h"
+#include "ProcessElfEmbeddedCore.h"
 #include "ThreadElfCore.h"
 
 using namespace lldb_private;
@@ -272,6 +273,10 @@ Status ProcessElfCore::DoLoadCore() {
       }
     }
   }
+  ProcessElfEmbeddedCore::LoadEmbeddedCoreFiles(
+      std::static_pointer_cast<ProcessElfCore>(shared_from_this()),
+      GetCoreFile());
+
   return error;
 }
 
@@ -1118,4 +1123,32 @@ bool ProcessElfCore::GetProcessInfo(ProcessInstanceInfo &info) {
                            add_exe_file_as_first_arg);
   }
   return true;
+}
+
+std::vector<CoreNote> ProcessElfCore::GetCoreNotes() {
+  std::vector<CoreNote> notes;
+  ObjectFileELF *core = (ObjectFileELF *)(m_core_module_sp->GetObjectFile());
+  if (core == nullptr)
+    return notes;
+  llvm::ArrayRef<elf::ELFProgramHeader> program_headers =
+      core->ProgramHeaders();
+  if (program_headers.size() == 0)
+    return notes;
+
+  for (const elf::ELFProgramHeader &H : program_headers) {
+    if (H.p_type == llvm::ELF::PT_NOTE) {
+      DataExtractor segment_data = core->GetSegmentData(H);
+      llvm::Expected<std::vector<CoreNote>> notes_or_error =
+          parseSegment(segment_data);
+      if (!notes_or_error) {
+        llvm::consumeError(notes_or_error.takeError());
+        continue;
+      }
+      // Append all notes from this segment to our collection
+      for (auto &note : *notes_or_error) {
+        notes.push_back(std::move(note));
+      }
+    }
+  }
+  return notes;
 }

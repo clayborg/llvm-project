@@ -1,7 +1,8 @@
 # TODO: Clean up this directory and its dependencies
 set_property(DIRECTORY PROPERTY LLDB_PLUGIN_KIND ProcessUtility)
 
-add_lldb_library(lldbPluginProcessUtility
+# Set up source files list
+set(PROCESS_UTILITY_SOURCES
   AuxVector.cpp
   FreeBSDSignals.cpp
   GDBRemoteSignals.cpp
@@ -63,18 +64,43 @@ add_lldb_library(lldbPluginProcessUtility
   RegisterInfoPOSIX_riscv64.cpp
   StopInfoMachException.cpp
   ThreadMemory.cpp
+)
 
+# Set up link libraries
+set(UTILITY_LINK_LIBS
+  lldbBreakpoint
+  lldbCore
+  lldbDataFormatters
+  lldbExpression
+  lldbHost
+  lldbSymbol
+  lldbTarget
+  lldbUtility
+  lldbValueObject
+)
+
+# Conditionally add AMD GPU support if enabled
+if(LLDB_ENABLE_AMDGPU_PLUGIN)
+  if(NOT DEFINED ROCM_PATH)
+    set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to ROCm installation")
+  endif()
+  set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
+  find_package(amd-dbgapi REQUIRED CONFIG)
+  include_directories(${ROCM_PATH}/include)
+  
+  # Add AMD GPU source file to the build
+  list(APPEND PROCESS_UTILITY_SOURCES RegisterContextAmdGpuImpl.cpp)
+  list(APPEND UTILITY_LINK_LIBS amd-dbgapi)
+endif()
+
+add_lldb_library(lldbPluginProcessUtility
+  ${PROCESS_UTILITY_SOURCES}
+
+  PARTIAL_SOURCES_INTENDED
+  
   LINK_COMPONENTS
     Support
     TargetParser
   LINK_LIBS
-    lldbBreakpoint
-    lldbCore
-    lldbDataFormatters
-    lldbExpression
-    lldbHost
-    lldbSymbol
-    lldbTarget
-    lldbUtility
-    lldbValueObject
+    ${UTILITY_LINK_LIBS}
   )

@@ -1,4 +1,4 @@
-//===-- RegisterContextAMDGPU.h --------------------------------*- C++ -*-===//
+//===-- RegisterContextAmdGpu.h --------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -9,16 +9,17 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_REGISTERCONTEXTAMDGPU_H
 #define LLDB_TOOLS_LLDB_SERVER_REGISTERCONTEXTAMDGPU_H
 
-// #include "Plugins/Process/Utility/NativeRegisterContextRegisterInfo.h"
+#include "Plugins/Process/Utility/RegisterContextAmdGpuImpl.h"
 #include "lldb/Host/common/NativeRegisterContext.h"
 #include "lldb/lldb-forward.h"
+#include <memory>
 
 namespace lldb_private {
 namespace lldb_server {
 
-class RegisterContextAMDGPU : public NativeRegisterContext {
+class RegisterContextAmdGpu : public NativeRegisterContext {
 public:
-  RegisterContextAMDGPU(NativeThreadProtocol &native_thread);
+  RegisterContextAmdGpu(NativeThreadProtocol &native_thread);
 
   uint32_t GetRegisterCount() const override;
 
@@ -46,17 +47,7 @@ public:
   void InvalidateAllRegisters();
 
 private:
-  bool InitRegisterInfos();
-  void InitRegisters();
-  
-  Status ReadRegs();
-  Status ReadReg(const RegisterInfo *reg_info);
-
-  // All AMD GPU registers are contained in this buffer.
-  struct {
-    std::vector<uint8_t> data;
-  } m_regs;
-  std::vector<bool> m_regs_valid;
+  std::unique_ptr<RegisterContextAmdGpuImpl> m_impl;
 };
 
 } // namespace lldb_server

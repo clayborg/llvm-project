@@ -306,6 +306,11 @@ const lldb::ProcessSP &Target::CreateProcess(ListenerSP listener_sp,
 
 const lldb::ProcessSP &Target::GetProcessSP() const { return m_process_sp; }
 
+void Target::SetProcessSP(lldb::ProcessSP process_sp) {
+  DeleteCurrentProcess();
+  m_process_sp = std::move(process_sp);
+}
+
 lldb::REPLSP Target::GetREPL(Status &err, lldb::LanguageType language,
                              const char *repl_options, bool can_create) {
   if (language == eLanguageTypeUnknown)

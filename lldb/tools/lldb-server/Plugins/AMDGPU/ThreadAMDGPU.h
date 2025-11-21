@@ -10,7 +10,7 @@
 #define LLDB_TOOLS_LLDB_SERVER_THREADAMDGPU_H
 
 #include "Plugins/Utils/Utils.h"
-#include "RegisterContextAMDGPU.h"
+#include "RegisterContextAmdGpu.h"
 #include "WaveAMDGPU.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-private-forward.h"
@@ -51,7 +51,7 @@ public:
     m_wave->SetStopReason(reason, signo);
   }
 
-  RegisterContextAMDGPU &GetRegisterContext() override {
+  RegisterContextAmdGpu &GetRegisterContext() override {
     return m_reg_context;
   }
 
@@ -79,7 +79,7 @@ public:
 private:
   // Member Variables
   lldb::StateType m_state;
-  RegisterContextAMDGPU m_reg_context;
+  RegisterContextAmdGpu m_reg_context;
   std::shared_ptr<WaveAMDGPU> m_wave;
 };
 

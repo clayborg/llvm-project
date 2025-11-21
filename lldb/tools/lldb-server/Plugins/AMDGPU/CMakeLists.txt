@@ -7,7 +7,7 @@ include_directories(${ROCM_PATH}/include)
 add_lldb_library(lldbServerPluginAMDGPU
   LLDBServerPluginAMDGPU.cpp
   ProcessAMDGPU.cpp
-  RegisterContextAMDGPU.cpp
+  RegisterContextAmdGpu.cpp
   ThreadAMDGPU.cpp
   WaveAMDGPU.cpp
 

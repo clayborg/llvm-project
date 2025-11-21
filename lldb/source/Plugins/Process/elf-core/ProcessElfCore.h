@@ -97,6 +97,8 @@ public:
 
   bool GetProcessInfo(lldb_private::ProcessInstanceInfo &info) override;
 
+  std::vector<lldb_private::CoreNote> GetCoreNotes();
+
 protected:
   void Clear();
 

@@ -1129,6 +1129,33 @@ class LinuxCoreTestCase(TestBase):
 
         self.dbg.DeleteTarget(target)
 
+    @skipIfLLVMTargetMissing("X86")
+    def test_amd_gpu_plugin_no_activation_on_cpu_core(self):
+        """Test that AMD GPU plugin doesn't activate on regular CPU-only cores"""
+        # This test validates that the AMD GPU core plugin doesn't incorrectly
+        # create GPU targets when loading CPU-only core files
+        target = self.dbg.CreateTarget(None)
+        process = target.LoadCore("linux-x86_64.core")
+        self.assertTrue(process, PROCESS_IS_VALID)
+
+        # Should only have one target (CPU), no GPU target should be created
+        num_targets = self.dbg.GetNumTargets()
+        self.assertEqual(
+            num_targets,
+            1,
+            "Should only have CPU target, not GPU target for regular CPU core",
+        )
+
+        # Verify the single target is the CPU target
+        target = self.dbg.GetTargetAtIndex(0)
+        triple = target.GetTriple()
+        self.assertIn("x86_64", triple, f"Target should be x86_64, got: {triple}")
+        self.assertNotIn(
+            "amdgcn",
+            triple,
+            "Should not have AMD GPU target for CPU-only core without GPU notes",
+        )
+
 
 def replace_path(binary, replace_from, replace_to):
     src = replace_from.encode()
