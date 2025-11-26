@@ -107,7 +107,7 @@ void WaveAMDGPU::AddThreadsToList(
   for (size_t i = 0; i < *num_lanes; ++i) {
     lldb::tid_t tid = tid_base + i;
     threads.push_back(
-        std::make_unique<ThreadAMDGPU>(process, tid, shared_from_this()));
+        std::make_unique<ThreadAMDGPU>(process, tid, shared_from_this(), i));
   }
 }
 

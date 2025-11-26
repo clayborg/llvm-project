@@ -30,7 +30,7 @@ class ThreadAMDGPU : public NativeThreadProtocol {
 
 public:
   ThreadAMDGPU(ProcessAMDGPU &process, lldb::tid_t tid,
-               std::shared_ptr<WaveAMDGPU> wave);
+               std::shared_ptr<WaveAMDGPU> wave, amd_dbgapi_lane_id_t lane_id);
 
   static std::unique_ptr<ThreadAMDGPU>
   CreateGPUShadowThread(ProcessAMDGPU &process);
@@ -69,6 +69,7 @@ public:
   const ProcessAMDGPU &GetProcess() const;
 
   amd_dbgapi_wave_id_t GetWaveID() const { return m_wave->GetWaveID(); }
+  amd_dbgapi_lane_id_t GetLaneID() const { return m_lane_id; }
 
   WaveAMDGPU *GetWave() const { return m_wave.get(); }
 
@@ -81,6 +82,7 @@ private:
   lldb::StateType m_state;
   RegisterContextAmdGpu m_reg_context;
   std::shared_ptr<WaveAMDGPU> m_wave;
+  amd_dbgapi_lane_id_t m_lane_id;
 };
 
 using AMDGPUThreadRange = GPUThreadRange<ThreadAMDGPU>;

@@ -15,14 +15,16 @@ using namespace lldb_private;
 using namespace lldb_server;
 
 ThreadAMDGPU::ThreadAMDGPU(ProcessAMDGPU &process, lldb::tid_t tid,
-                           std::shared_ptr<WaveAMDGPU> wave)
-    : NativeThreadProtocol(process, tid), m_reg_context(*this), m_wave(wave) {}
+                           std::shared_ptr<WaveAMDGPU> wave,
+                           amd_dbgapi_lane_id_t lane_id)
+    : NativeThreadProtocol(process, tid), m_reg_context(*this), m_wave(wave),
+      m_lane_id(lane_id) {}
 
 std::unique_ptr<ThreadAMDGPU>
 ThreadAMDGPU::CreateGPUShadowThread(ProcessAMDGPU &process) {
   auto shadow_thread = std::make_unique<ThreadAMDGPU>(
       process, AMDGPU_SHADOW_THREAD_ID,
-      std::make_shared<WaveAMDGPU>(AMD_DBGAPI_WAVE_NONE));
+      std::make_shared<WaveAMDGPU>(AMD_DBGAPI_WAVE_NONE), AMD_DBGAPI_LANE_NONE);
   shadow_thread->SetStopReason(lldb::eStopReasonSignal, SIGTRAP);
   return shadow_thread;
 }

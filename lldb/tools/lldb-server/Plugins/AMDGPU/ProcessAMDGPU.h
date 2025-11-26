@@ -63,6 +63,12 @@ public:
   Status WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                      size_t &bytes_written) override;
 
+  std::vector<AddressSpaceInfo> GetAddressSpaces() override;
+
+  Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
+                             NativeThreadProtocol *thread, void *buf,
+                             size_t size, size_t &bytes_readn) override;
+
   lldb::addr_t GetSharedLibraryInfoAddress() override;
 
   size_t UpdateThreads() override;
@@ -148,7 +154,8 @@ public:
          NativeProcessProtocol::NativeDelegate &native_delegate) override;
 
   NativeProcessProtocol::Extension GetSupportedExtensions() const override {
-    return NativeProcessProtocol::Extension::lldb_settings;
+    return NativeProcessProtocol::Extension::lldb_settings |
+           NativeProcessProtocol::Extension::address_spaces;
   }
 
   llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
