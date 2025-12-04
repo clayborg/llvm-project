@@ -149,9 +149,10 @@ bool ValueObjectChild::UpdateValue() {
       case Value::ValueType::FileAddress:
       case Value::ValueType::HostAddress: {
         lldb::addr_t addr = m_value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
+        std::optional<uint64_t> address_space = parent->GetValue().GetAddressSpaceId();
         if (addr == LLDB_INVALID_ADDRESS) {
           m_error = Status::FromErrorString("parent address is invalid.");
-        } else if (addr == 0) {
+        } else if (addr == 0 && !address_space) {
           m_error = Status::FromErrorString("parent is NULL");
         } else {
           // If a bitfield doesn't fit into the child_byte_size'd window at
@@ -181,6 +182,8 @@ bool ValueObjectChild::UpdateValue() {
           // Set this object's scalar value to the address of its value by
           // adding its byte offset to the parent address
           m_value.GetScalar() += m_byte_offset;
+          if (address_space)
+            m_value.SetAddressSpaceId(*address_space);
         }
       } break;
 

@@ -90,14 +90,17 @@ private:
 /// Stores predefined memory contents indexed by {address, size} pairs.
 class MockMemory {
 public:
+  static constexpr uint64_t DEFAULT_ADDRESS_SPACE = 0;
+
   /// Represents a memory read request with an address and size.
   /// Used as a key in the memory map to look up predefined test data.
   struct Request {
-    lldb::addr_t addr;
-    size_t size;
+    lldb::addr_t addr = 0;
+    size_t size = 0;
+    uint64_t space = DEFAULT_ADDRESS_SPACE;
 
     bool operator==(const Request &other) const {
-      return addr == other.addr && size == other.size;
+      return addr == other.addr && size == other.size && space == other.space;
     }
 
     /// Hash function for Request to enable its use in unordered_map.
@@ -105,7 +108,8 @@ public:
       size_t operator()(const Request &req) const {
         size_t h1 = std::hash<lldb::addr_t>{}(req.addr);
         size_t h2 = std::hash<size_t>{}(req.size);
-        return h1 ^ (h2 << 1);
+        size_t h3 = std::hash<uint64_t>{}(req.space);
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
       }
     };
   };
@@ -119,15 +123,19 @@ public:
     }
   }
 
-  llvm::Expected<std::vector<uint8_t>> ReadMemory(lldb::addr_t addr,
-                                                  size_t size) {
-    if (!m_memory.count({addr, size})) {
+  llvm::Expected<std::vector<uint8_t>>
+  ReadMemory(lldb::addr_t addr, size_t size,
+             std::optional<uint64_t> address_space = {}) {
+    uint64_t space = address_space ? *address_space : DEFAULT_ADDRESS_SPACE;
+    Request request{addr, size, space};
+    if (!m_memory.count(request)) {
       return llvm::createStringError(
           llvm::inconvertibleErrorCode(),
-          "MockMemory::ReadMemory {address=0x%" PRIx64 ", size=%zu} not found",
-          addr, size);
+          "MockMemory::ReadMemory {address=0x%" PRIx64
+          ", size=%zu, space=%" PRIu64 "} not found",
+          addr, size, space);
     }
-    return m_memory[{addr, size}];
+    return m_memory[request];
   }
 
 private:
@@ -145,10 +153,13 @@ struct MockProcess : Process {
       : Process(target_sp, listener_sp), m_memory(std::move(memory)) {
     m_public_state.SetValue(lldb::eStateRunning);
     m_private_state.SetValue(lldb::eStateRunning);
+
+    m_address_spaces.push_back({"AS-1", 1, false});
+    m_address_spaces.push_back({"AS-5", 5, true});
   }
-  size_t DoReadMemory(addr_t vm_addr, void *buf, size_t size,
-                      Status &error) override {
-    auto expected_memory = m_memory.ReadMemory(vm_addr, size);
+  size_t DoReadMemoryImpl(addr_t vm_addr, std::optional<uint64_t> address_space,
+                          void *buf, size_t size, Status &error) {
+    auto expected_memory = m_memory.ReadMemory(vm_addr, size, address_space);
     if (!expected_memory) {
       error = Status::FromError(expected_memory.takeError());
       return 0;
@@ -156,6 +167,16 @@ struct MockProcess : Process {
     assert(expected_memory->size() == size);
     std::memcpy(buf, expected_memory->data(), expected_memory->size());
     return size;
+  }
+  size_t DoReadMemory(addr_t vm_addr, void *buf, size_t size,
+                      Status &error) override {
+    return DoReadMemoryImpl(vm_addr, {}, buf, size, error);
+  }
+  size_t DoReadMemory(const AddressSpec &addr_spec,
+                      const AddressSpaceInfo &info, void *buf, size_t size,
+                      Status &error) override {
+    return DoReadMemoryImpl(addr_spec.GetValue(), addr_spec.GetSpaceId(), buf,
+                            size, error);
   }
   size_t ReadMemory(addr_t addr, void *buf, size_t size,
                     Status &status) override {
@@ -1390,4 +1411,45 @@ TEST_F(DWARFExpressionMockProcessTest, get_value_as_data) {
   // The value data should be the bytes at the load address.
   EXPECT_THAT(GetValueAsData(*value, &exe_ctx, 4),
               testing::ContainerEq(memory[{8, 4}]));
+}
+
+TEST_F(DWARFExpressionMockProcessTest, DW_OP_LLVM_form_aspace_address) {
+  TestContext test_ctx;
+  MockMemory::Map memory = {
+      {{0x8, 4, 5}, {0xa, 0xb, 0xc, 0xd}},
+  };
+  ASSERT_TRUE(CreateTestContext(&test_ctx, "i386-pc-linux", {}, memory));
+  ExecutionContext exe_ctx(test_ctx.process_sp);
+  MockDwarfDelegate dwarf5 = MockDwarfDelegate::Dwarf5();
+
+  auto Eval = [&](llvm::ArrayRef<uint8_t> expr_data) {
+    return Evaluate(expr_data, {}, &dwarf5, &exe_ctx);
+  };
+
+  // Evaluate the dwarf expression to load address 8 in address space 5.
+  llvm::Expected<Value> value = Eval({DW_OP_lit8, DW_OP_lit5, DW_OP_LLVM_user,
+                                      DW_OP_LLVM_form_aspace_address});
+  ASSERT_THAT_EXPECTED(value, ExpectLoadAddress(8));
+  ASSERT_TRUE(value->GetAddressSpaceId().has_value());
+  EXPECT_EQ(value->GetAddressSpaceId().value(), (uint64_t)5);
+
+  // The value data should be the bytes at the load address.
+  EXPECT_THAT(GetValueAsData(*value, &exe_ctx, 4),
+              testing::ContainerEq(memory[{8, 4, 5}]));
+}
+
+TEST_F(DWARFExpressionMockProcessTest, DW_OP_LLVM_offset) {
+  TestContext test_ctx;
+  ASSERT_TRUE(CreateTestContext(&test_ctx, "i386-pc-linux"));
+  ExecutionContext exe_ctx(test_ctx.process_sp);
+  MockDwarfDelegate dwarf5 = MockDwarfDelegate::Dwarf5();
+
+  auto Eval = [&](llvm::ArrayRef<uint8_t> expr_data) {
+    return Evaluate(expr_data, {}, &dwarf5, &exe_ctx);
+  };
+
+  // Create a load address that is 5 bytes from the base address 8.
+  llvm::Expected<Value> value =
+      Eval({DW_OP_lit8, DW_OP_lit5, DW_OP_LLVM_user, DW_OP_LLVM_offset});
+  ASSERT_THAT_EXPECTED(value, ExpectLoadAddress(13));
 }

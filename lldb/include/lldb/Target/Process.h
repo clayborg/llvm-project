@@ -379,7 +379,7 @@ public:
   /// This method should be used by clients that parse debug info or runtime
   /// information that contains the address space integer identifier in the
   /// serialized format.
-  explicit AddressSpec(lldb::addr_t load_addr, uint64_t addr_space_id,
+  explicit AddressSpec(lldb::addr_t load_addr, std::optional<uint64_t> addr_space_id,
                        lldb::ThreadSP thread_sp = {}) : 
       m_value(load_addr), 
       m_addr_space_id(addr_space_id), 

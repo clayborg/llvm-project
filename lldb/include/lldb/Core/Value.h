@@ -149,6 +149,12 @@ public:
 
   static ValueType GetValueTypeFromAddressType(AddressType address_type);
 
+  void SetAddressSpaceId(uint64_t address_space_id) {
+    m_address_space_id = address_space_id;
+  }
+
+  std::optional<uint64_t> GetAddressSpaceId() { return m_address_space_id; }
+
 protected:
   /// Represents a value, which can be a scalar, a load address, a file address,
   /// or a host address.
@@ -182,6 +188,7 @@ protected:
   ValueType m_value_type = ValueType::Scalar;
   ContextType m_context_type = ContextType::Invalid;
   DataBufferHeap m_data_buffer;
+  std::optional<uint64_t> m_address_space_id;
 };
 
 class ValueList {
