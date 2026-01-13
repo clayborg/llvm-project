@@ -81,6 +81,8 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
   m_gdb_server.reset(new GDBRemoteCommunicationServerLLGS(
       main_loop, *m_process_manager_up, "nvgpu.server"));
 
+  m_gdb_server->SetPlugin(this);
+
   // During initialization, there might be no cubins loaded, so we don't have
   // anything tangible to use as the identifier or file for the GPU process.
   // Thus, we create a fake process and we pretend we just launched it.
