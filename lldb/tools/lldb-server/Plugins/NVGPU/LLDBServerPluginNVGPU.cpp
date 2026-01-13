@@ -30,9 +30,6 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
-/// Internal identifier for the gpu initialization breakpoint.
-static constexpr uint32_t kGpuInitializationBreakpoint = 1;
-
 /// Helper function to set environment variables with logging.
 ///
 /// Checks if the environment variable already exists and either uses the
@@ -228,7 +225,7 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
                         ->setNotifyNewEventCallback31(
                             [](void *data) {
                               Log *log = GetLog(GDBRLog::Plugin);
-                              LLDB_LOG(
+                              LLDB_LOGV(
                                   log,
                                   "CUDA Debugger API event notifier callback");
                               static_cast<LLDBServerPluginNVGPU *>(data)
@@ -268,7 +265,7 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
   CUDBGEvent event;
   CUDBGResult res;
   CUDADebuggerAPI &cuda_api = *m_cuda_api;
-  LLDB_LOG(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
+  LLDB_LOGV(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
 
   res = cuda_api->getNextEvent(CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC,
                                &event);
@@ -382,7 +379,7 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
     break;
   }
 
-  LLDB_LOG(log, "Done servicing CUDA API events");
+  LLDB_LOGV(log, "Done servicing CUDA API events");
 
   // Handled all pending events. Acknowledge them.
   res = cuda_api->acknowledgeSyncEvents();
