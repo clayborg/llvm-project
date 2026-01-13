@@ -57,17 +57,18 @@ const ProcessNVGPU &ThreadNVGPU::GetGPU() const {
 }
 
 void ThreadNVGPU::SetStoppedBySignal(int signo) {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStoppedBySignal()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStoppedBySignal()");
   SetStopped(lldb::eStopReasonSignal, /*description=*/std::nullopt, signo);
 }
 
 void ThreadNVGPU::SetStoppedByDynamicLoader() {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStoppedByDynamicLoader()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin),
+            "ThreadNVGPU::SetStoppedByDynamicLoader()");
   SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU Thread Stopped by Dynamic Loader");
 }
 
 void ThreadNVGPU::SetStoppedByException(const ExceptionInfo &exception_info) {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStoppedByException()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStoppedByException()");
   SetStopped(lldb::eStopReasonException,
              llvm::formatv("CUDA Exception({}): {}", exception_info.exception,
                            exception_info.ToString())
@@ -75,8 +76,8 @@ void ThreadNVGPU::SetStoppedByException(const ExceptionInfo &exception_info) {
 }
 
 void ThreadNVGPU::SetStoppedByInitialization() {
-  LLDB_LOG(GetLog(GDBRLog::Plugin),
-           "ThreadNVGPU::SetStoppedByInitialization()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin),
+            "ThreadNVGPU::SetStoppedByInitialization()");
   SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU is initializing");
 }
 
@@ -87,7 +88,7 @@ void ThreadNVGPU::SetStoppedByBreakpoint() {
 void ThreadNVGPU::SetStopped(lldb::StopReason reason,
                              std::optional<llvm::StringRef> description,
                              uint32_t signo) {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStopped()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin), "ThreadNVGPU::SetStopped()");
 
   m_state = lldb::eStateStopped;
   if (description)
@@ -100,6 +101,6 @@ void ThreadNVGPU::SetStopped(lldb::StopReason reason,
 }
 
 void ThreadNVGPU::SetRunning() {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "ThreadNVGPU::Resume()");
+  LLDB_LOGV(GetLog(GDBRLog::Plugin), "ThreadNVGPU::Resume()");
   m_state = lldb::eStateRunning;
 }

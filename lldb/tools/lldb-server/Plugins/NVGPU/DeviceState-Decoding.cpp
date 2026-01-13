@@ -175,10 +175,10 @@ size_t WarpState::DecodeWarpInfoBuffer(
   uint64_t flat_thread_idx =
       CalculateFlatThreadIdx(warp_info.baseThreadIdx, grid_info.blockDim);
 
-  LLDB_LOG(log, "{}Updated threads mask: {:x}", log_indent,
-           thread_update_mask.GetStorage());
+  LLDB_LOGV(log, "{}Updated threads mask: {:x}", log_indent,
+            thread_update_mask.GetStorage());
   if (thread_update_mask.AreAllBitsSet())
-    LLDB_LOG(log, "{}All threads will be updated", log_indent);
+    LLDB_LOGV(log, "{}All threads will be updated", log_indent);
 
   StaticBitset<uint32_t> valid_threads(warp_info.validLanes);
   StaticBitset<uint32_t> active_threads(warp_info.activeLanes);
@@ -237,8 +237,8 @@ size_t SMState::DecodeSMInfoBuffer(
     buffer_offset += device_info_sizes.smInfoAttributeSizes[flag];
   }
 
-  LLDB_LOG(log, "{}Updated warps mask: {:x}", log_indent,
-           updated_warps_mask.GetStorage());
+  LLDB_LOGV(log, "{}Updated warps mask: {:x}", log_indent,
+            updated_warps_mask.GetStorage());
 
   StaticBitset<uint64_t> valid_warps(sm_info.warpValidMask);
   StaticBitset<uint64_t> warps_at_breakpoint(sm_info.warpBrokenMask);
@@ -251,7 +251,7 @@ size_t SMState::DecodeSMInfoBuffer(
 
     bool is_updated = updated_warps_mask[warp_id];
 
-    LLDB_LOG(log, "{}Warp {} is updated: {}", log_indent, warp_id, is_updated);
+    LLDB_LOGV(log, "{}Warp {} is updated: {}", log_indent, warp_id, is_updated);
     if (is_updated)
       buffer_offset += m_warps[warp_id].DecodeWarpInfoBuffer(
           buffer + buffer_offset, device_info, device_info_sizes, get_grid_info,
@@ -285,16 +285,16 @@ void DeviceState::DecodeDeviceInfoBuffer(
     switch (flag) {
     case CUDBG_DEVICE_ATTRIBUTE_SM_ACTIVE_MASK: {
       m_sm_active_mask = DynamicBitset(bytes, m_num_sms);
-      LLDB_LOG(log, "SM active mask: 0x{}", m_sm_active_mask.AsHex());
+      LLDB_LOGV(log, "SM active mask: 0x{}", m_sm_active_mask.AsHex());
       break;
     }
     case CUDBG_DEVICE_ATTRIBUTE_SM_EXCEPTION_MASK: {
       m_sm_exception_mask = DynamicBitset(bytes, m_num_sms);
-      LLDB_LOG(log, "SM exception mask: 0x{}", m_sm_exception_mask.AsHex());
+      LLDB_LOGV(log, "SM exception mask: 0x{}", m_sm_exception_mask.AsHex());
       break;
     }
     case CUDBG_DEVICE_ATTRIBUTE_SM_UPDATE_MASK: {
-      LLDB_LOG(log, "SM update mask: {}", bytes);
+      LLDB_LOGV(log, "SM update mask: {}", bytes);
       sm_update_mask = DynamicBitset(bytes, m_num_sms);
       break;
     }
@@ -314,7 +314,7 @@ void DeviceState::DecodeDeviceInfoBuffer(
     bool is_updated = sm_update_mask.has_value()
                           ?  sm_update_mask->Get(sm_index)
                           : true;
-    LLDB_LOG(log, "SM {} is updated: {}", sm_index, is_updated);
+    LLDB_LOGV(log, "SM {} is updated: {}", sm_index, is_updated);
     if (is_updated)
       buffer_offset += m_sms[sm_index].DecodeSMInfoBuffer(
           buffer + buffer_offset, device_info, m_device_info_sizes,

@@ -263,15 +263,16 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
         llvm::toString(sections_or_err.takeError()));
   }
 
-  LLDB_LOG(log, "GetLoadSectionsForCubin(). Iterating through ELF sections");
+  LLDB_LOGV(log, "GetLoadSectionsForCubin(). Iterating through ELF sections");
 
   for (const llvm::object::ELF64LEFile::Elf_Shdr &section : *sections_or_err) {
     llvm::Expected<llvm::StringRef> name_or_err =
         elf_file.getSectionName(section);
 
     if (!name_or_err) {
-      LLDB_LOG(log, "GetLoadSectionsForCubin(). Failed to get section name: {}",
-               llvm::toString(name_or_err.takeError()));
+      LLDB_LOGV(log,
+                "GetLoadSectionsForCubin(). Failed to get section name: {}",
+                llvm::toString(name_or_err.takeError()));
       continue;
     }
 
@@ -302,10 +303,10 @@ void ProcessNVGPU::OnElfImageLoaded(
   // Note that module_id and handle are the same thing. It is a vestige of the
   // older debug API.
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log,
-           "LLDBServerPluginNVGPU::OnElfImageLoaded() dev_id: {}, context_id: "
-           "{}, module_id: {}, elf_image_size: {}, handle: {}, properties: {}",
-           dev_id, context_id, module_id, elf_image_size, handle, properties);
+  LLDB_LOGV(log,
+            "LLDBServerPluginNVGPU::OnElfImageLoaded() dev_id: {}, context_id: "
+            "{}, module_id: {}, elf_image_size: {}, handle: {}, properties: {}",
+            dev_id, context_id, module_id, elf_image_size, handle, properties);
 
   // Obtain the elf image
   std::unique_ptr<llvm::WritableMemoryBuffer> data_buffer =
@@ -364,7 +365,7 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
   m_devices.BatchUpdate(log_to_client_callback);
-  LLDB_LOG(log, "Device info dump:\n{}", m_devices.Dump());
+  LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
 
   ReleaseAndClearThreads(m_threads);
 
@@ -462,7 +463,8 @@ Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
                                          void *buf, size_t size,
                                          size_t &bytes_readn) {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr, size);
+  LLDB_LOGV(log, "NVGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr,
+            size);
 
   auto GetPhysicalCoords = [&thread]() -> const ThreadCoords & {
     ThreadNVGPU &nv_thread = *static_cast<ThreadNVGPU *>(thread);
@@ -524,7 +526,7 @@ Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
 Status ProcessNVGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                 size_t &bytes_read) {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVGPU::ReadMemory(). addr: {}, size: {}", addr, size);
+  LLDB_LOGV(log, "NVGPU::ReadMemory(). addr: {}, size: {}", addr, size);
   return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage,
                              /*thread=*/nullptr, buf, size, bytes_read);
 }
