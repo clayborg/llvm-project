@@ -409,7 +409,7 @@ void ProcessNVGPU::OnAllDevicesSuspended(
 }
 
 ProcessNVGPU::Extension ProcessNVGPU::Manager::GetSupportedExtensions() const {
-  return Extension::gpu_dyld | Extension::address_spaces;
+  return Extension::lldb_settings | Extension::address_spaces;
 }
 
 std::optional<GPUDynamicLoaderResponse>
