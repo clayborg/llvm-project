@@ -1421,9 +1421,11 @@ public:
 
   void GetStatus(Stream &ostrm);
 
-  size_t GetThreadStatus(Stream &ostrm, bool only_threads_with_stop_reason,
-                         uint32_t start_frame, uint32_t num_frames,
-                         uint32_t num_frames_with_source, bool stop_format);
+  size_t
+  GetThreadStatus(Stream &ostrm, bool only_threads_with_stop_reason,
+                  uint32_t start_frame, uint32_t num_frames,
+                  uint32_t num_frames_with_source, bool stop_format,
+                  std::optional<size_t> max_threads_to_dump = std::nullopt);
 
   /// Send an async interrupt request.
   ///
