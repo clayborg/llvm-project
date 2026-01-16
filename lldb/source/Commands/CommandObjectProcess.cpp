@@ -1459,7 +1459,10 @@ protected:
     const bool stop_format = true;
     process->GetStatus(strm);
     process->GetThreadStatus(strm, only_threads_with_stop_reason, start_frame,
-                             num_frames, num_frames_with_source, stop_format);
+                             num_frames, num_frames_with_source, stop_format,
+                             process->GetTarget().IsGPUTarget()
+                                 ? std::optional<size_t>(1)
+                                 : std::nullopt);
 
     if (m_options.m_verbose) {
       addr_t code_mask = process->GetCodeAddressMask();
