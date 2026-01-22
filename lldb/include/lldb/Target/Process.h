@@ -1842,6 +1842,8 @@ public:
 
   lldb::addr_t ReadPointerFromMemory(lldb::addr_t vm_addr, Status &error);
 
+  lldb::addr_t ReadPointerFromMemory(AddressSpec addr, Status &error);
+
   bool WritePointerToMemory(lldb::addr_t vm_addr, lldb::addr_t ptr_value,
                             Status &error);
 
@@ -1903,6 +1905,10 @@ public:
                              size_t size, Status &error);
 
   size_t ReadScalarIntegerFromMemory(lldb::addr_t addr, uint32_t byte_size,
+                                     bool is_signed, Scalar &scalar,
+                                     Status &error);
+
+  size_t ReadScalarIntegerFromMemory(AddressSpec addr, uint32_t byte_size,
                                      bool is_signed, Scalar &scalar,
                                      Status &error);
 
