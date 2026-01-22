@@ -25,10 +25,37 @@ using namespace lldb_private;
 
 LLDB_PLUGIN_DEFINE(ABISASS)
 
-std::optional<uint64_t>
-ABISASS::GetDefaultAddressSpaceForSavedRegisters() const {
+bool ABISASS::IsDefaultAddressSpace(lldb::addr_space_t addr_space) const {
+  return addr_space == ptxGlobalStorage ||
+         addr_space == LLDB_DEFAULT_ADDRESS_SPACE;
+}
+
+lldb::addr_space_t ABISASS::GetDefaultStackAddressSpace() const {
   // SASS uses local address space for saved registers
   return ptxLocalStorage;
+}
+
+std::string ABISASS::MapAddressSpaceName(lldb::addr_space_t addr_space) const {
+  switch (addr_space) {
+  case ptxConstStorage:
+    return "const";
+  case ptxLocalStorage:
+    return "local";
+  case ptxParamStorage:
+    return "param";
+  case ptxSharedStorage:
+    return "shared";
+  case ptxSurfStorage:
+    return "surface";
+  case ptxTexStorage:
+    return "texture";
+  case ptxTexSamplerStorage:
+    return "texture_sampler";
+  case ptxGenericStorage:
+    return "generic";
+  default:
+    return "";
+  }
 }
 
 Status ABISASS::SetReturnValueObject(lldb::StackFrameSP &frame_sp,

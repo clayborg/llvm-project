@@ -152,7 +152,8 @@ public:
   Evaluate(ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
            lldb::ModuleSP module_sp, const DataExtractor &opcodes,
            const Delegate *dwarf_cu, const lldb::RegisterKind reg_set,
-           const Value *initial_value_ptr, const Value *object_address_ptr);
+           const lldb::addr_space_t addr_space, const Value *initial_value_ptr,
+           const Value *object_address_ptr);
 
   bool GetExpressionData(DataExtractor &data) const {
     data = m_data;

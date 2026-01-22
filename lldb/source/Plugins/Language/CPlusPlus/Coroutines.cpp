@@ -30,8 +30,9 @@ static lldb::addr_t GetCoroFramePtrFromHandle(ValueObjectSP valobj_sp) {
   if (!ptr_sp->GetCompilerType().IsPointerType())
     return LLDB_INVALID_ADDRESS;
 
-  auto [frame_ptr_addr, addr_type] = ptr_sp->GetPointerValue();
-  if (!frame_ptr_addr || frame_ptr_addr == LLDB_INVALID_ADDRESS)
+  auto [frame_ptr_addr, addr_type, addr_space] = ptr_sp->GetPointerValue();
+  if (!frame_ptr_addr || frame_ptr_addr == LLDB_INVALID_ADDRESS ||
+      addr_space != LLDB_DEFAULT_ADDRESS_SPACE)
     return LLDB_INVALID_ADDRESS;
   lldbassert(addr_type == AddressType::eAddressTypeLoad);
   if (addr_type != AddressType::eAddressTypeLoad)

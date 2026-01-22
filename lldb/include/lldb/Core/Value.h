@@ -13,6 +13,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-private-enumerations.h"
 #include "lldb/lldb-private-types.h"
@@ -86,7 +87,21 @@ public:
 
   ContextType GetContextType() const { return m_context_type; }
 
-  void SetValueType(ValueType value_type) { m_value_type = value_type; }
+  void SetValueType(ValueType value_type) {
+    if ((value_type == ValueType::LoadAddress ||
+         value_type == ValueType::FileAddress) &&
+        !m_addr_space_id.has_value()) {
+      m_addr_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
+    }
+    m_value_type = value_type;
+  }
+
+  void SetAddressSpace(lldb::addr_space_t addr_space,
+                       ExecutionContext *exe_ctx);
+
+  std::optional<lldb::addr_space_t> GetAddressSpace() const {
+    return m_addr_space_id;
+  }
 
   void ClearContext() {
     m_context = nullptr;
@@ -150,10 +165,10 @@ public:
   static ValueType GetValueTypeFromAddressType(AddressType address_type);
 
   void SetAddressSpaceId(uint64_t address_space_id) {
-    m_address_space_id = address_space_id;
+    m_addr_space_id = address_space_id;
   }
 
-  std::optional<uint64_t> GetAddressSpaceId() { return m_address_space_id; }
+  std::optional<uint64_t> GetAddressSpaceId() { return m_addr_space_id; }
 
 protected:
   /// Represents a value, which can be a scalar, a load address, a file address,
@@ -188,7 +203,13 @@ protected:
   ValueType m_value_type = ValueType::Scalar;
   ContextType m_context_type = ContextType::Invalid;
   DataBufferHeap m_data_buffer;
-  std::optional<uint64_t> m_address_space_id;
+  /// The address space is really only meaningful when the ValueType is either a
+  /// file or load address, where the file address might require address space
+  /// ABI specific relocation.
+  /// This was implied in all previous versions of the DWARF standard, but
+  /// was explicitly defined in the DWARF v6, there is always a default address
+  /// space for the whole execution context, which describes a global memory.
+  std::optional<lldb::addr_space_t> m_addr_space_id;
 };
 
 class ValueList {

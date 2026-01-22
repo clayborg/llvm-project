@@ -220,10 +220,11 @@ Function *IndirectCallEdge::GetCallee(ModuleList &images,
                                       ExecutionContext &exe_ctx) {
   Log *log = GetLog(LLDBLog::Step);
   Status error;
-  llvm::Expected<Value> callee_addr_val = call_target.Evaluate(
-      &exe_ctx, exe_ctx.GetRegisterContext(), LLDB_INVALID_ADDRESS,
-      /*initial_value_ptr=*/nullptr,
-      /*object_address_ptr=*/nullptr);
+  llvm::Expected<Value> callee_addr_val =
+      call_target.Evaluate(&exe_ctx, exe_ctx.GetRegisterContext(),
+                           LLDB_INVALID_ADDRESS, LLDB_DEFAULT_ADDRESS_SPACE,
+                           /*initial_value_ptr=*/nullptr,
+                           /*object_address_ptr=*/nullptr);
   if (!callee_addr_val) {
     LLDB_LOG_ERROR(log, callee_addr_val.takeError(),
                    "IndirectCallEdge: Could not evaluate expression: {0}");

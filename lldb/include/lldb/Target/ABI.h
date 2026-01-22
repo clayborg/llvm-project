@@ -152,16 +152,35 @@ public:
 
   virtual uint64_t GetStackFrameSize() { return 512 * 1024; }
 
-  /// Get the default address space for saved registers. This allows
-  /// architectures to specify that saved registers should be read from
-  /// a specific address space.
+  /// Check if the address space is the default address space or one of its
+  /// aliases. This allows ABI's to specify their default address
+  /// space aliases.
+  /// Default is true, which means all address spaces are considered default.
+  virtual bool IsDefaultAddressSpace(lldb::addr_space_t addr_space) const {
+    return true;
+  }
+
+  /// Get the default stack address space. This allows ABI's to specify
+  /// their default stack address space which if not specified, is expected
+  /// to be a global memory.
   ///
   /// \return
-  ///     An optional numeric address space identifier. If no special
-  ///     address space is needed, returns std::nullopt.
-  virtual std::optional<uint64_t>
-  GetDefaultAddressSpaceForSavedRegisters() const {
-    return std::nullopt;
+  ///     Unless specified otherwise, the default address space for stack is
+  ///     0 (global memory).
+  //
+  // Note: This is a short term workaround for NVGPU platform. From DWARF v6
+  // CFA address space is expected to be explicitly specified through DWARF
+  // location description.
+  virtual lldb::addr_space_t GetDefaultStackAddressSpace() const {
+    return LLDB_DEFAULT_ADDRESS_SPACE;
+  }
+
+  /// Get the name of the address space. This allows ABI's to specify their
+  /// address space names.
+  // Note: By default all address spaces are considered to be the same as
+  // global memory.
+  virtual std::string MapAddressSpaceName(lldb::addr_space_t addr_space) const {
+    return "global";
   }
 
   static lldb::ABISP FindPlugin(lldb::ProcessSP process_sp, const ArchSpec &arch);

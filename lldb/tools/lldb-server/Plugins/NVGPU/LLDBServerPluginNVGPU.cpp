@@ -180,7 +180,7 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
     connection_info.copy_cpu_breakpoints_during_attaching = true;
     connection_info.should_step_over_breakpoints_on_resume = false;
     // connection_info.exe_path = "/pretend/path/to/NVGPU";
-    connection_info.triple = "nvptx-nvidia-cuda";
+    connection_info.triple = "nvptx64-nvidia-cuda";
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
     connection_info.connect_url =
         llvm::formatv("connect://{}:{}", remote_host, listen_port);

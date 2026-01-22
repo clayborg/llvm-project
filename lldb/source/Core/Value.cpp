@@ -15,6 +15,7 @@
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Symbol/Variable.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/SectionLoadList.h"
@@ -56,7 +57,7 @@ Value::Value(const Value &v)
     : m_value(v.m_value), m_compiler_type(v.m_compiler_type),
       m_context(v.m_context), m_value_type(v.m_value_type),
       m_context_type(v.m_context_type), m_data_buffer(),
-      m_address_space_id(v.m_address_space_id) {
+      m_addr_space_id(v.m_addr_space_id) {
   const uintptr_t rhs_value =
       (uintptr_t)v.m_value.ULongLong(LLDB_INVALID_ADDRESS);
   if ((rhs_value != 0) &&
@@ -75,6 +76,7 @@ Value &Value::operator=(const Value &rhs) {
     m_context = rhs.m_context;
     m_value_type = rhs.m_value_type;
     m_context_type = rhs.m_context_type;
+    m_addr_space_id = rhs.m_addr_space_id;
     const uintptr_t rhs_value =
         (uintptr_t)rhs.m_value.ULongLong(LLDB_INVALID_ADDRESS);
     if ((rhs_value != 0) &&
@@ -84,7 +86,7 @@ Value &Value::operator=(const Value &rhs) {
 
       m_value = (uintptr_t)m_data_buffer.GetBytes();
     }
-    m_address_space_id = rhs.m_address_space_id;
+    m_addr_space_id = rhs.m_addr_space_id;
   }
   return *this;
 }
@@ -139,6 +141,23 @@ Value::ValueType Value::GetValueTypeFromAddressType(AddressType address_type) {
       return Value::ValueType::Invalid;
   }
   llvm_unreachable("Unexpected address type!");
+}
+
+void Value::SetAddressSpace(lldb::addr_space_t addr_space,
+                            ExecutionContext *exe_ctx) {
+  if (exe_ctx == nullptr || exe_ctx->GetProcessSP() == nullptr) {
+    m_addr_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
+    return;
+  }
+
+  Process *process = exe_ctx->GetProcessPtr();
+  ABI *abi = process->GetABI().get();
+  if (abi != nullptr && abi->IsDefaultAddressSpace(addr_space)) {
+    m_addr_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
+    return;
+  }
+
+  m_addr_space_id = addr_space;
 }
 
 RegisterInfo *Value::GetRegisterInfo() const {
@@ -374,7 +393,9 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
           // execute commands where you can look at types in data sections.
           if (target->HasLoadedSections()) {
             address = m_value.ULongLong(LLDB_INVALID_ADDRESS);
-            if (target->ResolveLoadAddress(address, file_so_addr)) {
+            if ((m_addr_space_id.has_value() &&
+                 *m_addr_space_id != LLDB_DEFAULT_ADDRESS_SPACE) ||
+                target->ResolveLoadAddress(address, file_so_addr)) {
               address_type = eAddressTypeLoad;
               data.SetByteOrder(target->GetArchitecture().GetByteOrder());
               data.SetAddressByteSize(
@@ -565,9 +586,16 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
         Process *process = exe_ctx->GetProcessPtr();
 
         if (process) {
-          AddressSpec address_spec(address, m_address_space_id, exe_ctx->GetThreadSP());
-          const size_t bytes_read =
-              process->ReadMemory(address_spec, dst, byte_size, error);
+          size_t bytes_read = 0;
+          if (m_addr_space_id.has_value() &&
+              *m_addr_space_id != LLDB_DEFAULT_ADDRESS_SPACE) {
+            AddressSpec addr_spec(address, *m_addr_space_id,
+                                  exe_ctx->GetThreadSP());
+            bytes_read = process->ReadMemory(addr_spec, dst, byte_size, error);
+          } else {
+            bytes_read = process->ReadMemory(address, dst, byte_size, error);
+          }
+
           if (bytes_read != byte_size)
             error = Status::FromErrorStringWithFormat(
                 "read memory from 0x%" PRIx64 " failed (%u of %u bytes read)",

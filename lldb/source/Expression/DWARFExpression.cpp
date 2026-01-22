@@ -30,6 +30,7 @@
 
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/ExecutionContext.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StackFrame.h"
@@ -103,9 +104,29 @@ DWARFExpression::ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
   // register support.
   RegisterValue reg_value;
   llvm::Error error = reg_ctx->ReadRegister(reg_kind, reg_num, reg_value);
-  if (error)
+
+  if (error) {
+    TargetSP target_sp = reg_ctx->CalculateTarget();
+    if (!target_sp)
+      return llvm::createStringError(
+          "register can't be converted to a scalar value without target");
+    PlatformSP platform_sp(target_sp->GetPlatform());
+    if (!platform_sp)
+      return llvm::createStringError(
+          "register can't be converted to a scalar value without platform");
+
+    std::optional<llvm::Error> opt_error =
+        platform_sp->ReadVirtualRegister(reg_ctx, reg_kind, reg_num, value);
+
+    if (opt_error.has_value()) {
+      llvm::consumeError(std::move(error)); // Invalidates the original error
+      return std::move(*opt_error); // The platform supports virtual registers.
+    }
+
+    // The platform doesn't support virtual registers.
     return error;
-                                            
+  }
+
   const RegisterInfo *reg_info = reg_ctx->GetRegisterInfo(reg_kind, reg_num);
   if (reg_value.GetScalarValue(value.GetScalar())) {
     value.SetValueType(Value::ValueType::Scalar);
@@ -120,9 +141,9 @@ DWARFExpression::ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
   if (reg_info)
     return llvm::createStringError(
         "register %s can't be converted to a scalar value", reg_info->name);
-  else
-    return llvm::createStringError(
-        "register can't be converted to a scalar value");
+
+  return llvm::createStringError(
+      "register can't be converted to a scalar value");
 }
 
 /// Return the length in bytes of the set of operands for \p op. No guarantees
@@ -766,7 +787,7 @@ static llvm::Error Evaluate_DW_OP_entry_value(DWARFExpression::Stack &stack,
 
   llvm::Expected<Value> maybe_result = param_expr.Evaluate(
       &parent_exe_ctx, parent_frame->GetRegisterContext().get(),
-      LLDB_INVALID_ADDRESS,
+      LLDB_INVALID_ADDRESS, LLDB_DEFAULT_ADDRESS_SPACE,
       /*initial_value_ptr=*/nullptr,
       /*object_address_ptr=*/nullptr);
   if (!maybe_result) {
@@ -860,7 +881,8 @@ ResolveLoadAddress(ExecutionContext *exe_ctx, lldb::ModuleSP &module_sp,
   return load_addr;
 }
 
-/// @brief Helper function to load sized data from a uint8_t buffer.
+/// Helper function to move common code used to load sized data from a uint8_t
+/// buffer.
 ///
 /// @param addr_bytes The buffer containing raw data.
 /// @param size_addr_bytes How large is the underlying raw data.
@@ -1066,8 +1088,8 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
     ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
     lldb::ModuleSP module_sp, const DataExtractor &opcodes,
     const DWARFExpression::Delegate *dwarf_cu,
-    const lldb::RegisterKind reg_kind, const Value *initial_value_ptr,
-    const Value *object_address_ptr) {
+    const lldb::RegisterKind reg_kind, const lldb::addr_space_t addr_space,
+    const Value *initial_value_ptr, const Value *object_address_ptr) {
 
   if (opcodes.GetByteSize() == 0)
     return llvm::createStringError(
@@ -1222,11 +1244,140 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
     // the size of an address on the target machine before being pushed on the
     // expression stack.
     case DW_OP_deref_size: {
-      size_t size = opcodes.GetU8(&offset);
-      if (llvm::Error err = Evaluate_DW_OP_deref_size(
-              stack, exe_ctx, module_sp, process, target, size,
-              opcodes.GetAddressByteSize(), dwarf4_location_description_kind))
-        return err;
+      if (stack.empty()) {
+        return llvm::createStringError(
+            "expression stack empty for DW_OP_deref_size");
+      }
+      uint8_t size = opcodes.GetU8(&offset);
+      if (size > 8) {
+        return llvm::createStringError(
+            "Invalid address size for DW_OP_deref_size: %d\n", size);
+      }
+      Value::ValueType value_type = stack.back().GetValueType();
+      switch (value_type) {
+      case Value::ValueType::HostAddress: {
+        void *src = (void *)stack.back().GetScalar().ULongLong();
+        intptr_t ptr;
+        ::memcpy(&ptr, src, sizeof(void *));
+        // I can't decide whether the size operand should apply to the bytes in
+        // their
+        // lldb-host endianness or the target endianness.. I doubt this'll ever
+        // come up but I'll opt for assuming big endian regardless.
+        switch (size) {
+        case 1:
+          ptr = ptr & 0xff;
+          break;
+        case 2:
+          ptr = ptr & 0xffff;
+          break;
+        case 3:
+          ptr = ptr & 0xffffff;
+          break;
+        case 4:
+          ptr = ptr & 0xffffffff;
+          break;
+        // the casts are added to work around the case where intptr_t is a 32
+        // bit quantity;
+        // presumably we won't hit the 5..7 cases if (void*) is 32-bits in this
+        // program.
+        case 5:
+          ptr = (intptr_t)ptr & 0xffffffffffULL;
+          break;
+        case 6:
+          ptr = (intptr_t)ptr & 0xffffffffffffULL;
+          break;
+        case 7:
+          ptr = (intptr_t)ptr & 0xffffffffffffffULL;
+          break;
+        default:
+          break;
+        }
+        stack.back().GetScalar() = ptr;
+        stack.back().ClearContext();
+      } break;
+      case Value::ValueType::FileAddress: {
+        auto file_addr =
+            stack.back().GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
+        Address so_addr;
+        auto maybe_load_addr = ResolveLoadAddress(
+            exe_ctx, module_sp, "DW_OP_deref_size", file_addr, so_addr,
+            /*check_sectionoffset=*/true);
+
+        if (!maybe_load_addr)
+          return maybe_load_addr.takeError();
+
+        addr_t load_addr = *maybe_load_addr;
+
+        if (load_addr == LLDB_INVALID_ADDRESS && so_addr.IsSectionOffset()) {
+          uint8_t addr_bytes[8];
+          Status error;
+
+          if (target &&
+              target->ReadMemory(so_addr, &addr_bytes, size, error,
+                                 /*force_live_memory=*/false) == size) {
+            ObjectFile *objfile = module_sp->GetObjectFile();
+
+            stack.back().GetScalar() = DerefSizeExtractDataHelper(
+                addr_bytes, size, objfile->GetByteOrder(), size);
+            stack.back().ClearContext();
+            break;
+          } else {
+            return llvm::createStringError(
+                "Failed to dereference pointer for DW_OP_deref_size: "
+                "%s\n",
+                error.AsCString());
+          }
+        }
+        stack.back().GetScalar() = load_addr;
+        // Fall through to load address promotion code below.
+      }
+
+        [[fallthrough]];
+      case Value::ValueType::Scalar:
+      case Value::ValueType::LoadAddress:
+        if (exe_ctx) {
+          if (process) {
+            lldb::addr_t pointer_addr =
+                stack.back().GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
+            uint8_t addr_bytes[sizeof(lldb::addr_t)];
+            Status error;
+            size_t bytes_read = 0;
+            std::optional<lldb::addr_space_t> addr_space =
+                stack.back().GetAddressSpace();
+            if (addr_space.has_value() &&
+                *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+              AddressSpec addr_spec(pointer_addr, *addr_space,
+                                    exe_ctx->GetThreadSP());
+              bytes_read =
+                  process->ReadMemory(addr_spec, &addr_bytes, size, error);
+            } else {
+              bytes_read =
+                  process->ReadMemory(pointer_addr, &addr_bytes, size, error);
+            }
+
+            if (error.Fail() || bytes_read != size) {
+              return llvm::createStringError(
+                  "Failed to dereference pointer from 0x%" PRIx64
+                  " for DW_OP_deref: %s\n",
+                  pointer_addr, error.AsCString());
+            }
+            stack.back().GetScalar() = DerefSizeExtractDataHelper(
+                addr_bytes, sizeof(addr_bytes), process->GetByteOrder(), size);
+            stack.back().ClearContext();
+          } else {
+            return llvm::createStringError("NULL process for DW_OP_deref_size");
+          }
+        } else {
+          return llvm::createStringError(
+              "NULL execution context for DW_OP_deref_size");
+        }
+        break;
+
+      case Value::ValueType::Invalid:
+
+        return llvm::createStringError("invalid value for DW_OP_deref_size");
+      }
+
     } break;
 
     // OPCODE: DW_OP_xderef_size
@@ -1847,12 +1998,16 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
     case DW_OP_fbreg:
       if (exe_ctx) {
         if (frame) {
-          Scalar value;
-          if (llvm::Error err = frame->GetFrameBaseValue(value))
+          Value fb_value;
+          if (llvm::Error err = frame->GetFrameBaseValue(fb_value))
             return err;
           int64_t fbreg_offset = opcodes.GetSLEB128(&offset);
-          value += fbreg_offset;
+          Scalar value = fb_value.ResolveValue(exe_ctx) + fbreg_offset;
           stack.push_back(value);
+          stack.back().SetValueType(Value::ValueType::LoadAddress);
+          if (fb_value.GetAddressSpace().has_value()) {
+            stack.back().SetAddressSpace(*fb_value.GetAddressSpace(), exe_ctx);
+          }
           stack.back().SetValueType(Value::ValueType::LoadAddress);
         } else {
           return llvm::createStringError(
@@ -1940,10 +2095,23 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
           case Value::ValueType::LoadAddress: {
             if (target) {
               if (curr_piece.ResizeData(piece_byte_size) == piece_byte_size) {
-                if (target->ReadMemory(addr, curr_piece.GetBuffer().GetBytes(),
-                                       piece_byte_size, error,
-                                       /*force_live_memory=*/false) !=
-                    piece_byte_size) {
+                size_t bytes_read = 0;
+                std::optional<lldb::addr_space_t> addr_space =
+                    curr_piece_source_value.GetAddressSpace();
+                if (exe_ctx && exe_ctx->GetProcessSP() &&
+                    addr_space.has_value() &&
+                    *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+                  AddressSpec addr_spec(addr, *addr_space,
+                                        exe_ctx->GetThreadSP());
+                  bytes_read = exe_ctx->GetProcessSP()->ReadMemory(
+                      addr_spec, curr_piece.GetBuffer().GetBytes(),
+                      piece_byte_size, error);
+                } else {
+                  bytes_read = target->ReadMemory(
+                      addr, curr_piece.GetBuffer().GetBytes(), piece_byte_size,
+                      error, /*force_live_memory=*/false);
+                }
+                if (error.Fail() || bytes_read != piece_byte_size) {
                   const char *addr_type = (curr_piece_source_value_type ==
                                            Value::ValueType::LoadAddress)
                                               ? "load"
@@ -2202,6 +2370,12 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
         if (cfa != LLDB_INVALID_ADDRESS) {
           stack.push_back(Scalar(cfa));
           stack.back().SetValueType(Value::ValueType::LoadAddress);
+          if (exe_ctx->GetProcessSP() &&
+              exe_ctx->GetProcessSP()->GetABI().get()) {
+            ABI *abi = exe_ctx->GetProcessSP()->GetABI().get();
+            stack.back().SetAddressSpace(abi->GetDefaultStackAddressSpace(),
+                                         exe_ctx);
+          }
         } else {
           return llvm::createStringError(
               "stack frame does not include a canonical "
@@ -2346,7 +2520,25 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
       LLDB_LOGF(log, "  %s", new_value.GetData());
     }
   }
-  return stack.back();
+  Value &value = stack.back();
+  if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE &&
+      value.GetContextType() == Value::ContextType::Invalid &&
+      dwarf4_location_description_kind != Implicit) {
+    const Value::ValueType value_type = value.GetValueType();
+    switch (value_type) {
+    case Value::ValueType::Scalar:
+    case Value::ValueType::FileAddress:
+      value.SetValueType(Value::ValueType::LoadAddress);
+      [[fallthrough]];
+
+    case Value::ValueType::LoadAddress:
+      value.SetAddressSpace(addr_space, exe_ctx);
+      break;
+    default:
+      break;
+    }
+  }
+  return value;
 }
 
 bool DWARFExpression::MatchesOperand(

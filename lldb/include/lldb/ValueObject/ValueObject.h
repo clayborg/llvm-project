@@ -576,11 +576,12 @@ public:
   struct AddrAndType {
     lldb::addr_t address = LLDB_INVALID_ADDRESS;
     AddressType type = eAddressTypeInvalid;
+    lldb::addr_space_t addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
   };
 
   virtual AddrAndType GetAddressOf(bool scalar_is_load_address = true);
 
-  AddrAndType GetPointerValue();
+  virtual AddrAndType GetPointerValue();
 
   lldb::ValueObjectSP GetSyntheticChild(ConstString key) const;
 

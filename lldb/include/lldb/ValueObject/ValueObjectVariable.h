@@ -60,6 +60,8 @@ public:
 
   const char *GetLocationAsCString() override;
 
+  AddrAndType GetPointerValue() override;
+
   bool SetValueFromCString(const char *value_str, Status &error) override;
 
   bool SetData(DataExtractor &data, Status &error) override;

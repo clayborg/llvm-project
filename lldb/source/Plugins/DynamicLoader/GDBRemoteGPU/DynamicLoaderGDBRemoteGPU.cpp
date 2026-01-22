@@ -213,6 +213,12 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
       if (changed) {
         LLDB_LOG(log, "Module \"{0}\" was loaded, notifying target",
                  info.pathname);
+
+        auto platform_sp = target.GetPlatform();
+        if (platform_sp) {
+          platform_sp->RecordLoadedModule(module_sp, target);
+        }
+
         loaded_module_list.AppendIfNeeded(module_sp);
       }
     }

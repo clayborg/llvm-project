@@ -2339,6 +2339,14 @@ addr_t Process::ReadPointerFromMemory(lldb::addr_t vm_addr, Status &error) {
   return LLDB_INVALID_ADDRESS;
 }
 
+addr_t Process::ReadPointerFromMemory(AddressSpec addr, Status &error) {
+  Scalar scalar;
+  if (ReadScalarIntegerFromMemory(addr, GetAddressByteSize(), false, scalar,
+                                  error))
+    return scalar.ULongLong(LLDB_INVALID_ADDRESS);
+  return LLDB_INVALID_ADDRESS;
+}
+
 bool Process::WritePointerToMemory(lldb::addr_t vm_addr, lldb::addr_t ptr_value,
                                    Status &error) {
   Scalar scalar;
@@ -2489,6 +2497,36 @@ size_t Process::ReadScalarIntegerFromMemory(addr_t addr, uint32_t byte_size,
         scalar.MakeSigned();
         scalar.SignExtend(byte_size * 8);
       }
+      return bytes_read;
+    }
+  } else {
+    error = Status::FromErrorStringWithFormat(
+        "byte size of %u is too large for integer scalar type", byte_size);
+  }
+  return 0;
+}
+
+size_t Process::ReadScalarIntegerFromMemory(AddressSpec addr,
+                                            uint32_t byte_size, bool is_signed,
+                                            Scalar &scalar, Status &error) {
+  uint64_t uval = 0;
+  if (byte_size == 0) {
+    error = Status::FromErrorString("byte size is zero");
+  } else if (byte_size & (byte_size - 1)) {
+    error = Status::FromErrorStringWithFormat(
+        "byte size %u is not a power of 2", byte_size);
+  } else if (byte_size <= sizeof(uval)) {
+    const size_t bytes_read = ReadMemory(addr, &uval, byte_size, error);
+    if (bytes_read == byte_size) {
+      DataExtractor data(&uval, sizeof(uval), GetByteOrder(),
+                         GetAddressByteSize());
+      lldb::offset_t offset = 0;
+      if (byte_size <= 4)
+        scalar = data.GetMaxU32(&offset, byte_size);
+      else
+        scalar = data.GetMaxU64(&offset, byte_size);
+      if (is_signed)
+        scalar.SignExtend(byte_size * 8);
       return bytes_read;
     }
   } else {

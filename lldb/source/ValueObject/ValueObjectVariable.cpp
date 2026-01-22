@@ -159,8 +159,9 @@ bool ValueObjectVariable::UpdateValue() {
             sc.function->GetAddress().GetLoadAddress(target);
     }
     Value old_value(m_value);
-    llvm::Expected<Value> maybe_value = expr_list.Evaluate(
-        &exe_ctx, nullptr, loclist_base_load_addr, nullptr, nullptr);
+    llvm::Expected<Value> maybe_value =
+        expr_list.Evaluate(&exe_ctx, nullptr, loclist_base_load_addr,
+                           variable->GetAddressSpace(), nullptr, nullptr);
 
     if (maybe_value) {
       m_value = *maybe_value;
@@ -410,4 +411,16 @@ bool ValueObjectVariable::SetData(DataExtractor &data, Status &error) {
     }
   } else
     return ValueObject::SetData(data, error);
+}
+
+ValueObject::AddrAndType ValueObjectVariable::GetPointerValue() {
+  AddrAndType addr_and_type = ValueObject::GetPointerValue();
+  Type *type = m_variable_sp->GetType();
+
+  if (type && type->GetForwardCompilerType().IsPointerOrReferenceType() &&
+      type->GetAddressSpace().has_value()) {
+    addr_and_type.addr_space = *type->GetAddressSpace();
+  }
+
+  return addr_and_type;
 }
