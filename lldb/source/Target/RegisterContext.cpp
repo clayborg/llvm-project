@@ -343,11 +343,11 @@ Status RegisterContext::ReadRegisterValueFromMemory(
     // Check if the ABI specifies a default address space for saved registers
     size_t bytes_read = 0;
     if (ABI *abi = process_sp->GetABI().get()) {
-      if (std::optional<uint64_t> default_addr_space =
-              abi->GetDefaultAddressSpaceForSavedRegisters()) {
+      lldb::addr_space_t stack_addr_space = abi->GetDefaultStackAddressSpace();
+      if (!abi->IsDefaultAddressSpace(stack_addr_space)) {
         // Use the ABI-specified address space
         ThreadSP thread_sp = m_thread.shared_from_this();
-        AddressSpec addr_spec(src_addr, *default_addr_space, thread_sp);
+        AddressSpec addr_spec(src_addr, stack_addr_space, thread_sp);
         bytes_read =
             process_sp->ReadMemory(addr_spec, src.data(), src_len, error);
       } else {
@@ -498,17 +498,5 @@ llvm::Error RegisterContext::ReadRegister(lldb::RegisterKind kind,
     return create_default_error();
   }
 
-  TargetSP target_sp = CalculateTarget();
-  if (!target_sp)
-    return create_default_error();
-  PlatformSP platform_sp(target_sp->GetPlatform());
-  if (!platform_sp)
-    return create_default_error();
-  std::optional<llvm::Error> error = 
-      platform_sp->ReadVirtualRegister(CalculateStackFrame(), kind, num, 
-                                       reg_value);
-  if (error.has_value())
-    return std::move(*error); // The platform supports virtual registers.
-  // The platform doesn't support virtual registers.  
   return create_default_error(); 
 }

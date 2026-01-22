@@ -123,6 +123,7 @@ public:
   llvm::Expected<Value> Evaluate(ExecutionContext *exe_ctx,
                                  RegisterContext *reg_ctx,
                                  lldb::addr_t func_load_addr,
+                                 lldb::addr_space_t addr_space,
                                  const Value *initial_value_ptr,
                                  const Value *object_address_ptr) const;
 
