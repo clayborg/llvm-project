@@ -80,6 +80,7 @@
 #include "SymbolFileDWARFDebugMap.h"
 #include "SymbolFileDWARFDwo.h"
 #include "lldb/lldb-private-enumerations.h"
+#include "lldb/lldb-types.h"
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugAbbrev.h"
@@ -2077,7 +2078,8 @@ SymbolFileDWARF::GlobalVariableMap &SymbolFileDWARF::GetGlobalAranges() {
                     var_sp->LocationExpressionList();
                 ExecutionContext exe_ctx;
                 llvm::Expected<Value> location_result = location.Evaluate(
-                    &exe_ctx, nullptr, LLDB_INVALID_ADDRESS, nullptr, nullptr);
+                    &exe_ctx, nullptr, LLDB_INVALID_ADDRESS,
+                    var_sp->GetAddressSpace(), nullptr, nullptr);
                 if (location_result) {
                   if (location_result->GetValueType() ==
                       Value::ValueType::FileAddress) {
@@ -3581,6 +3583,7 @@ VariableSP SymbolFileDWARF::ParseVariableDIE(const SymbolContext &sc,
   bool is_artificial = false;
   DWARFFormValue const_value_form, location_form;
   Variable::RangeList scope_ranges;
+  lldb::addr_space_t addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
 
   for (size_t i = 0; i < attributes.Size(); ++i) {
     dw_attr_t attr = attributes.AttributeAtIndex(i);
@@ -3626,6 +3629,9 @@ VariableSP SymbolFileDWARF::ParseVariableDIE(const SymbolContext &sc,
       break;
     case DW_AT_artificial:
       is_artificial = form_value.Boolean();
+      break;
+    case DW_AT_address_class:
+      addr_space = form_value.Unsigned();
       break;
     case DW_AT_declaration:
     case DW_AT_description:
@@ -3829,7 +3835,7 @@ VariableSP SymbolFileDWARF::ParseVariableDIE(const SymbolContext &sc,
   return std::make_shared<Variable>(
       die.GetID(), name, mangled, type_sp, scope, symbol_context_scope,
       scope_ranges, &decl, location_list, is_external, is_artificial,
-      location_is_const_value_data, is_static_member);
+      location_is_const_value_data, is_static_member, addr_space);
 }
 
 DWARFDIE
