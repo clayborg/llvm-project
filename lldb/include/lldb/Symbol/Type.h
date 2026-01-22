@@ -530,6 +530,10 @@ public:
   // declarations if they haven't already been fully defined.
   CompilerType GetForwardCompilerType();
 
+  std::optional<lldb::addr_space_t> GetAddressSpace() const {
+    return m_addr_space;
+  }
+
   static int Compare(const Type &a, const Type &b);
 
   // Represents a parsed type name coming out of GetTypeScopeAndBasename. The
@@ -587,6 +591,7 @@ protected:
   CompilerType m_compiler_type;
   ResolveState m_compiler_type_resolve_state = ResolveState::Unresolved;
   /// Language-specific flags.
+  std::optional<lldb::addr_space_t> m_addr_space;
   Payload m_payload;
 
   Type *GetEncodingType();
@@ -603,7 +608,9 @@ private:
        std::optional<uint64_t> byte_size, SymbolContextScope *context,
        lldb::user_id_t encoding_uid, EncodingDataType encoding_uid_type,
        const Declaration &decl, const CompilerType &compiler_qual_type,
-       ResolveState compiler_type_resolve_state, uint32_t opaque_payload = 0);
+       ResolveState compiler_type_resolve_state,
+       std::optional<lldb::addr_space_t> addr_space = std::nullopt,
+       uint32_t opaque_payload = 0);
 
   // This makes an invalid type.  Used for functions that return a Type when
   // they get an error.

@@ -1148,7 +1148,7 @@ ValueObjectSP StackFrame::LegacyGetValueForVariableExpressionPath(
   return valobj_sp;
 }
 
-llvm::Error StackFrame::GetFrameBaseValue(Scalar &frame_base) {
+llvm::Error StackFrame::GetFrameBaseValue(Value &frame_base) {
   std::lock_guard<std::recursive_mutex> guard(m_mutex);
   if (!m_cfa_is_valid) {
     m_frame_base_error = Status::FromErrorString(
@@ -1167,14 +1167,19 @@ llvm::Error StackFrame::GetFrameBaseValue(Scalar &frame_base) {
       if (!m_sc.function->GetFrameBaseExpression().IsAlwaysValidSingleExpr())
         loclist_base_addr =
             m_sc.function->GetAddress().GetLoadAddress(exe_ctx.GetTargetPtr());
-
+      lldb::addr_space_t stack_addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
+      ABISP abi_sp = GetThread()->GetProcess()->GetABI();
+      if (abi_sp) {
+        stack_addr_space = abi_sp->GetDefaultStackAddressSpace();
+      }
       llvm::Expected<Value> expr_value =
           m_sc.function->GetFrameBaseExpression().Evaluate(
-              &exe_ctx, nullptr, loclist_base_addr, nullptr, nullptr);
+              &exe_ctx, nullptr, loclist_base_addr, stack_addr_space, nullptr,
+              nullptr);
       if (!expr_value)
         m_frame_base_error = Status::FromError(expr_value.takeError());
       else
-        m_frame_base = expr_value->ResolveValue(&exe_ctx);
+        m_frame_base = *expr_value;
     } else {
       m_frame_base_error =
           Status::FromErrorString("No function in symbol context.");

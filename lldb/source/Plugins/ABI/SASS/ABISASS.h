@@ -74,8 +74,11 @@ public:
     return nullptr;
   }
 
-  std::optional<uint64_t>
-  GetDefaultAddressSpaceForSavedRegisters() const override;
+  bool IsDefaultAddressSpace(lldb::addr_space_t addr_space) const override;
+
+  lldb::addr_space_t GetDefaultStackAddressSpace() const override;
+
+  std::string MapAddressSpaceName(lldb::addr_space_t addr_space) const override;
 
   // Static Functions.
 

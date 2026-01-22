@@ -361,7 +361,7 @@ TypeSP DWARFASTParserClang::ParseTypeFromClangModule(const SymbolContext &sc,
       die.GetID(), pcm_type_sp->GetName(),
       llvm::expectedToOptional(pcm_type_sp->GetByteSize(nullptr)), nullptr,
       LLDB_INVALID_UID, Type::eEncodingInvalid, &pcm_type_sp->GetDeclaration(),
-      type, Type::ResolveState::Forward,
+      type, Type::ResolveState::Forward, pcm_type_sp->GetAddressSpace(),
       TypePayloadClang(GetOwningClangModule(die)));
   clang::TagDecl *tag_decl = TypeSystemClang::GetAsTagDecl(type);
   if (tag_decl) {
@@ -560,6 +560,9 @@ ParsedDWARFTypeAttributes::ParsedDWARFTypeAttributes(const DWARFDIE &die) {
       enum_kind = static_cast<clang::EnumExtensibilityAttr::Kind>(
           form_value.Unsigned());
       break;
+    case DW_AT_address_class:
+      addr_space = form_value.Unsigned();
+      break;
     }
   }
 }
@@ -691,7 +694,7 @@ ExtractDataMemberLocation(DWARFDIE const &die, DWARFFormValue const &form_value,
       /*ExecutionContext=*/nullptr,
       /*RegisterContext=*/nullptr, module_sp,
       DataExtractor(debug_info_data, block_offset, block_length), die.GetCU(),
-      eRegisterKindDWARF, &initialValue, nullptr);
+      eRegisterKindDWARF, LLDB_DEFAULT_ADDRESS_SPACE, &initialValue, nullptr);
   if (!memberOffset) {
     LLDB_LOG_ERROR(log, memberOffset.takeError(),
                    "ExtractDataMemberLocation failed: {0}");
@@ -961,9 +964,18 @@ DWARFASTParserClang::ParseTypeModifier(const SymbolContext &sc,
     }
   }
 
+  // Only pointer and reference types can have an address space.
+  std::optional<lldb::addr_space_t> optional_addr_space = std::nullopt;
+  if (encoding_data_type == Type::eEncodingIsPointerUID ||
+      encoding_data_type == Type::eEncodingIsLValueReferenceUID ||
+      encoding_data_type == Type::eEncodingIsRValueReferenceUID) {
+    optional_addr_space = attrs.addr_space;
+  }
+
   return dwarf->MakeType(die.GetID(), attrs.name, attrs.byte_size, nullptr,
                          attrs.type.Reference().GetID(), encoding_data_type,
-                         &attrs.decl, clang_type, resolve_state, payload);
+                         &attrs.decl, clang_type, resolve_state,
+                         optional_addr_space, payload);
 }
 
 std::string DWARFASTParserClang::GetDIEClassTemplateParams(DWARFDIE die) {
@@ -1078,11 +1090,11 @@ TypeSP DWARFASTParserClang::ParseEnum(const SymbolContext &sc,
       GetClangDeclContextContainingDIE(def_die, nullptr),
       GetOwningClangModule(def_die), attrs.decl, enumerator_clang_type,
       attrs.is_scoped_enum, attrs.enum_kind);
-  TypeSP type_sp =
-      dwarf->MakeType(def_die.GetID(), attrs.name, attrs.byte_size, nullptr,
-                      attrs.type.Reference().GetID(), Type::eEncodingIsUID,
-                      &attrs.decl, clang_type, Type::ResolveState::Forward,
-                      TypePayloadClang(GetOwningClangModule(def_die)));
+  TypeSP type_sp = dwarf->MakeType(
+      def_die.GetID(), attrs.name, attrs.byte_size, nullptr,
+      attrs.type.Reference().GetID(), Type::eEncodingIsUID, &attrs.decl,
+      clang_type, Type::ResolveState::Forward, std::nullopt,
+      TypePayloadClang(GetOwningClangModule(def_die)));
 
   clang::DeclContext *type_decl_ctx =
       TypeSystemClang::GetDeclContextForType(clang_type);
@@ -1941,7 +1953,7 @@ DWARFASTParserClang::ParseStructureLikeDIE(const SymbolContext &sc,
   TypeSP type_sp = dwarf->MakeType(
       die.GetID(), attrs.name, attrs.byte_size, nullptr, LLDB_INVALID_UID,
       Type::eEncodingIsUID, &attrs.decl, clang_type,
-      Type::ResolveState::Forward,
+      Type::ResolveState::Forward, std::nullopt,
       TypePayloadClang(OptionalClangModuleID(), attrs.is_complete_objc_class));
 
   // Store a forward declaration to this class type in case any

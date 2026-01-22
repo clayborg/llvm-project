@@ -31,7 +31,7 @@ using namespace lldb_private::process_gdb_remote;
 
 ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate),
-      m_arch(ArchSpec("nvptx-nvidia-cuda")), m_api(nullptr),
+      m_arch(ArchSpec("nvptx64-nvidia-cuda")), m_api(nullptr),
       m_fallback_thread(*this,
                         /*thread_state=*/nullptr, /*tid=*/1) {
   // A tid like -1 would be better, but that would make the first real thread to

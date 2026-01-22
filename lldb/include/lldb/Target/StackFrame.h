@@ -16,10 +16,10 @@
 #include "lldb/Utility/Flags.h"
 
 #include "lldb/Core/FormatEntity.h"
+#include "lldb/Core/Value.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/ExecutionContextScope.h"
 #include "lldb/Target/StackID.h"
-#include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StructuredData.h"
@@ -207,7 +207,7 @@ public:
   /// \return
   ///   If there is an error determining the CFA address, return an error
   ///   explaining the failure. Success otherwise.
-  virtual llvm::Error GetFrameBaseValue(Scalar &value);
+  virtual llvm::Error GetFrameBaseValue(Value &value);
 
   /// Get the DWARFExpressionList corresponding to the Canonical Frame Address.
   ///
@@ -582,7 +582,7 @@ protected:
   Address m_frame_code_addr;
   SymbolContext m_sc;
   Flags m_flags;
-  Scalar m_frame_base;
+  Value m_frame_base;
   Status m_frame_base_error;
   uint16_t m_frame_recognizer_generation = 0;
   /// Does this frame have a CFA?  Different from CFA == LLDB_INVALID_ADDRESS.
