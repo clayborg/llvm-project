@@ -870,8 +870,9 @@ protected:
                                      command.GetArgumentAtIndex(0));
       return;
     }
-    auto [addr, addr_type] = valobj_sp->GetAddressOf(false);
-    if (addr_type == eAddressTypeLoad) {
+    auto [addr, addr_type, addr_space] = valobj_sp->GetAddressOf(false);
+    if (addr_type == eAddressTypeLoad &&
+        addr_space == LLDB_DEFAULT_ADDRESS_SPACE) {
       // We're in business.
       // Find out the size of this variable.
       size =

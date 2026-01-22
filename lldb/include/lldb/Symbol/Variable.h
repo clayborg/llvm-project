@@ -34,7 +34,8 @@ public:
            SymbolContextScope *owner_scope, const RangeList &scope_range,
            Declaration *decl, const DWARFExpressionList &location,
            bool external, bool artificial, bool location_is_constant_data,
-           bool static_member = false);
+           bool static_member = false,
+           lldb::addr_space_t addr_space = LLDB_DEFAULT_ADDRESS_SPACE);
 
   virtual ~Variable();
 
@@ -100,6 +101,8 @@ public:
 
   void SetLocationIsConstantValueData(bool b) { m_loc_is_const_data = b; }
 
+  lldb::addr_space_t GetAddressSpace() const { return m_addr_space; }
+
   typedef size_t (*GetVariableCallback)(void *baton, const char *name,
                                         VariableList &var_list);
 
@@ -143,6 +146,8 @@ protected:
   unsigned m_loc_is_const_data : 1;
   /// Non-zero if variable is static member of a class or struct.
   unsigned m_static_member : 1;
+  /// All variables are in the global address space by default.
+  lldb::addr_space_t m_addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
 
 private:
   Variable(const Variable &rhs) = delete;

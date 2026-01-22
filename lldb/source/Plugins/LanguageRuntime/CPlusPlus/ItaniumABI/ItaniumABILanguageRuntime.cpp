@@ -227,11 +227,13 @@ llvm::Expected<LanguageRuntime::VTableInfo>
     return llvm::createStringError(std::errc::invalid_argument,
                                    "invalid process");
 
-  auto [original_ptr, address_type] =
+  auto [original_ptr, address_type, address_space] =
       type.IsPointerOrReferenceType()
           ? in_value.GetPointerValue()
           : in_value.GetAddressOf(/*scalar_is_load_address=*/true);
-  if (original_ptr == LLDB_INVALID_ADDRESS || address_type != eAddressTypeLoad)
+  if (original_ptr == LLDB_INVALID_ADDRESS ||
+      address_type != eAddressTypeLoad ||
+      address_space != LLDB_DEFAULT_ADDRESS_SPACE)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "failed to get the address of the value");
 

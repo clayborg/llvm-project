@@ -69,7 +69,7 @@ public:
   const SymbolContext &
   GetSymbolContext(lldb::SymbolContextItem resolve_scope) override;
 
-  llvm::Error GetFrameBaseValue(Scalar &value) override;
+  llvm::Error GetFrameBaseValue(Value &value) override;
 
   DWARFExpressionList *GetFrameBaseExpression(Status *error_ptr) override;
 

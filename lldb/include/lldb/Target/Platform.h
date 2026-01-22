@@ -399,6 +399,11 @@ public:
                                                  // use existing one
                                  Status &error) = 0;
 
+  virtual void RecordLoadedModule(const lldb::ModuleSP &module_sp,
+                                  Target &target) {
+    return;
+  }
+
   /// Attach to an existing process by process name.
   ///
   /// This function is not meant to be overridden by Process subclasses. It
@@ -1011,12 +1016,11 @@ public:
   ///   supports virtual registers. std::nullopt if the platform does not 
   ///   support virtual registers.
   virtual std::optional<llvm::Error>
-  ReadVirtualRegister(lldb::StackFrameSP frame_sp,
-                      lldb::RegisterKind reg_kind,
-                      lldb::regnum64_t reg_num,
-                      RegisterValue &reg_value) {
+  ReadVirtualRegister(RegisterContext *reg_ctx, lldb::RegisterKind reg_kind,
+                      lldb::regnum64_t reg_num, Value &value) {
     return std::nullopt; // This platform doesn't support virtual registers.
   }
+
 protected:
   /// Create a list of ArchSpecs with the given OS and a architectures. The
   /// vendor field is left as an "unspecified unknown".

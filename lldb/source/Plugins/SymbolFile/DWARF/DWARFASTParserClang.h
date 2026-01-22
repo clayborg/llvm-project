@@ -580,6 +580,7 @@ struct ParsedDWARFTypeAttributes {
   uint32_t bit_stride = 0;
   uint32_t byte_stride = 0;
   uint32_t encoding = 0;
+  lldb::addr_t addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
 
   ///< Indicates ref-qualifier of C++ member function if present.
   ///< Is RQ_None otherwise.
