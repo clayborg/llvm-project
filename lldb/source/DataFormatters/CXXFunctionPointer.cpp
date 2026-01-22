@@ -24,8 +24,10 @@ using namespace lldb_private::formatters;
 bool lldb_private::formatters::CXXFunctionPointerSummaryProvider(
     ValueObject &valobj, Stream &stream, const TypeSummaryOptions &options) {
   StreamString sstr;
-  auto [func_ptr_address, func_ptr_address_type] = valobj.GetPointerValue();
-  if (func_ptr_address != 0 && func_ptr_address != LLDB_INVALID_ADDRESS) {
+  auto [func_ptr_address, func_ptr_address_type, func_ptr_address_space] =
+      valobj.GetPointerValue();
+  if (func_ptr_address != 0 && func_ptr_address != LLDB_INVALID_ADDRESS &&
+      func_ptr_address_space == LLDB_DEFAULT_ADDRESS_SPACE) {
     switch (func_ptr_address_type) {
     case eAddressTypeInvalid:
     case eAddressTypeFile:
