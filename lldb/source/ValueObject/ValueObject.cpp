@@ -25,6 +25,7 @@
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Symbol/Variable.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
@@ -315,8 +316,21 @@ const char *ValueObject::GetLocationAsCStringImpl(const Value &value,
       case Value::ValueType::FileAddress:
       case Value::ValueType::HostAddress: {
         uint32_t addr_nibble_size = data.GetAddressByteSize() * 2;
-        sstr.Printf("0x%*.*llx", addr_nibble_size, addr_nibble_size,
-                    value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS));
+        std::optional<lldb::addr_space_t> addr_space = value.GetAddressSpace();
+        if (addr_space.has_value() &&
+            *addr_space != LLDB_DEFAULT_ADDRESS_SPACE && GetProcessSP() &&
+            GetProcessSP()->GetABI()) {
+          ABI *abi = GetProcessSP()->GetABI().get();
+          std::string addr_space_name = abi->MapAddressSpaceName(*addr_space);
+
+          sstr.Printf("%s#0x%*.*llx", addr_space_name.c_str(), addr_nibble_size,
+                      addr_nibble_size,
+                      value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS));
+        } else {
+          sstr.Printf("0x%*.*llx", addr_nibble_size, addr_nibble_size,
+                      value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS));
+        }
+
         m_location_str = std::string(sstr.GetString());
       } break;
       }
@@ -705,7 +719,7 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
     lldb::DataBufferSP data_sp(heap_buf_ptr =
                                    new lldb_private::DataBufferHeap());
 
-    auto [addr, addr_type] =
+    auto [addr, addr_type, addr_space] =
         is_pointer_type ? GetPointerValue() : GetAddressOf(true);
 
     switch (addr_type) {
@@ -732,11 +746,20 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
       ExecutionContext exe_ctx(GetExecutionContextRef());
       if (Target *target = exe_ctx.GetTargetPtr()) {
         heap_buf_ptr->SetByteSize(bytes);
-        Address target_addr;
-        target_addr.SetLoadAddress(addr + offset, target);
-        size_t bytes_read =
-            target->ReadMemory(target_addr, heap_buf_ptr->GetBytes(), bytes,
-                               error, /*force_live_memory=*/true);
+
+        size_t bytes_read = 0;
+        if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+          AddressSpec addr_spec(addr + offset, addr_space,
+                                exe_ctx.GetThreadSP());
+          bytes_read = exe_ctx.GetProcessPtr()->ReadMemory(
+              addr_spec, heap_buf_ptr->GetBytes(), bytes, error);
+        } else {
+          Address target_addr;
+          target_addr.SetLoadAddress(addr + offset, target);
+          bytes_read = target->ReadMemory(target_addr, heap_buf_ptr->GetBytes(),
+                                          bytes, error,
+                                          /*force_live_memory=*/true);
+        }
         if (error.Success() || bytes_read > 0) {
           data.SetData(data_sp);
           return bytes_read;
@@ -817,8 +840,15 @@ bool ValueObject::SetData(DataExtractor &data, Status &error) {
     Process *process = exe_ctx.GetProcessPtr();
     if (process) {
       addr_t target_addr = m_value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
-      size_t bytes_written = process->WriteMemory(
-          target_addr, data.GetDataStart(), byte_size, error);
+      size_t bytes_written = 0;
+      std::optional<lldb::addr_space_t> addr_space = m_value.GetAddressSpace();
+      if (addr_space.has_value() && *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+        error =
+            Status::FromErrorString("writing to address space not implemented");
+      } else {
+        bytes_written = process->WriteMemory(target_addr, data.GetDataStart(),
+                                             byte_size, error);
+      }
       if (!error.Success())
         return false;
       if (bytes_written != byte_size) {
@@ -1616,9 +1646,16 @@ ValueObject::GetAddressOf(bool scalar_is_load_address) {
     return {};
 
   case Value::ValueType::LoadAddress:
-  case Value::ValueType::FileAddress:
+  case Value::ValueType::FileAddress: {
+    std::optional<lldb::addr_space_t> opt_addr_space =
+        m_value.GetAddressSpace();
+    lldb::addr_space_t addr_space = opt_addr_space.has_value()
+                                        ? *opt_addr_space
+                                        : LLDB_DEFAULT_ADDRESS_SPACE;
+
     return {m_value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS),
-            m_value.GetValueAddressType()};
+            m_value.GetValueAddressType(), addr_space};
+  }
   case Value::ValueType::HostAddress:
     return {LLDB_INVALID_ADDRESS, m_value.GetValueAddressType()};
   }
@@ -1640,7 +1677,13 @@ ValueObject::AddrAndType ValueObject::GetPointerValue() {
   case Value::ValueType::LoadAddress:
   case Value::ValueType::FileAddress: {
     lldb::offset_t data_offset = 0;
-    return {m_data.GetAddress(&data_offset), GetAddressTypeOfChildren()};
+    std::optional<lldb::addr_space_t> opt_addr_space =
+        m_value.GetAddressSpace();
+    lldb::addr_space_t addr_space = opt_addr_space.has_value()
+                                        ? *opt_addr_space
+                                        : LLDB_DEFAULT_ADDRESS_SPACE;
+    return {m_data.GetAddress(&data_offset), GetAddressTypeOfChildren(),
+            addr_space};
   }
   }
 
@@ -1697,8 +1740,17 @@ bool ValueObject::SetValueFromCString(const char *value_str, Status &error) {
         if (process) {
           addr_t target_addr =
               m_value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
-          size_t bytes_written = process->WriteScalarToMemory(
-              target_addr, new_scalar, byte_size, error);
+          size_t bytes_written = 0;
+          std::optional<lldb::addr_space_t> addr_space =
+              m_value.GetAddressSpace();
+          if (addr_space.has_value() &&
+              *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+            error = Status::FromErrorString(
+                "writing to address space not implemented");
+          } else {
+            bytes_written = process->WriteScalarToMemory(
+                target_addr, new_scalar, byte_size, error);
+          }
           if (!error.Success())
             return false;
           if (bytes_written != byte_size) {
@@ -2856,7 +2908,8 @@ ValueObjectSP ValueObject::AddressOf(Status &error) {
   if (m_addr_of_valobj_sp)
     return m_addr_of_valobj_sp;
 
-  auto [addr, address_type] = GetAddressOf(/*scalar_is_load_address=*/false);
+  auto [addr, address_type, addr_space] =
+      GetAddressOf(/*scalar_is_load_address=*/false);
   error.Clear();
   if (addr != LLDB_INVALID_ADDRESS && address_type != eAddressTypeHost) {
     switch (address_type) {
@@ -2881,6 +2934,7 @@ ValueObjectSP ValueObject::AddressOf(Status &error) {
             exe_ctx.GetBestExecutionContextScope(),
             compiler_type.GetPointerType(), ConstString(name.c_str()), buffer,
             endian::InlHostByteOrder(), exe_ctx.GetAddressByteSize());
+        m_addr_of_valobj_sp->GetValue().SetAddressSpace(addr_space, &exe_ctx);
       }
     } break;
     default:
@@ -2970,7 +3024,8 @@ ValueObjectSP ValueObject::CastPointerType(const char *name, TypeSP &type_sp) {
 lldb::addr_t ValueObject::GetLoadAddress() {
   if (auto target_sp = GetTargetSP()) {
     const bool scalar_is_load_address = true;
-    auto [addr_value, addr_type] = GetAddressOf(scalar_is_load_address);
+    auto [addr_value, addr_type, addr_space] =
+        GetAddressOf(scalar_is_load_address);
     if (addr_type == eAddressTypeFile) {
       lldb::ModuleSP module_sp(GetModule());
       if (!module_sp)

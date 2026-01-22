@@ -68,7 +68,7 @@ BorrowedStackFrame::GetSymbolContext(SymbolContextItem resolve_scope) {
   return m_borrowed_frame_sp->GetSymbolContext(resolve_scope);
 }
 
-llvm::Error BorrowedStackFrame::GetFrameBaseValue(Scalar &value) {
+llvm::Error BorrowedStackFrame::GetFrameBaseValue(Value &value) {
   return m_borrowed_frame_sp->GetFrameBaseValue(value);
 }
 
