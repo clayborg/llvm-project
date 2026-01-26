@@ -85,6 +85,12 @@ public:
   size_t GetGPUThreadStatus(Process &process, Stream &strm,
                             bool only_threads_with_stop_reason) override;
 
+  lldb::ThreadSP FindGPUThread(Process &process, const GPUDim3 &block_idx,
+                               const GPUDim3 &thread_idx) override;
+
+  bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
+                          GPUDim3 &thread_idx) override;
+
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
