@@ -26,6 +26,7 @@
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/LineEntry.h"
 #include "lldb/Symbol/LineTable.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/SystemRuntime.h"
@@ -1246,6 +1247,21 @@ protected:
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
     Process *process = m_exe_ctx.GetProcessPtr();
     const bool only_threads_with_stop_reason = false;
+
+    // Check if this is a GPU target and delegate to the platform plugin if so.
+    Target &target = process->GetTarget();
+    if (target.IsGPUTarget()) {
+      PlatformSP platform_sp = target.GetPlatform();
+      if (platform_sp) {
+        size_t num_printed =
+            platform_sp->GetGPUThreadStatus(*process, strm,
+                                            only_threads_with_stop_reason);
+        if (num_printed > 0)
+          return;
+        // Fall through to default behavior if the platform didn't handle it.
+      }
+    }
+
     const uint32_t start_frame = 0;
     const uint32_t num_frames = 0;
     const uint32_t num_frames_with_source = 0;
