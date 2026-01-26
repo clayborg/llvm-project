@@ -82,6 +82,9 @@ public:
   void RecordLoadedModule(const lldb::ModuleSP &module_sp,
                           Target &target) override;
 
+  size_t GetGPUThreadStatus(Process &process, Stream &strm,
+                            bool only_threads_with_stop_reason) override;
+
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 

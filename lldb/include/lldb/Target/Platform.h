@@ -1021,6 +1021,30 @@ public:
     return std::nullopt; // This platform doesn't support virtual registers.
   }
 
+  /// Get thread status for GPU targets.
+  ///
+  /// GPU platforms may need to display thread status differently than CPU
+  /// platforms due to their unique execution model (e.g., warps, lanes,
+  /// SIMT execution). This method allows GPU platform plugins to provide
+  /// custom thread listing behavior.
+  ///
+  /// \param[in] process
+  ///     The process whose threads should be listed.
+  ///
+  /// \param[in] strm
+  ///     The stream to write the thread status output to.
+  ///
+  /// \param[in] only_threads_with_stop_reason
+  ///     If true, only threads with a valid stop reason will be displayed.
+  ///
+  /// \returns
+  ///     The number of threads whose status was printed, or 0 if this
+  ///     platform does not provide custom GPU thread status handling.
+  virtual size_t GetGPUThreadStatus(Process &process, Stream &strm,
+                                    bool only_threads_with_stop_reason) {
+    return 0;
+  }
+
 protected:
   /// Create a list of ArchSpecs with the given OS and a architectures. The
   /// vendor field is left as an "unspecified unknown".

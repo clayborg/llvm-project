@@ -7,18 +7,28 @@
 //===----------------------------------------------------------------------===//
 
 #include "PlatformNVGPU.h"
+#include "cudadebugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
+#include "lldb/Target/StackFrame.h"
+#include "lldb/Target/StopInfo.h"
+#include "lldb/Target/Target.h"
+#include "lldb/Target/Thread.h"
+#include "lldb/Target/ThreadList.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Stream.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/TargetParser/Triple.h"
 
-#include "cudadebugger.h"
+#include <map>
+#include <regex>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -569,4 +579,273 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
 
   LLDB_LOG(log, "RecordLoadedModule: PTX register location not found");
   return 0;
+}
+
+/// Represents the 3D index of a CUDA block or thread.
+struct Dim3 {
+  int x = 0;
+  int y = 0;
+  int z = 0;
+
+  bool operator==(const Dim3 &other) const {
+    return x == other.x && y == other.y && z == other.z;
+  }
+
+  bool operator<(const Dim3 &other) const {
+    if (z != other.z)
+      return z < other.z;
+    if (y != other.y)
+      return y < other.y;
+    return x < other.x;
+  }
+};
+
+/// Represents a CUDA thread's full coordinates.
+struct CUDAThreadCoord {
+  Dim3 block_idx;
+  Dim3 thread_idx;
+  lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
+
+  bool operator<(const CUDAThreadCoord &other) const {
+    if (block_idx < other.block_idx)
+      return true;
+    if (other.block_idx < block_idx)
+      return false;
+    return thread_idx < other.thread_idx;
+  }
+};
+
+/// Represents a range of CUDA thread coordinates that share the same PC.
+struct CUDAThreadRange {
+  Dim3 block_min;
+  Dim3 block_max;
+  Dim3 thread_min;
+  Dim3 thread_max;
+  size_t count = 0;
+
+  void AddCoord(const CUDAThreadCoord &coord) {
+    if (count == 0) {
+      block_min = block_max = coord.block_idx;
+      thread_min = thread_max = coord.thread_idx;
+    } else {
+      block_min.x = std::min(block_min.x, coord.block_idx.x);
+      block_min.y = std::min(block_min.y, coord.block_idx.y);
+      block_min.z = std::min(block_min.z, coord.block_idx.z);
+      block_max.x = std::max(block_max.x, coord.block_idx.x);
+      block_max.y = std::max(block_max.y, coord.block_idx.y);
+      block_max.z = std::max(block_max.z, coord.block_idx.z);
+      thread_min.x = std::min(thread_min.x, coord.thread_idx.x);
+      thread_min.y = std::min(thread_min.y, coord.thread_idx.y);
+      thread_min.z = std::min(thread_min.z, coord.thread_idx.z);
+      thread_max.x = std::max(thread_max.x, coord.thread_idx.x);
+      thread_max.y = std::max(thread_max.y, coord.thread_idx.y);
+      thread_max.z = std::max(thread_max.z, coord.thread_idx.z);
+    }
+    ++count;
+  }
+};
+
+/// Parse a CUDA thread name in the format:
+/// "blockIdx(x=79 y=0 z=0) threadIdx(x=14 y=0 z=0)"
+static bool ParseCUDAThreadName(llvm::StringRef name, CUDAThreadCoord &coord) {
+  // Pattern: blockIdx(x=N y=N z=N) threadIdx(x=N y=N z=N)
+  static std::regex pattern(
+      R"(blockIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\)\s+)"
+      R"(threadIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\))");
+
+  std::string name_str = name.str();
+  std::smatch match;
+  if (!std::regex_search(name_str, match, pattern))
+    return false;
+
+  coord.block_idx.x = std::stoi(match[1].str());
+  coord.block_idx.y = std::stoi(match[2].str());
+  coord.block_idx.z = std::stoi(match[3].str());
+  coord.thread_idx.x = std::stoi(match[4].str());
+  coord.thread_idx.y = std::stoi(match[5].str());
+  coord.thread_idx.z = std::stoi(match[6].str());
+  return true;
+}
+
+/// Format a dimension range, showing just the value if min==max,
+/// or [min...max] if they differ.
+static void FormatDimRange(Stream &strm, const char *name, int min_val,
+                           int max_val) {
+  if (min_val == max_val)
+    strm.Printf("%s=%d", name, min_val);
+  else
+    strm.Printf("%s=[%d...%d]", name, min_val, max_val);
+}
+
+/// Format a Dim3 range for display.
+static void FormatDim3Range(Stream &strm, const char *prefix,
+                            const Dim3 &min_dim, const Dim3 &max_dim) {
+  strm.Printf("%s(", prefix);
+  FormatDimRange(strm, "x", min_dim.x, max_dim.x);
+  strm.PutChar(' ');
+  FormatDimRange(strm, "y", min_dim.y, max_dim.y);
+  strm.PutChar(' ');
+  FormatDimRange(strm, "z", min_dim.z, max_dim.z);
+  strm.PutChar(')');
+}
+
+/// Represents a group of consecutive threads sharing the same PC.
+struct ConsecutiveThreadGroup {
+  lldb::addr_t pc = LLDB_INVALID_ADDRESS;
+  std::vector<CUDAThreadCoord> coords;
+  ThreadSP representative_thread;
+};
+
+size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
+                                         bool only_threads_with_stop_reason) {
+  // Build groups of consecutive threads that share the same PC.
+  // We only coalesce threads that are adjacent in the thread list.
+  std::vector<ConsecutiveThreadGroup> groups;
+
+  // Collect all thread IDs first to avoid holding the lock while iterating.
+  std::vector<lldb::tid_t> thread_ids;
+  {
+    std::lock_guard<std::recursive_mutex> guard(
+        process.GetThreadList().GetMutex());
+    ThreadList &thread_list = process.GetThreadList();
+    uint32_t num_threads = thread_list.GetSize();
+    thread_ids.reserve(num_threads);
+    for (uint32_t i = 0; i < num_threads; ++i)
+      thread_ids.push_back(thread_list.GetThreadAtIndex(i)->GetID());
+  }
+
+  // Get selected thread ID for marking.
+  lldb::tid_t selected_tid = LLDB_INVALID_THREAD_ID;
+  ThreadSP selected_thread = process.GetThreadList().GetSelectedThread();
+  if (selected_thread)
+    selected_tid = selected_thread->GetID();
+
+  // Process each thread, grouping consecutive threads with the same PC.
+  for (lldb::tid_t tid : thread_ids) {
+    ThreadSP thread_sp = process.GetThreadList().FindThreadByID(tid);
+    if (!thread_sp)
+      continue;
+
+    // Filter by stop reason if requested.
+    if (only_threads_with_stop_reason) {
+      StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
+      if (!stop_info_sp || !stop_info_sp->ShouldShow())
+        continue;
+    }
+
+    // Get the thread name and parse CUDA coordinates.
+    const char *name = thread_sp->GetName();
+    if (!name)
+      continue;
+
+    CUDAThreadCoord coord;
+    if (!ParseCUDAThreadName(name, coord))
+      continue;
+
+    coord.tid = tid;
+
+    // Get the PC from the register context.
+    RegisterContextSP reg_ctx_sp = thread_sp->GetRegisterContext();
+    if (!reg_ctx_sp)
+      continue;
+
+    lldb::addr_t pc = reg_ctx_sp->GetPC();
+    if (pc == LLDB_INVALID_ADDRESS)
+      continue;
+
+    // Check if this thread can be added to the current group (same PC).
+    if (!groups.empty() && groups.back().pc == pc) {
+      groups.back().coords.push_back(coord);
+    } else {
+      // Start a new group.
+      ConsecutiveThreadGroup new_group;
+      new_group.pc = pc;
+      new_group.coords.push_back(coord);
+      new_group.representative_thread = thread_sp;
+      groups.push_back(std::move(new_group));
+    }
+  }
+
+  if (groups.empty())
+    return 0;
+
+  // Print the process status first.
+  process.GetStatus(strm);
+
+  // Print each group of consecutive threads.
+  size_t groups_printed = 0;
+  for (const auto &group : groups) {
+    // Compute the range covered by all threads in this group.
+    CUDAThreadRange range;
+    for (const auto &coord : group.coords)
+      range.AddCoord(coord);
+
+    // Check if this group contains the selected thread.
+    bool is_selected = false;
+    if (selected_tid != LLDB_INVALID_THREAD_ID) {
+      for (const auto &coord : group.coords) {
+        if (coord.tid == selected_tid) {
+          is_selected = true;
+          break;
+        }
+      }
+    }
+
+    // Add spacing between thread entries for better readability.
+    if (groups_printed > 0)
+      strm.EOL();
+
+    strm.Indent();
+    strm.Printf("%c ", is_selected ? '*' : ' ');
+
+    // Print coalesced thread info.
+    strm.Printf("%zu thread(s) at pc=0x%llx: ", range.count,
+                static_cast<unsigned long long>(group.pc));
+    FormatDim3Range(strm, "blockIdx", range.block_min, range.block_max);
+    strm.PutChar(' ');
+    FormatDim3Range(strm, "threadIdx", range.thread_min, range.thread_max);
+    strm.EOL();
+
+    // Print the frame info from the representative thread.
+    // We show only the function name without arguments or source context
+    // since all coalesced threads share the same location.
+    ThreadSP thread_sp = group.representative_thread;
+    if (thread_sp) {
+      StackFrameSP frame_sp = thread_sp->GetStackFrameAtIndex(0);
+      if (frame_sp) {
+        strm.IndentMore();
+        strm.IndentMore();
+        strm.Indent();
+
+        ExecutionContext exe_ctx(frame_sp);
+        Target *target = exe_ctx.GetTargetPtr();
+        Address frame_addr = frame_sp->GetFrameCodeAddress();
+
+        // Print frame address.
+        strm.Printf("0x%0*" PRIx64 " ",
+                    target ? (target->GetArchitecture().GetAddressByteSize() * 2)
+                           : 16,
+                    frame_addr.GetLoadAddress(target));
+
+        // Get symbol context and dump without function arguments or source.
+        SymbolContext sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
+        const bool show_fullpaths = false;
+        const bool show_module = true;
+        const bool show_inlined_frames = true;
+        const bool show_function_arguments = false;
+        const bool show_function_name = true;
+        sc.DumpStopContext(&strm, exe_ctx.GetBestExecutionContextScope(),
+                           frame_addr, show_fullpaths, show_module,
+                           show_inlined_frames, show_function_arguments,
+                           show_function_name);
+        strm.EOL();
+        strm.IndentLess();
+        strm.IndentLess();
+      }
+    }
+
+    ++groups_printed;
+  }
+
+  return groups_printed;
 }
