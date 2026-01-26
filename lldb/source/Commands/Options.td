@@ -1936,6 +1936,20 @@ let Command = "thread select" in {
         Arg<"ThreadID">,
         Completion<"ThreadID">,
         Desc<"Provide a thread ID instead of a thread index.">;
+  def thread_select_blockidx
+      : Option<"blockidx", "b">,
+        Group<3>,
+        Arg<"None">,
+        Desc<"Select GPU thread by block index. Format: N, (N), (x=N), "
+             "(N,M), (x=N y=M), (N,M,P), or (x=N y=M z=P). "
+             "Single integers refer to x coordinate.">;
+  def thread_select_threadidx
+      : Option<"threadidx", "i">,
+        Group<3>,
+        Arg<"None">,
+        Desc<"Select GPU thread by thread index. Format: N, (N), (x=N), "
+             "(N,M), (x=N y=M), (N,M,P), or (x=N y=M z=P). "
+             "Single integers refer to x coordinate.">;
 }
 
 let Command = "thread trace dump function calls" in {
