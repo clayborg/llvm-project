@@ -849,3 +849,63 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
 
   return groups_printed;
 }
+
+bool PlatformNVGPU::ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
+                                       GPUDim3 &thread_idx) {
+  // Pattern: blockIdx(x=N y=N z=N) threadIdx(x=N y=N z=N)
+  static std::regex pattern(
+      R"(blockIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\)\s+)"
+      R"(threadIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\))");
+
+  std::string name_str = name.str();
+  std::smatch match;
+  if (!std::regex_search(name_str, match, pattern))
+    return false;
+
+  block_idx.x = std::stoi(match[1].str());
+  block_idx.y = std::stoi(match[2].str());
+  block_idx.z = std::stoi(match[3].str());
+  thread_idx.x = std::stoi(match[4].str());
+  thread_idx.y = std::stoi(match[5].str());
+  thread_idx.z = std::stoi(match[6].str());
+  return true;
+}
+
+lldb::ThreadSP PlatformNVGPU::FindGPUThread(Process &process,
+                                            const GPUDim3 &block_idx,
+                                            const GPUDim3 &thread_idx) {
+  ThreadList &thread_list = process.GetThreadList();
+  std::lock_guard<std::recursive_mutex> guard(thread_list.GetMutex());
+
+  uint32_t num_threads = thread_list.GetSize();
+  for (uint32_t i = 0; i < num_threads; ++i) {
+    ThreadSP thread_sp = thread_list.GetThreadAtIndex(i);
+    if (!thread_sp)
+      continue;
+
+    const char *name = thread_sp->GetName();
+    if (!name)
+      continue;
+
+    GPUDim3 actual_block_idx, actual_thread_idx;
+    if (!ParseGPUThreadName(name, actual_block_idx, actual_thread_idx))
+      continue;
+
+    // Helper lambda to check if a coordinate matches.
+    auto coordinate_matches = [](int actual_value,
+                                 const std::optional<int> &pattern) -> bool {
+      return !pattern.has_value() || actual_value == pattern.value();
+    };
+
+    // Check if this thread matches the pattern.
+    if (coordinate_matches(actual_block_idx.x.value_or(0), block_idx.x) &&
+        coordinate_matches(actual_block_idx.y.value_or(0), block_idx.y) &&
+        coordinate_matches(actual_block_idx.z.value_or(0), block_idx.z) &&
+        coordinate_matches(actual_thread_idx.x.value_or(0), thread_idx.x) &&
+        coordinate_matches(actual_thread_idx.y.value_or(0), thread_idx.y) &&
+        coordinate_matches(actual_thread_idx.z.value_or(0), thread_idx.z))
+      return thread_sp;
+  }
+
+  return nullptr;
+}
