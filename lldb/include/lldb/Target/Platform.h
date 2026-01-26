@@ -45,6 +45,22 @@ typedef std::vector<ProcessInstanceInfo> ProcessInstanceInfoList;
 class ModuleCache;
 enum MmapFlags { eMmapFlagsPrivate = 1, eMmapFlagsAnon = 2 };
 
+/// Represents a 3D index for GPU coordinates (block or thread).
+///
+/// Each dimension is optional, allowing for wildcard matching when not
+/// specified.
+struct GPUDim3 {
+  std::optional<int> x;
+  std::optional<int> y;
+  std::optional<int> z;
+
+  /// Check if all dimensions are unspecified.
+  ///
+  /// \return
+  ///     True if all dimensions are empty, false otherwise.
+  bool IsEmpty() const { return !x && !y && !z; }
+};
+
 class PlatformProperties : public Properties {
 public:
   PlatformProperties();
@@ -1043,6 +1059,75 @@ public:
   virtual size_t GetGPUThreadStatus(Process &process, Stream &strm,
                                     bool only_threads_with_stop_reason) {
     return 0;
+  }
+
+  /// Find a GPU thread by block and thread indices.
+  ///
+  /// This method searches for a GPU thread matching the specified block and
+  /// thread coordinates. The default implementation returns nullptr.
+  ///
+  /// \param[in] process
+  ///     The process to search for threads.
+  ///
+  /// \param[in] block_idx
+  ///     The block index pattern to match. Unspecified dimensions match any
+  ///     value.
+  ///
+  /// \param[in] thread_idx
+  ///     The thread index pattern to match. Unspecified dimensions match any
+  ///     value.
+  ///
+  /// \return
+  ///     The matching thread, or nullptr if not found or if this platform
+  ///     does not support GPU thread selection by coordinates.
+  virtual lldb::ThreadSP FindGPUThread(Process &process,
+                                       const GPUDim3 &block_idx,
+                                       const GPUDim3 &thread_idx) {
+    return nullptr;
+  }
+
+  /// Parse a GPU coordinate string into a GPUDim3 structure.
+  ///
+  /// Supported formats:
+  /// - Single integer: "5" -> x=5
+  /// - Parenthesized single: "(5)" -> x=5
+  /// - Named single: "(x=5)" -> x=5
+  /// - Tuple: "(5, 2)" -> x=5, y=2
+  /// - Named tuple: "(x=5 y=2)" or "(x=5, y=2, z=3)"
+  /// - Mixed: "(5, y=2)" -> x=5, y=2
+  ///
+  /// This is a static method providing generic parsing suitable for most
+  /// GPU platforms.
+  ///
+  /// \param[in] input
+  ///     The input string to parse.
+  ///
+  /// \param[out] dim
+  ///     The GPUDim3 structure to populate with parsed coordinates.
+  ///
+  /// \return
+  ///     Status indicating success or error with description.
+  static Status ParseGPUCoordinate(llvm::StringRef input, GPUDim3 &dim);
+
+  /// Parse a GPU thread name to extract block and thread indices.
+  ///
+  /// The default implementation returns false, indicating the platform does
+  /// not support GPU thread name parsing.
+  ///
+  /// \param[in] name
+  ///     The thread name to parse.
+  ///
+  /// \param[out] block_idx
+  ///     The parsed block index.
+  ///
+  /// \param[out] thread_idx
+  ///     The parsed thread index.
+  ///
+  /// \return
+  ///     True if parsing succeeded, false otherwise.
+  virtual bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
+                                  GPUDim3 &thread_idx) {
+    return false;
   }
 
 protected:
