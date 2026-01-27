@@ -482,20 +482,27 @@ class DebugCommunication(object):
                 }
             )
         elif request["command"] == "startDebugging":
-            self.send_packet(
-                {
-                    "type": "response",
-                    "seq": 0,
-                    "request_seq": request["seq"],
-                    "success": True,
-                    "message": None,
-                    "command": "startDebugging",
-                    "body": {},
-                }
-            )
+            self._handle_startDebugging_request(request)
         else:
             desc = 'unknown reverse request "%s"' % (request["command"])
             raise ValueError(desc)
+
+    def _handle_startDebugging_request(self, request: Request) -> None:
+        """Handle startDebugging reverse request.
+
+        Base implementation that just sends a success response.
+        DebugAdapterServer overrides this to create child sessions.
+        """
+        self.send_packet(
+            {
+                "type": "response",
+                "seq": 0,
+                "request_seq": request["seq"],
+                "success": True,
+                "command": "startDebugging",
+                "body": {},
+            }
+        )
 
     def _process_continued(self, all_threads_continued: bool):
         self.frame_scopes = {}
@@ -1535,6 +1542,9 @@ class DebugAdapterServer(DebugCommunication):
     ):
         self.process = None
         self.connection = None
+        self.child_dap_sessions: Dict[int, "DebugAdapterServer"] = (
+            {}
+        )  # Track child sessions for GPU debugging
         if executable is not None:
             process, connection = DebugAdapterServer.launch(
                 executable=executable,
@@ -1573,6 +1583,10 @@ class DebugAdapterServer(DebugCommunication):
                 log_file,
                 spawn_helper,
             )
+
+    def get_child_sessions(self) -> Dict[int, "DebugAdapterServer"]:
+        """Return dictionary of child DAP sessions (for GPU debugging)."""
+        return self.child_dap_sessions
 
     @classmethod
     def launch(
@@ -1638,6 +1652,70 @@ class DebugAdapterServer(DebugCommunication):
         if self.process:
             return self.process.pid
         return -1
+
+    def _handle_startDebugging_request(self, request: Request) -> None:
+        """Handle startDebugging reverse request by creating child DAP sessions.
+
+        This override creates child DAP sessions for GPU debugging.
+        """
+        try:
+            arguments = request.get("arguments", {})
+            request_type = arguments.get("request", "attach")
+            configuration = arguments.get("configuration", {})
+            debugger_id = configuration.get("debuggerId")
+            target_id = configuration.get("targetId")
+
+            # Validate that both debugger_id and target_id are provided together
+            if (debugger_id is None) != (target_id is None):
+                raise ValueError(
+                    "Both debuggerId and targetId must be specified together for debugger "
+                    "reuse, or both must be omitted to create a new debugger"
+                )
+
+            # Create a new child DAP session using the same connection
+            child_dap = DebugAdapterServer(
+                connection=self.connection,
+                log_file=self.log_file,
+            )
+
+            # Configure the child session based on the request type
+            if request_type == "attach":
+                child_dap.request_initialize()
+
+                attach_commands = configuration.get("attachCommands", [])
+                self.child_dap_sessions[target_id] = child_dap
+
+                child_dap.request_attach(
+                    debuggerId=debugger_id,
+                    targetId=target_id,
+                    attachCommands=attach_commands,
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported startDebugging request type: {request_type}"
+                )
+
+            # Send success response
+            response = {
+                "type": "response",
+                "request_seq": request.get("seq", 0),
+                "success": True,
+                "command": "startDebugging",
+                "body": {},
+            }
+
+        except Exception as e:
+            # Send error response
+            response = {
+                "type": "response",
+                "request_seq": request.get("seq", 0),
+                "success": False,
+                "command": "startDebugging",
+                "message": f"Failed to start debugging: {str(e)}",
+                "body": {},
+            }
+
+        self.send_packet(response)
 
     def terminate(self):
         try:
