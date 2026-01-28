@@ -3515,6 +3515,12 @@ lldb::addr_t ProcessGDBRemote::DoAllocateMemory(size_t size,
 
 Status ProcessGDBRemote::DoGetMemoryRegionInfo(addr_t load_addr,
                                                MemoryRegionInfo &region_info) {
+  // Don't send qMemoryRegionInfo packets for GPU targets as they may not
+  // support traditional memory region queries.
+  if (GetTarget().IsGPUTarget()) {
+    return Status::FromErrorString(
+        "qMemoryRegionInfo is not supported for GPU targets");
+  }
 
   Status error(m_gdb_comm.GetMemoryRegionInfo(load_addr, region_info));
   return error;
