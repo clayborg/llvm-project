@@ -29,5 +29,8 @@ add_dependencies(lldbPluginPlatformNVGPU
   LLDBPluginPlatformNVGPUUserPropertiesGen
   LLDBPluginPlatformNVGPUUserPropertiesEnumGen)
 
+# Include shared CUDA setup
+include(SetupCUDA)
+
 # Include the CUDA debugger headers
 lldb_add_cuda_include_dirs(lldbPluginPlatformNVGPU PRIVATE)
