@@ -30,25 +30,25 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
 
         self.select_gpu()
 
+        # All 16 threads should be at the first breakpoint, condensed into one line
         self.expect(
             "thread list",
             substrs=[
-                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
-                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=1 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
-                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=2 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
-                f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=3 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
+                "16 thread(s)",
+                "blockIdx(x=[0...3] y=0 z=0) threadIdx(x=[0...3] y=0 z=0)",
+                f"at {source}:{gpu_bp_line}",
             ],
         )
 
         self.dbg.SetAsync(False)
         self.select_gpu()
         self.gpu_process.Continue()
+        # Only threadIdx.x == 0 threads hit the second breakpoint (4 threads, one per block)
+        # The other 12 threads are at __syncthreads()
         self.expect(
             "thread list",
             substrs=[
-                f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
-                f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=1 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
-                f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=2 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
-                f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=3 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
+                "blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)",
+                f"at {source}:{gpu_bp_line_2}",
             ],
         )
