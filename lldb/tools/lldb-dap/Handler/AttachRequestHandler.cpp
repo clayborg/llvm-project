@@ -90,6 +90,11 @@ Error AttachRequestHandler::Run(const AttachRequestArguments &args) const {
       error.SetErrorStringWithFormat("invalid target_id %lu in attach config",
                                      *target_id);
     }
+    // When attaching to an existing target (e.g., GPU target created by parent
+    // session), the process is likely already stopped at a breakpoint. Set
+    // stop_at_entry to prevent ConfigurationDone from continuing past the
+    // current stop.
+    dap.stop_at_entry = true;
   } else {
     target = dap.CreateTarget(error);
   }
