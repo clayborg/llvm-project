@@ -62,6 +62,13 @@ protected:
   bool DoUpdateThreadList(lldb_private::ThreadList &old_thread_list,
                           lldb_private::ThreadList &new_thread_list) override;
 
+  // Bring base class DoReadMemory overloads into scope
+  // so that it won't be hidden by the DoReadMemory() override below
+  using ProcessElfEmbeddedCore::DoReadMemory;
+  size_t DoReadMemory(const lldb_private::AddressSpec &addr_spec,
+                      const lldb_private::AddressSpaceInfo &info, void *buf,
+                      size_t size, lldb_private::Status &error) override;
+
 private:
   bool initRocm();
   const lldb_private::ArchSpec &GetArchitecture();

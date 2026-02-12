@@ -255,6 +255,12 @@ if is_configured("test_compiler"):
 if is_configured("hipcc_path"):
     dotest_cmd += ["--hipcc-path", config.hipcc_path]
 
+if is_configured("rocgdb_ld_preload"):
+    dotest_cmd += ["--rocgdb-ld-preload", config.rocgdb_ld_preload]
+
+if is_configured("rocgdb_ld_library_path"):
+    dotest_cmd += ["--rocgdb-ld-library-path", config.rocgdb_ld_library_path]
+
 if is_configured("dsymutil"):
     dotest_cmd += ["--dsymutil", config.dsymutil]
 

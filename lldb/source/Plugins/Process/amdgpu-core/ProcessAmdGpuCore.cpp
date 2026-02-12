@@ -15,6 +15,7 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
@@ -262,6 +263,19 @@ bool ProcessAmdGpuCore::initRocm() {
   }
   m_architecture_id = architecture_id;
 
+  m_address_spaces.push_back({"generic", (uint64_t)DW_ASPACE_AMDGPU::generic,
+                              /*is_thread_specific=*/true});
+  m_address_spaces.push_back({"region", (uint64_t)DW_ASPACE_AMDGPU::region,
+                              /*is_thread_specific=*/false});
+  m_address_spaces.push_back({"local", (uint64_t)DW_ASPACE_AMDGPU::local,
+                              /*is_thread_specific=*/true});
+  m_address_spaces.push_back({"private_lane",
+                              (uint64_t)DW_ASPACE_AMDGPU::private_lane,
+                              /*is_thread_specific=*/true});
+  m_address_spaces.push_back({"private_wave",
+                              (uint64_t)DW_ASPACE_AMDGPU::private_wave,
+                              /*is_thread_specific=*/true});
+
   return true;
 }
 
@@ -466,6 +480,63 @@ bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
   }
 
   return ret;
+}
+
+size_t
+ProcessAmdGpuCore::DoReadMemory(const lldb_private::AddressSpec &addr_spec,
+                                const lldb_private::AddressSpaceInfo &info,
+                                void *buf, size_t size,
+                                lldb_private::Status &error) {
+  Log *log = GetLog(LLDBLog::Process);
+  LLDB_LOGF(log,
+            "ProcessAmdGpuCore::DoReadMemory(addr=0x%" PRIx64
+            ", space_id=%" PRIu64 ", size=%zu)",
+            addr_spec.GetValue(), addr_spec.GetSpaceId().value_or(0), size);
+
+  amd_dbgapi_address_space_id_t address_space_id;
+  llvm::Error err = RunAmdDbgApiCommand([&] {
+    return amd_dbgapi_dwarf_address_space_to_address_space(
+        m_architecture_id, addr_spec.GetSpaceId().value_or(0),
+        &address_space_id);
+  });
+  if (err) {
+    std::string err_str = llvm::toString(std::move(err));
+    LLDB_LOGF(log,
+              "ProcessAmdGpuCore::DoReadMemory failed to convert DWARF address "
+              "space %" PRIu64 ": %s",
+              addr_spec.GetSpaceId().value_or(0), err_str.c_str());
+    error = Status::FromErrorString(err_str.c_str());
+    return 0;
+  }
+
+  ThreadSP cur_thread_sp = Process::m_thread_list_real.GetSelectedThread();
+  if (!cur_thread_sp) {
+    LLDB_LOGF(log,
+              "ProcessAmdGpuCore::DoReadMemory failed: no selected thread");
+    error = Status::FromErrorString("no selected thread");
+    return 0;
+  }
+
+  ThreadAMDGPU *cur_thread = static_cast<ThreadAMDGPU *>(cur_thread_sp.get());
+  amd_dbgapi_wave_id_t wave_id =
+      cur_thread->GetWaveId().value_or(AMD_DBGAPI_WAVE_NONE);
+  amd_dbgapi_lane_id_t lane_id = 0; // TODO: try to get current lane id.
+
+  err = RunAmdDbgApiCommand([&] {
+    return amd_dbgapi_read_memory(m_gpu_pid, wave_id, lane_id, address_space_id,
+                                  addr_spec.GetValue(), &size, buf);
+  });
+  if (err) {
+    std::string err_str = llvm::toString(std::move(err));
+    LLDB_LOGF(log,
+              "ProcessAmdGpuCore::DoReadMemory amd_dbgapi_read_memory failed "
+              "(addr=0x%" PRIx64 ", size=%zu): %s",
+              addr_spec.GetValue(), size, err_str.c_str());
+    error = Status::FromErrorString(err_str.c_str());
+    return 0;
+  }
+
+  return size;
 }
 
 void ProcessAmdGpuCore::AddThread(amd_dbgapi_wave_id_t wave_id) {}
