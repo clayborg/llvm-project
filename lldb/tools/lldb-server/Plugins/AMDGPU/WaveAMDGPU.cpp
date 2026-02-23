@@ -117,7 +117,8 @@ void WaveAMDGPU::SetDbgApiInfo(const DbgApiWaveInfo &wave_info) {
 }
 
 static lldb::StopReason
-GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason) {
+GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason,
+                                     std::string *description) {
   // If none of the bits are set, then we explicitly stopped the wave with
   // a call to `amd_dbgapi_wave_stop`.
   if (reason == AMD_DBGAPI_WAVE_STOP_REASON_NONE)
@@ -162,8 +163,10 @@ GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason) {
   if (reason & AMD_DBGAPI_WAVE_STOP_REASON_TRAP)
     return lldb::StopReason::eStopReasonException;
 
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_MEMORY_VIOLATION)
+  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_MEMORY_VIOLATION) {
+    *description = "Memory access violation";
     return lldb::StopReason::eStopReasonException;
+  }
 
   if (reason & AMD_DBGAPI_WAVE_STOP_REASON_ADDRESS_ERROR)
     return lldb::StopReason::eStopReasonException;
@@ -182,16 +185,18 @@ GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason) {
 
 void WaveAMDGPU::UpdateStopReasonFromWaveInfo() {
   lldb::StopReason reason = lldb::StopReason::eStopReasonInvalid;
+  std::string description;
   switch (m_wave_info.state) {
   case AMD_DBGAPI_WAVE_STATE_RUN:
   case AMD_DBGAPI_WAVE_STATE_SINGLE_STEP:
     reason = lldb::StopReason::eStopReasonNone;
     break;
   case AMD_DBGAPI_WAVE_STATE_STOP:
-    reason = GetLldbStopReasonForDbgApiStopReason(m_wave_info.stop_reason);
+    reason = GetLldbStopReasonForDbgApiStopReason(m_wave_info.stop_reason,
+                                                  &description);
     break;
   }
 
   assert(reason != lldb::StopReason::eStopReasonInvalid);
-  SetStopReason(reason);
+  SetStopReason(reason, description);
 }
