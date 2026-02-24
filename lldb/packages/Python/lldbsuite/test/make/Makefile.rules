@@ -123,6 +123,7 @@ ifneq "$(strip $(NVCC_SOURCES))" ""
 	override CC := $(NVCC)
 	override CXX := $(NVCC)
 	override CC_TYPE := cuda
+	USE_SYSTEM_STDLIB := 1
 endif
 
 
