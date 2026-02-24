@@ -84,11 +84,20 @@ class DAPTestCaseBase(TestBase):
     def set_source_breakpoints_from_source(
         self, source: Source, lines, data=None, wait_for_resolve=True
     ):
-        response = self.dap_server.request_setBreakpoints(
-            source,
-            lines,
-            data,
+        return self._set_source_breakpoints_impl(
+            self.dap_server, source, lines, data, wait_for_resolve
         )
+
+    def _set_source_breakpoints_impl(
+        self,
+        dap_server_instance,
+        source: Source,
+        lines,
+        data=None,
+        wait_for_resolve=True,
+    ):
+        """Implementation for setting source breakpoints on any DAP server"""
+        response = dap_server_instance.request_setBreakpoints(source, lines, data)
         if response is None:
             return []
         breakpoints = response["body"]["breakpoints"]
@@ -96,7 +105,7 @@ class DAPTestCaseBase(TestBase):
         for breakpoint in breakpoints:
             breakpoint_ids.append("%i" % (breakpoint["id"]))
         if wait_for_resolve:
-            self.wait_for_breakpoints_to_resolve(breakpoint_ids)
+            self.wait_for_breakpoints_to_resolve(breakpoint_ids, dap_server_instance)
         return breakpoint_ids
 
     def set_function_breakpoints(
@@ -119,9 +128,13 @@ class DAPTestCaseBase(TestBase):
             self.wait_for_breakpoints_to_resolve(breakpoint_ids)
         return breakpoint_ids
 
-    def wait_for_breakpoints_to_resolve(self, breakpoint_ids: list[str]):
-        unresolved_breakpoints = self.dap_server.wait_for_breakpoints_to_be_verified(
-            breakpoint_ids
+    def wait_for_breakpoints_to_resolve(
+        self, breakpoint_ids: list[str], dap_server_instance=None
+    ):
+        if dap_server_instance is None:
+            dap_server_instance = self.dap_server
+        unresolved_breakpoints = (
+            dap_server_instance.wait_for_breakpoints_to_be_verified(breakpoint_ids)
         )
         self.assertEqual(
             len(unresolved_breakpoints),
@@ -159,7 +172,12 @@ class DAPTestCaseBase(TestBase):
         "breakpoint_ids" should be a list of breakpoint ID strings
         (["1", "2"]). The return value from self.set_source_breakpoints()
         or self.set_function_breakpoints() can be passed to this function"""
-        stopped_events = self.dap_server.wait_for_stopped()
+        return self._verify_breakpoint_hit_impl(self.dap_server, breakpoint_ids)
+
+    def _verify_breakpoint_hit_impl(
+        self, dap_server_instance, breakpoint_ids: List[Union[int, str]]
+    ):
+        stopped_events = dap_server_instance.wait_for_stopped()
         normalized_bp_ids = [str(b) for b in breakpoint_ids]
         for stopped_event in stopped_events:
             if "body" in stopped_event:
@@ -420,7 +438,10 @@ class DAPTestCaseBase(TestBase):
         return None
 
     def do_continue(self):  # `continue` is a keyword.
-        resp = self.dap_server.request_continue()
+        return self._do_continue_impl(self.dap_server)
+
+    def _do_continue_impl(self, dap_server_instance):
+        resp = dap_server_instance.request_continue()
         self.assertTrue(resp["success"], f"continue request failed: {resp}")
 
     def continue_to_next_stop(self):
@@ -600,3 +621,67 @@ class DAPTestCaseBase(TestBase):
         if response["success"]:
             self.verify_invalidated_event(["all"])
         return response
+
+    def _get_dap_server(
+        self, child_session_id: Optional[int] = None
+    ) -> dap_server.DebugAdapterServer:
+        """Get a specific DAP server instance.
+
+        Args:
+            child_session_id: Unique id of child session, or None for main session
+
+        Returns:
+            The requested DAP server instance
+        """
+        if child_session_id is None:
+            return self.dap_server
+        else:
+            child_sessions = self.dap_server.get_child_sessions()
+            if child_session_id not in child_sessions:
+                raise IndexError(f"Child session id {child_session_id} not found.")
+            return child_sessions[child_session_id]
+
+    def set_source_breakpoints_on(
+        self,
+        child_session_id: Optional[int],
+        source_path,
+        lines,
+        data=None,
+        wait_for_resolve=True,
+    ):
+        """Set source breakpoints on a specific DAP session without switching the active session."""
+        return self._set_source_breakpoints_impl(
+            self._get_dap_server(child_session_id),
+            Source(path=source_path),
+            lines,
+            data,
+            wait_for_resolve,
+        )
+
+    def verify_breakpoint_hit_on(
+        self, child_session_id: Optional[int], breakpoint_ids: list[str]
+    ):
+        """Verify breakpoint hit on a specific DAP session without switching the active session."""
+        return self._verify_breakpoint_hit_impl(
+            self._get_dap_server(child_session_id), breakpoint_ids
+        )
+
+    def do_continue_on(self, child_session_id: Optional[int]):
+        """Continue execution on a specific DAP session without switching the active session."""
+        return self._do_continue_impl(self._get_dap_server(child_session_id))
+
+    def start_server(self, connection):
+        """
+        Start an lldb-dap server process listening on the specified connection.
+        """
+        log_file_path = self.getBuildArtifact("dap.txt")
+        (process, connection) = dap_server.DebugAdapterServer.launch(
+            executable=self.lldbDAPExec, connection=connection, log_file=log_file_path
+        )
+
+        def cleanup():
+            process.terminate()
+
+        self.addTearDownHook(cleanup)
+
+        return (process, connection)

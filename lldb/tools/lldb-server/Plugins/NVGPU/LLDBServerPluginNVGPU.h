@@ -40,6 +40,8 @@ public:
   ///     String reference containing the plugin name.
   llvm::StringRef GetPluginName() override;
 
+  llvm::StringRef GetSessionName();
+
   /// Get the initialization actions required for this plugin.
   ///
   /// \return

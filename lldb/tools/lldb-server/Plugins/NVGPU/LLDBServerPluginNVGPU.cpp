@@ -102,6 +102,10 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
 
 llvm::StringRef LLDBServerPluginNVGPU::GetPluginName() { return "nvgpu"; }
 
+llvm::StringRef LLDBServerPluginNVGPU::GetSessionName() {
+  return "Nvidia GPU Session";
+}
+
 std::optional<GPUActions> LLDBServerPluginNVGPU::NativeProcessIsStopping() {
   return {};
 }
@@ -243,6 +247,7 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
 
   GPUActions actions = GetNewGPUAction();
   actions.connect_info = std::move(*connection_info);
+  actions.session_name = GetSessionName();
   GPUPluginBreakpointHitResponse response(std::move(actions));
   response.disable_bp = true;
   return response;
