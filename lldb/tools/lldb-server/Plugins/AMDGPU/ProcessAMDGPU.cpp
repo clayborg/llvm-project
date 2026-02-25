@@ -7,13 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProcessAMDGPU.h"
-#include "AddressSpaces.h"
 #include "AmdDbgApiHelpers.h"
 #include "ThreadAMDGPU.h"
 
 #include "LLDBServerPluginAMDGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
+#include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/ProcessInfo.h"
