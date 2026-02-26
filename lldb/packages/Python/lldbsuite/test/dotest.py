@@ -270,6 +270,12 @@ def parseOptionsAndInitTestdirs():
     if args.hipcc_path:
         configuration.hipcc_path = os.path.abspath(args.hipcc_path)
 
+    if args.rocgdb_ld_preload:
+        configuration.rocgdb_ld_preload = args.rocgdb_ld_preload
+
+    if args.rocgdb_ld_library_path:
+        configuration.rocgdb_ld_library_path = args.rocgdb_ld_library_path
+
     if args.make:
         configuration.make_path = args.make
 

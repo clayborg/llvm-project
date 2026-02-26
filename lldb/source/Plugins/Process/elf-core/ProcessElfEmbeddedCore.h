@@ -172,8 +172,7 @@ public:
 
   size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
                       lldb_private::Status &error) override {
-    error.FromErrorString("not implemented");
-    return 0;
+    return GetCpuProcess()->ReadMemory(addr, buf, size, error);
   }
 
   // Plugin code

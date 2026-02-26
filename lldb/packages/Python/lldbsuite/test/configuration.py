@@ -45,6 +45,8 @@ dsymutil = None
 sdkroot = None
 make_path = None
 hipcc_path = None
+rocgdb_ld_preload = None
+rocgdb_ld_library_path = None
 
 # Allow specifying a triple for cross compilation.
 triple = None

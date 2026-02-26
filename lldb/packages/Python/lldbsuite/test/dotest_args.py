@@ -73,6 +73,20 @@ def create_parser():
         default="",
         help=textwrap.dedent("""Specify the path to a ROCM hipcc compiler."""),
     )
+    group.add_argument(
+        "--rocgdb-ld-preload",
+        metavar="ld_preload",
+        dest="rocgdb_ld_preload",
+        default="",
+        help=textwrap.dedent("""Specify LD_PRELOAD for running rocgdb."""),
+    )
+    group.add_argument(
+        "--rocgdb-ld-library-path",
+        metavar="ld_library_path",
+        dest="rocgdb_ld_library_path",
+        default="",
+        help=textwrap.dedent("""Specify LD_LIBRARY_PATH for running rocgdb."""),
+    )
     if sys.platform == "darwin":
         group.add_argument(
             "--apple-sdk",

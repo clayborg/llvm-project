@@ -204,15 +204,6 @@ class TestAmdGpuCoreFile(TestBase):
         triple = gpu_target.GetTriple()
         self.assertIn("amdgcn", triple, "GPU triple should contain amdgcn")
 
-    # TODO: Re-enable this test when GPU memory reading is implemented
-    # Currently DoReadMemory returns "not implemented" for ProcessElfGpuCore
-    # To re-enable:
-    # 1. Implement DoReadMemory in ProcessAmdGpuCore
-    # 2. Remove the @unittest.skip decorator
-    # 3. Verify the test passes with a real GPU core file
-    @unittest.skip(
-        "GPU memory reading not yet implemented - DoReadMemory returns 'not implemented'"
-    )
     @skipIfRemote
     def test_gpu_memory_reading(self):
         """Test reading GPU memory from core file"""
@@ -232,16 +223,36 @@ class TestAmdGpuCoreFile(TestBase):
         thread = gpu_process.GetThreadAtIndex(0)
         frame = thread.GetFrameAtIndex(0)
 
-        # Get PC to find a valid address
-        pc = frame.GetPC()
-        if pc != lldb.LLDB_INVALID_ADDRESS:
-            # Try to read a small amount of memory at PC
-            error = lldb.SBError()
-            data = gpu_process.ReadMemory(pc, 16, error)
+        # Find a valid address from a loaded GPU module's text section.
+        read_addr = lldb.LLDB_INVALID_ADDRESS
+        read_module_name = None
+        for i in range(gpu_target.GetNumModules()):
+            module = gpu_target.GetModuleAtIndex(i)
+            if not module.IsValid():
+                continue
+            text_section = module.FindSection(".text")
+            if text_section.IsValid():
+                read_addr = text_section.GetLoadAddress(gpu_target)
+                read_module_name = str(module.GetFileSpec())
+                break
 
-            # We expect this to work or fail gracefully with an appropriate error
-            # The exact behavior depends on whether the PC points to valid GPU memory
-            # in the core file
-            if error.Success():
-                self.assertIsNotNone(data, "Should get data when read succeeds")
-                self.assertGreater(len(data), 0, "Should read some data")
+        if read_addr == lldb.LLDB_INVALID_ADDRESS:
+            self.skipTest("No loaded GPU module with .text section found")
+
+        print(f"=== DEBUG: Reading 16 bytes at .text load_addr=0x{read_addr:x} "
+              f"from module '{read_module_name}' ===")
+
+        error = lldb.SBError()
+        addr_spec = lldb.SBAddressSpec(read_addr)
+        data = gpu_process.ReadMemoryFromSpec(addr_spec, 16, error)
+        print(f"=== DEBUG: ReadMemoryFromSpec result: error.Success()={error.Success()}, "
+              f"error='{error.GetCString()}', data={data}, "
+              f"data_type={type(data)}, len={len(data) if data else 'N/A'} ===")
+
+        self.assertTrue(
+            error.Success(),
+            f"Reading GPU memory at module .text (0x{read_addr:x}) failed: "
+            f"{error.GetCString()}",
+        )
+        self.assertIsNotNone(data, "Should get data when read succeeds")
+        self.assertGreater(len(data), 0, "Should read some data")
