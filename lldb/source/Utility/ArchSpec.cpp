@@ -323,10 +323,12 @@ static constexpr const CoreDefinition g_core_definitions[] = {
     AMD_GPU_CORE_DEF_GCN(GFX11_GENERIC),
     AMD_GPU_CORE_DEF_GCN(GFX12_GENERIC),
     AMD_GPU_CORE_DEF_GCN(unknown),
-    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx, 
+    {eByteOrderLittle, 4, 4, 4, llvm::Triple::nvptx,
       ArchSpec::eCore_nvidia_nvptx,"nvptx"},
-    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64, 
+    {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64,
       ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
+    {eByteOrderLittle, 8, 8, 16, llvm::Triple::spirv64,
+      ArchSpec::eCore_intelgt_generic, "spirv64"}, // Intel GPU (Arc/XE family) spirv64
   };
 
 // Ensure that we have an entry in the g_core_definitions for each core. If you
@@ -570,6 +572,8 @@ static const ArchDefinitionEntry g_elf_arch_entries[] = {
 
     {ArchSpec::eCore_nvidia_nvptx,    llvm::ELF::EM_CUDA        }, // NVidia GPU
     {ArchSpec::eCore_nvidia_nvptx64,  llvm::ELF::EM_CUDA        },
+
+    {ArchSpec::eCore_intelgt_generic, llvm::ELF::EM_INTELGT     }, // Intel GPU (Arc/XE)
 };
 // clang-format on
 
