@@ -66,24 +66,6 @@ class LldbDriver(DebuggerInterface):
         """Get the current process."""
         return self._process
 
-    def find_gpu_target(self) -> Optional[lldb.SBTarget]:
-        """Find GPU target in debugger's target list."""
-        for i in range(self._debugger.GetNumTargets()):
-            target = self._debugger.GetTargetAtIndex(i)
-            triple = target.GetTriple()
-            if "amdgcn" in triple or "amdgpu" in triple:
-                return target
-        return None
-
-    def find_cpu_target(self) -> Optional[lldb.SBTarget]:
-        """Find CPU target in debugger's target list."""
-        for i in range(self._debugger.GetNumTargets()):
-            target = self._debugger.GetTargetAtIndex(i)
-            triple = target.GetTriple()
-            if "x86_64" in triple or "aarch64" in triple:
-                return target
-        return None
-
     def load_core(
         self, core_path: str, executable_path: Optional[str] = None
     ) -> DebuggerResult:
