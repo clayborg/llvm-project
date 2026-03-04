@@ -1113,7 +1113,15 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!process_sp)
     return Status::FromErrorString("invalid process after connecting");
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
-                "created process!!!");
+                "created process");
+  // Set the session name on the GPU target so it can be retrieved later
+  gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
+  // Broadcast the target creation event so DAP can create a child session
+  auto event_sp = std::make_shared<Event>(
+      Target::eBroadcastBitNewTargetCreated,
+      new Target::TargetEventData(GetTarget().shared_from_this(),
+                                  gpu_target_sp));
+  GetTarget().BroadcastEvent(event_sp);
   return Status();
 }
 
@@ -5728,7 +5736,7 @@ llvm::Error ProcessGDBRemote::LoadModules() {
   ///   shared libraries are loaded.
   /// - Stop reason for a thread in GPU process is set to the
   ///   eStopReasonDynamicLoader stop reason. This is used when the GPU process
-  ///   eStopReasonDynamicLoaderzation with the native process. If the GPU
+  ///   needs synchronization with the native process. If the GPU
   ///   can't set a breakpoint in GPU code and the GPU driver gets a
   ///   notification that shared libraries are available. This should be used
   ///   if we want to stop for shared library loading and LLDB should auto

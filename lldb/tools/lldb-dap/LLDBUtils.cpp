@@ -142,6 +142,7 @@ bool ThreadHasStopReason(lldb::SBThread &thread) {
   case lldb::eStopReasonHistoryBoundary:
     return true;
   case lldb::eStopReasonThreadExiting:
+  case lldb::eStopReasonDynamicLoader:
   case lldb::eStopReasonInvalid:
   case lldb::eStopReasonNone:
     break;
