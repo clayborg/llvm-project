@@ -196,7 +196,9 @@ public:
 
 protected:
   void DoExecute(Args &command, CommandReturnObject &result) override {
-    m_exe_ctx.GetFrameRef().DumpUsingSettingsFormat(&result.GetOutputStream());
+    m_exe_ctx.GetFrameRef().GetStatus(result.GetOutputStream(),
+                                      /*show_frame_info=*/true,
+                                      /*show_source=*/true);
     result.SetStatus(eReturnStatusSuccessFinishResult);
   }
 };

@@ -108,6 +108,24 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         process = target.LaunchSimple(None, None, self.get_process_working_directory())
         self.assertState(process.GetState(), lldb.eStateExited, PROCESS_EXITED)
 
+    def test_frame_info_shows_source(self):
+        """Test that 'frame info' shows source context on GPU target."""
+        self.build()
+
+        # GPU breakpoint should get hit by at least one thread.
+        source = "hello_world.hip"
+        gpu_threads = self.run_to_gpu_breakpoint(
+            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
+        )
+        self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
+
+        # Switch to the GPU target and verify 'frame info' shows source context.
+        self.select_gpu()
+        self.expect(
+            "frame info",
+            substrs=["helloworld_kernel", "hello_world.hip", "->"],
+        )
+
     def test_image_list(self):
         """Test that we can load modules on the gpu target."""
         self.build()
