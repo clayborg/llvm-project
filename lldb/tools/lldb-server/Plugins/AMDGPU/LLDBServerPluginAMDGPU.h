@@ -61,6 +61,9 @@ public:
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
+  std::optional<LLDBSettings> GetLLDBSettings() override;
+  std::optional<GPUDynamicLoaderResponse>
+  GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
@@ -83,6 +86,10 @@ public:
     amd_dbgapi_breakpoint_id_t breakpoind_id;
   };
   std::optional<GPUInternalBreakpoinInfo> m_gpu_internal_bp;
+  // Indicates that we should wait for the GPU internal breakpoint halt
+  // stop event before proceeding with further GPU debugging actions.
+  // This is required synchronize setting the GPU internal breakpoint before
+  // further actions can be taken.
   bool m_wait_for_gpu_internal_bp_stop = false;
   amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
 
@@ -113,7 +120,6 @@ private:
   bool SetGPUBreakpoint(uint64_t addr, const uint8_t *bp_instruction,
                         size_t size);
   bool ReadyToAttachDebugLibrary();
-  bool ReadyToSendConnectionRequest();
   bool ReadyToSetGpuLoaderBreakpointByAddress();
   ProcessAMDGPU *GetGPUProcess() const;
 

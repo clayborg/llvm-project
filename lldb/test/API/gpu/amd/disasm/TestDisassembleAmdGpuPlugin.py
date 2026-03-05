@@ -21,9 +21,7 @@ class DisassembleAmdGpuTestCase(AmdGpuTestCaseBase):
 
         # Run to the gpu breakpoint
         source = "disasm.hip"
-        gpu_threads = self.run_to_gpu_breakpoint(
-            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
         # Disassemble the current frame

@@ -339,8 +339,12 @@ struct GPUPluginBreakpointHitResponse {
   GPUPluginBreakpointHitResponse(GPUActions gpu_actions)
       : actions(std::move(gpu_actions)) {}
 
-  ///< Set to true if this berakpoint should be disabled.
+  ///< Set to true if this breakpoint should be disabled.
   bool disable_bp = false;
+  /// Set to true if the native (CPU) process should automatically resume after
+  /// the GPU plugin breakpoint is hit. When false, the native process will stop
+  /// and wait for user interaction.
+  bool auto_resume_native = true;
   /// Optional new breakpoints to set.
   GPUActions actions;
 };

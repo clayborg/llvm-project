@@ -18,9 +18,7 @@ class VariablesAmdGpuTestCase(AmdGpuTestCaseBase):
         """Helper to run to common gpu breakpoint"""
         self.build()
 
-        gpu_threads = self.run_to_gpu_breakpoint(
-            SOURCE, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(SOURCE, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
         self.assertEqual(
             len(gpu_threads),

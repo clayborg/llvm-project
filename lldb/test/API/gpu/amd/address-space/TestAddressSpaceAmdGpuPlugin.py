@@ -80,6 +80,10 @@ class AddressSpaceAmdGpuTestCase(AmdGpuTestCaseBase):
         self.assertNotEqual(addr, 0, f"{location.name} address should not be null")
         location.address += addr
 
+        # Continue until the GPU target is created. GPU modules load when
+        # the kernel is launched (after this CPU breakpoint).
+        self.continue_to_gpu_target_creation()
+
         # Continue executing to the gpu breakpoint.
         gpu_threads = self.continue_to_gpu_source_breakpoint(
             SOURCE,
@@ -96,9 +100,7 @@ class AddressSpaceAmdGpuTestCase(AmdGpuTestCaseBase):
         """Helper to run to common gpu breakpoint"""
         self.build()
 
-        gpu_threads = self.run_to_gpu_breakpoint(
-            SOURCE, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(SOURCE, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
         return gpu_threads
 

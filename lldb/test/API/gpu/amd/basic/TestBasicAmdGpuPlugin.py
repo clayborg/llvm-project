@@ -2,7 +2,6 @@
 Basic tests for the AMDGPU plugin.
 """
 
-
 import lldb
 import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test.lldbtest import *
@@ -19,15 +18,15 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # There should be no targets before we run the program.
         self.assertEqual(self.dbg.GetNumTargets(), 0, "There are no targets")
 
-        # Set a breakpoint in the CPU source and run to it.
-        source_spec = lldb.SBFileSpec("hello_world.hip", False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = lldbutil.run_to_source_breakpoint(
-            self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
-        )
-        self.assertEqual(self.cpu_target, cpu_target)
+        target = self.createTestTarget()
+        process = target.LaunchSimple(None, None, self.get_process_working_directory())
+        self.assertTrue(process.IsValid(), "Process is valid")
 
-        # Make sure the GPU target was created and has the default thread.
+        # The GPU target should be created after launch. The GPU plugin
+        # stops the CPU when GPU modules are loaded (auto_resume_native=false).
         self.assertEqual(self.dbg.GetNumTargets(), 2, "There are two targets")
+
+        # Make sure the GPU target has the default thread.
         gpu_thread = self.gpu_process.GetThreadAtIndex(0)
         self.assertEqual(
             gpu_thread.GetName(), SHADOW_THREAD_NAME, "GPU thread has the right name"
@@ -36,17 +35,13 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # The target should have the triple set correctly.
         self.assertIn("amdgcn-amd-amdhsa", self.gpu_target.GetTriple())
 
-
-
     def test_gpu_breakpoint_hit(self):
         """Test that we can hit a breakpoint on the gpu target."""
         self.build()
 
         # GPU breakpoint should get hit by at least one thread.
         source = "hello_world.hip"
-        gpu_threads = self.run_to_gpu_breakpoint(
-            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
     def test_num_threads(self):
@@ -55,9 +50,7 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
 
         # GPU breakpoint should get hit by at least one thread.
         source = "hello_world.hip"
-        gpu_threads_at_bp = self.run_to_gpu_breakpoint(
-            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads_at_bp = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(
             None, gpu_threads_at_bp, "GPU should be stopped at breakpoint"
         )
@@ -81,7 +74,7 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # GPU breakpoint should get hit by at least one thread.
         source = "hello_world.hip"
         gpu_threads_at_bp = self.run_to_gpu_breakpoint(
-            source, "// DIVERGENT BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
+            source, "// DIVERGENT BREAKPOINT"
         )
         self.assertNotEqual(
             None, gpu_threads_at_bp, "GPU should be stopped at breakpoint"
@@ -100,13 +93,42 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         self.assertEqual(len(gpu_threads_at_bp), total_num_threads)
 
     def test_no_unexpected_stop(self):
-        """Test that we do not unexpectedly hit a stop in the debugger when
-        No breakpoints are set."""
+        """Test that when no user breakpoints are set, the process stops at the
+        GPU internal breakpoint for GPU target creation, and exits normally
+        when continued."""
         self.build()
 
         target = self.createTestTarget()
         process = target.LaunchSimple(None, None, self.get_process_working_directory())
-        self.assertState(process.GetState(), lldb.eStateExited, PROCESS_EXITED)
+        self.assertTrue(process.IsValid(), "Process is valid")
+
+        # The GPU target should be created after launch.
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should exist")
+
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+
+        # Continue GPU (non-blocking in async mode)
+        self.select_gpu()
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateRunning]
+        )
+
+        # Continue CPU (non-blocking in async mode)
+        self.select_cpu()
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateRunning]
+        )
+
+        # Now wait for both to exit
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateExited]
+        )
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateExited]
+        )
 
     def test_image_list(self):
         """Test that we can load modules on the gpu target."""
@@ -114,9 +136,7 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
 
         # GPU breakpoint should get hit by at least one thread.
         source = "hello_world.hip"
-        gpu_threads = self.run_to_gpu_breakpoint(
-            source, "// GPU BREAKPOINT", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
         # There should two modules loaded for the gpu.

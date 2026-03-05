@@ -45,7 +45,8 @@ int main() {
   memset(host_output, 0, output_size_in_bytes);
 
   HIP_CHECK(
-      hipMalloc(&device_output, NUM_THREADS * sizeof(int))); // CPU BREAKPOINT - BEFORE LAUNCH
+      hipMalloc(&device_output, NUM_THREADS * sizeof(int)));
+  printf("Launching kernel...\n"); // CPU BREAKPOINT - BEFORE LAUNCH
   // Launch kernel with 1 block of 256 threads
   hipLaunchKernelGGL(address_space_demo_kernel, dim3(1), dim3(NUM_THREADS), 0,
                      0, device_output, NUM_THREADS);
