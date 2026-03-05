@@ -42,7 +42,8 @@ struct DbgApiWaveInfo {
 
 class WaveAMDGPU : public std::enable_shared_from_this<WaveAMDGPU> {
 public:
-  explicit WaveAMDGPU(amd_dbgapi_wave_id_t wave_id) : m_wave_id(wave_id) {
+  explicit WaveAMDGPU(amd_dbgapi_wave_id_t wave_id)
+      : m_wave_id(wave_id), m_stop_info{} {
     SetStopReason(lldb::eStopReasonSignal, SIGTRAP);
   }
 
@@ -60,7 +61,14 @@ public:
     return true;
   }
 
-  void SetStopReason(lldb::StopReason reason) { m_stop_info.reason = reason; }
+  void SetStopReason(lldb::StopReason reason) { 
+    m_stop_info.reason = reason;
+  }
+
+  void SetStopReason(lldb::StopReason reason, std::string description) { 
+    m_stop_info.reason = reason; 
+    m_stop_description = description;
+  }
 
   void SetStopReason(lldb::StopReason reason, uint32_t signo) {
     m_stop_info.reason = reason;
