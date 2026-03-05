@@ -60,6 +60,8 @@ lldb_enable_amdgpu_plugin = @LLDB_ENABLE_AMDGPU_PLUGIN@
 if lldb_enable_amdgpu_plugin:
     config.enabled_plugins.append('lldb-amdgpu')
     config.hipcc_path = os.path.join('@ROCM_PATH@', 'bin', 'hipcc')
+    # ROCgdb environment configuration (optional)
+    # These can be set via CMake: -DROCGDB_LD_PRELOAD=... -DROCGDB_LD_LIBRARY_PATH=...
     config.rocgdb_ld_preload = '@ROCGDB_LD_PRELOAD@'
     config.rocgdb_ld_library_path = '@ROCGDB_LD_LIBRARY_PATH@'
 
