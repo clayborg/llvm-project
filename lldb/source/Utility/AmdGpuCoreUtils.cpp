@@ -8,6 +8,7 @@
 
 #include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace lldb_private;
 
@@ -17,6 +18,11 @@ lldb_private::ParseLibraryInfo(const AmdGpuCodeObject &code_object) {
   // sends to the debugger. The format is one of:
   //  file://<path>#offset=<file-offset>&size=<file-size>
   //  memory://<name>#offset=<image-addr>&size=<image-size>
+  //
+  // For file:// URIs, pathname is set to the real file path so LLDB can locate
+  // the file on disk and resolve dwp/dwo debug info.
+  // For memory:// URIs, pathname is set to "<memory>[start, end)" for
+  // uniqueness since memory modules are not used for file probing.
   GPUDynamicLoaderLibraryInfo lib_info;
   lib_info.load = code_object.is_loaded;
   lib_info.load_address = code_object.load_address;
@@ -54,13 +60,19 @@ lldb_private::ParseLibraryInfo(const AmdGpuCodeObject &code_object) {
     std::tie(name, values) = lib_spec.split('#');
     if (name.empty())
       return std::nullopt;
-    lib_info.pathname = name.str();
     get_offset_and_size(values, lib_info.native_memory_address,
                         lib_info.native_memory_size);
     // We must have a valid address and size for memory objects.
     if (!(lib_info.native_memory_address.has_value() &&
           lib_info.native_memory_size.has_value()))
       return std::nullopt;
+    // Set the pathname to a unique "<memory>[start, end)" format.
+    // Memory modules won't be used for file probing anyway.
+    uint64_t start = *lib_info.native_memory_address;
+    uint64_t end = start + *lib_info.native_memory_size;
+    lib_info.pathname =
+        llvm::formatv("<memory>[{0}, {1})", llvm::format_hex(start, 1),
+                      llvm::format_hex(end, 1));
   } else {
     return std::nullopt;
   }
