@@ -16,6 +16,8 @@
 #include "llvm/Support/Error.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 
+#include <thread>
+
 
 using namespace lldb;
 using namespace lldb_private;
@@ -30,6 +32,25 @@ ProcessMockGPU::ProcessMockGPU(lldb::pid_t pid, NativeDelegate &delegate)
 
 Status ProcessMockGPU::Resume(const ResumeActionList &resume_actions) {
   SetState(StateType::eStateRunning, true);
+  // Always simulate a stop after a short delay so the mock never runs forever.
+  // If software breakpoints are set, simulate hitting the first one; otherwise
+  // simulate a trace stop.
+  if (!m_software_breakpoints.empty()) {
+    lldb::addr_t bp_addr = m_software_breakpoints.begin()->first;
+    std::thread([this, bp_addr] {
+      usleep(50000); // 50ms — let the continue response be sent first
+      ThreadMockGPU &thread = static_cast<ThreadMockGPU &>(*m_threads[0]);
+      thread.SetStoppedByBreakpoint(bp_addr);
+      SetState(StateType::eStateStopped, true);
+    }).detach();
+  } else {
+    std::thread([this] {
+      usleep(50000);
+      ThreadMockGPU &thread = static_cast<ThreadMockGPU &>(*m_threads[0]);
+      thread.SetStoppedByTrace();
+      SetState(StateType::eStateStopped, true);
+    }).detach();
+  }
   return Status();
 }
 
@@ -65,7 +86,17 @@ Status ProcessMockGPU::Kill() { return Status(); }
 
 Status ProcessMockGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                   size_t &bytes_read) {
-  return Status::FromErrorString("unimplemented");
+  // Return data for mapped addresses and zeros for unmapped ones. This allows
+  // SetSoftwareBreakpoint to succeed for any address (it reads existing bytes
+  // before writing the trap opcode), which is needed because the mock GPU has
+  // no real memory — breakpoint addresses come from the CPU binary's symbols.
+  uint8_t *dst = static_cast<uint8_t *>(buf);
+  for (size_t i = 0; i < size; ++i) {
+    auto it = m_memory.find(addr + i);
+    dst[i] = (it != m_memory.end()) ? it->second : 0;
+  }
+  bytes_read = size;
+  return Status();
 }
 
 #define ADDR_SPACE_1 1
@@ -108,7 +139,11 @@ Status ProcessMockGPU::ReadMemoryWithSpace(lldb::addr_t addr,
 
 Status ProcessMockGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                    size_t size, size_t &bytes_written) {
-  return Status::FromErrorString("unimplemented");
+  const uint8_t *src = static_cast<const uint8_t *>(buf);
+  for (size_t i = 0; i < size; ++i)
+    m_memory[addr + i] = src[i];
+  bytes_written = size;
+  return Status();
 }
 
 lldb::addr_t ProcessMockGPU::GetSharedLibraryInfoAddress() {
@@ -133,7 +168,17 @@ const ArchSpec &ProcessMockGPU::GetArchitecture() const {
 // Breakpoint functions
 Status ProcessMockGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                      bool hardware) {
-  return Status::FromErrorString("unimplemented");
+  if (hardware)
+    return SetHardwareBreakpoint(addr, size);
+  else
+    return SetSoftwareBreakpoint(addr, size);
+}
+
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+ProcessMockGPU::GetSoftwareBreakpointTrapOpcode(size_t size_hint) {
+  // Single-byte trap opcode for the mock GPU architecture.
+  static const uint8_t g_mock_gpu_trap_opcode[] = {0xCC};
+  return llvm::ArrayRef(g_mock_gpu_trap_opcode);
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
