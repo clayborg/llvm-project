@@ -904,6 +904,7 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   }
   std::optional<GPUPluginBreakpointHitResponse> response =
       m_gdb_comm.GPUBreakpointHit(args);
+  bool should_stop = false;
   if (response) {
     // Disable the breakpoint if requested, but leave it around so we can see
     // the hit count and other stats on the breakpoint.
@@ -912,13 +913,14 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
       if (bp_sp)
         bp_sp->SetEnabled(false);
     }
+    should_stop = !response->auto_resume_native;
     if (Status err = HandleGPUActions(response->actions); err.Fail()) {
       Debugger::ReportError(
           llvm::formatv("HandleGPUActions failed. Error: {0}\nActions:\n{1}\n",
                         err.AsCString(), toJSON(response->actions)));
     }
   }
-  return false; // Don't stop, auto continue.
+  return should_stop;
 }
 
 Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
@@ -1157,6 +1159,9 @@ void ProcessGDBRemote::HandleGPUBreakpoints(const GPUActions &gpu_action) {
                                       /*request_hardware=*/false);
     }
     if (bp_sp) {
+      // Set a kind so that internal breakpoint stop descriptions are
+      // meaningful when the CPU process stops at this breakpoint.
+      bp_sp->SetBreakpointKind("GPU plug-in breakpoint");
       // Create some JSON we can send back to the lldb-server
       // that identifies the plug-in and the breakpoint for when
       // the breakpoint gets hit.

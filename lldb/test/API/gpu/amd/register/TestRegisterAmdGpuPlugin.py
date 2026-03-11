@@ -19,9 +19,7 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
     def run_to_reg_gpu_breakpoint(self, reg_base):
         source = "reg.hip"
         gpr = f"{reg_base.upper()}GPR"
-        gpu_threads = self.run_to_gpu_breakpoint(
-            source, f"// GPU BREAKPOINT - {gpr}", "// CPU BREAKPOINT - BEFORE LAUNCH"
-        )
+        gpu_threads = self.run_to_gpu_breakpoint(source, f"// GPU BREAKPOINT - {gpr}")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
         self.select_gpu()
 

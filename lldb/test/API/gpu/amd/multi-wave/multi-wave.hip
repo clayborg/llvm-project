@@ -128,7 +128,7 @@ int main() {
 
   // Launch the kernel.
   printf("Launching multi-wave kernel with %zu threads...\n",
-         num_threads); // CPU BREAKPOINT - BEFORE LAUNCH
+         num_threads);
   multi_wave_kernel<<<blocks, threads, 0, hipStreamDefault>>>(d_buf, true);
 
   // Copy data from device to host

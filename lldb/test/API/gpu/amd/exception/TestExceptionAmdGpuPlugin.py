@@ -8,24 +8,20 @@ import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test.lldbtest import *
 from amdgpu_testcase import *
 
-SOURCE = "exception.hip"
-
 
 class ExceptionAmdGpuTestCase(AmdGpuTestCaseBase):
     def run_to_gpu_exception(self):
         """Launch the kernel and wait for the GPU to stop with an exception."""
         self.build()
 
-        # Set a CPU breakpoint so the GPU target is created and we can
-        # interact with it.
-        source_spec = lldb.SBFileSpec(SOURCE, False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(
-                self, "// CPU BREAKPOINT - BEFORE LAUNCH", source_spec
-            )
-        )
-        self.assertEqual(cpu_target, self.cpu_target)
-        self.assertTrue(self.gpu_target.IsValid())
+        target = self.createTestTarget()
+        process = target.LaunchSimple(None, None, self.get_process_working_directory())
+        self.assertTrue(process.IsValid(), "Process is valid")
+
+        # The GPU target should be created after launch. The GPU plugin
+        # stops the CPU when GPU modules are loaded (auto_resume_native=false).
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be valid")
+        self.assertTrue(self.gpu_process.IsValid(), "GPU process should be valid")
 
         # Run asynchronously so we can manage both CPU and GPU processes.
         self.setAsync(True)

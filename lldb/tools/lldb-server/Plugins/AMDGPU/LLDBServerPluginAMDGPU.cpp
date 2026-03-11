@@ -160,7 +160,7 @@ LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU(
   }
 }
 
-LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() { }
+LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() {}
 
 llvm::StringRef LLDBServerPluginAMDGPU::GetPluginName() { return "amd-gpu"; }
 
@@ -370,9 +370,8 @@ LLDBServerPluginAMDGPU::CreateConnection() {
         m_listen_socket->Accept(
             m_main_loop, [this](std::unique_ptr<Socket> socket) {
               Log *log = GetLog(GDBRLog::Plugin);
-              LLDB_LOGF(log,
-                        "LLDBServerPluginAMDGPU::CreateConnection() "
-                        "initializing connection");
+              LLDB_LOGF(log, "LLDBServerPluginAMDGPU::CreateConnection() "
+                             "initializing connection");
               std::unique_ptr<Connection> connection_up(
                   new ConnectionFileDescriptor(std::move(socket)));
               this->m_gdb_server->InitializeConnection(
@@ -439,23 +438,6 @@ Status LLDBServerPluginAMDGPU::CreateGpuProcess() {
   return status;
 }
 
-bool LLDBServerPluginAMDGPU::ReadyToSendConnectionRequest() {
-  // We are ready to send a connection request if we are attached to the debug
-  // library and we have not yet sent a connection request.
-  // The GPUActions are ignored on the initial stop when the process is first
-  // launched so we wait until the second stop to send the connection request.
-  const bool ready = m_amd_dbg_api_state == AmdDbgApiState::Attached &&
-                     !m_is_connected && !m_is_listening &&
-                     GetNativeProcess()->GetStopID() > 1;
-
-  LLDB_LOGF(GetLog(GDBRLog::Plugin),
-            "%s - ready: %d dbg_api_state: %d, connected: %d, listening: %d, "
-            "native-stop-id: %d",
-            __FUNCTION__, ready, (int)m_amd_dbg_api_state, m_is_connected,
-            m_is_listening, GetNativeProcess()->GetStopID());
-  return ready;
-}
-
 bool LLDBServerPluginAMDGPU::ReadyToAttachDebugLibrary() {
   return m_amd_dbg_api_state == AmdDbgApiState::Initialized;
 }
@@ -504,10 +486,6 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                 error.AsCString());
       return std::nullopt;
     }
-  }
-
-  if (ReadyToSendConnectionRequest()) {
-    return SetConnectionInfo();
   }
 
   if (ReadyToSetGpuLoaderBreakpointByAddress()) {
@@ -710,13 +688,35 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         ThreadAMDGPU *thread = (ThreadAMDGPU *)process->GetCurrentThread();
         thread->SetStopReason(lldb::eStopReasonDynamicLoader);
         process->Halt();
+      } else {
+        // Create new connection on demand first time there are new GPU modules
+        // detected.
+        if (!m_is_connected && !m_is_listening)
+          response.actions.connect_info = CreateConnection();
+        response.actions.load_libraries = true;
+        response.auto_resume_native = false;
       }
     }
   }
   return response;
 }
 
-void LLDBServerPluginAMDGPU::NativeProcessDidExit(const WaitStatus &exit_status) {
+std::optional<LLDBSettings> LLDBServerPluginAMDGPU::GetLLDBSettings() {
+  LLDBSettings settings;
+  settings.gpu_plugin_name = GetPluginName();
+  settings.dyld_plugin_name = "gdb-remote-gpu";
+  settings.send_dyld_packet_to_gpu = false;
+  return settings;
+}
+
+std::optional<GPUDynamicLoaderResponse>
+LLDBServerPluginAMDGPU::GetGPUDynamicLoaderLibraryInfos(
+    const GPUDynamicLoaderArgs &args) {
+  return GetGPUProcess()->GetGPUDynamicLoaderLibraryInfos(args);
+}
+
+void LLDBServerPluginAMDGPU::NativeProcessDidExit(
+    const WaitStatus &exit_status) {
   // Bare bones implementation for exit behavior if GPU process exits.
   ProcessAMDGPU *gpu_process = GetGPUProcess();
   if (gpu_process)

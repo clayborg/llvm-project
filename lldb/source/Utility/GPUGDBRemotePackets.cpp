@@ -212,12 +212,14 @@ bool fromJSON(const llvm::json::Value &value,
               GPUPluginBreakpointHitResponse &data, llvm::json::Path path) {
   ObjectMapper o(value, path);
   return o && o.map("disable_bp", data.disable_bp) &&
+         o.map("auto_resume_native", data.auto_resume_native) &&
          o.map("actions", data.actions);
 }
 
 llvm::json::Value toJSON(const GPUPluginBreakpointHitResponse &data) {
   return json::Value(Object{
       {"disable_bp", data.disable_bp},
+      {"auto_resume_native", data.auto_resume_native},
       {"actions", data.actions},
   });
 }

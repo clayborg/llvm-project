@@ -12,19 +12,38 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
 
     NO_DEBUG_INFO_TESTCASE = True
 
-    def run_to_gpu_breakpoint(
-        self, source: str, gpu_bkpt_pattern: str, cpu_bkpt_pattern: str
-    ) -> List[lldb.SBThread]:
-        """Run the test executable unit it hits the provided GPU breakpoint.
-        The CPU breakpoint is used as a stopping point to switch to the GPU target
-        and set the GPU breakpoint on that target.
-        """
-        # Set a breakpoint in the CPU source and run to it.
-        source_spec = lldb.SBFileSpec(source, False)
-        (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = (
-            lldbutil.run_to_source_breakpoint(self, cpu_bkpt_pattern, source_spec)
+    def continue_to_gpu_target_creation(self):
+        """Continues the process until the GPU target is created."""
+        # Need to run these commands asynchronously to be able to switch targets.
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+
+        # Continue the CPU process until stop.
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateRunning, lldb.eStateStopped]
         )
-        self.assertEqual(cpu_target, self.cpu_target)
+        self.assertEqual(self.dbg.GetNumTargets(), 2, "There should be two targets")
+
+    def run_to_gpu_breakpoint(
+        self, source: str, gpu_bkpt_pattern: str
+    ) -> List[lldb.SBThread]:
+        """Launch the process, wait for the GPU target to be created, set a
+        GPU breakpoint, and continue until it is hit. No CPU breakpoint is
+        needed because the GPU plugin automatically stops the CPU process
+        when GPU modules are loaded (auto_resume_native=false)."""
+        target = lldbutil.run_to_breakpoint_make_target(self)
+
+        launch_info = target.GetLaunchInfo()
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        process = target.Launch(launch_info, error)
+        self.assertTrue(process, "Could not create a valid process")
+        self.assertFalse(error.Fail(), "Process launch failed: %s" % error.GetCString())
+
+        # The GPU target should be created after launch. The GPU plugin
+        # stops the CPU when GPU modules are loaded (auto_resume_native=false).
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be created")
 
         gpu_bkpt_id = self.set_gpu_source_breakpoint(source, gpu_bkpt_pattern)
 

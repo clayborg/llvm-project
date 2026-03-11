@@ -71,7 +71,7 @@ __global__ void asm_kernel() {
 
 int main() {
   // Launch the kernel.
-  printf("Launching kernel...\n"); // CPU BREAKPOINT - BEFORE LAUNCH
+  printf("Launching kernel...\n");
 
   // Launch kernel.
   asm_kernel<<<
