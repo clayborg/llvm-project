@@ -123,19 +123,19 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # There should be one module loaded from the executable (the kernel) and one
         # loaded from memory (driver/debugger lib code).
         # File-backed modules keep their original file path (e.g. /path/to/a.out).
-        # Memory-backed modules are named: <memory>[start, end)
+        # Memory-backed modules are named: amd_memory_kernel[start, end)
         gpu_modules = self.gpu_target.modules
         self.assertEqual(2, len(gpu_modules), "GPU should have two modules")
 
         # Check that one module contains "a.out" (file-backed, keeps original path)
-        # and one starts with "<memory>[" (memory-backed).
+        # and one starts with "amd_memory_kernel[" (memory-backed).
         module_names = [str(module.file) for module in gpu_modules]
         has_file_module = any("a.out" in name for name in module_names)
-        has_memory_module = any("<memory>[" in name for name in module_names)
+        has_memory_module = any("amd_memory_kernel[" in name for name in module_names)
         self.assertTrue(has_file_module,
                         f"Expected a file-backed module with 'a.out' in path, got: {module_names}")
         self.assertTrue(has_memory_module,
-                        f"Expected a memory-backed module with '<memory>[' prefix, got: {module_names}")
+                        f"Expected a memory-backed module with 'amd_memory_kernel[' prefix, got: {module_names}")
 
         # Verify the "image list" command output shows the [offset-end) bracket
         # for the file-backed embedded GPU module (no space before the bracket).
@@ -151,6 +151,6 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         has_bracket_format = re.search(r'a\.out\[0x[0-9a-f]+-0x[0-9a-f]+\)', output)
         self.assertTrue(has_bracket_format,
                         f"Expected 'a.out[offset-end)' format in image list output, got:\n{output}")
-        # Memory-backed module should show <memory>[start, end)
-        self.assertIn("<memory>[", output,
-                      f"Expected '<memory>[' in image list output, got:\n{output}")
+        # Memory-backed module should show amd_memory_kernel[start, end)
+        self.assertIn("amd_memory_kernel[", output,
+                      f"Expected 'amd_memory_kernel[' in image list output, got:\n{output}")

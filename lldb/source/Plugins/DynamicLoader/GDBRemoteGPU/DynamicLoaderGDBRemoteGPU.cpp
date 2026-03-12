@@ -131,9 +131,6 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
     if (info.uuid_str)
       uuid.SetFromStringRef(*info.uuid_str);
     // Create a module specification from the info we got.
-    // Use pathname (the real file path) for the FileSpec so LLDB can locate
-    // the file on disk for file-backed modules. For memory modules, pathname
-    // is already set to "<memory>[start, end)" format for uniqueness.
     ModuleSpec module_spec(FileSpec(info.pathname), uuid, data_sp);
     if (info.file_offset)
       module_spec.SetObjectOffset(*info.file_offset);

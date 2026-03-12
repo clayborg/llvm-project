@@ -44,7 +44,7 @@ struct AmdGpuCodeObject {
 ///
 /// For file:// URIs, pathname is set to the real file path so that LLDB can
 /// locate files on disk and resolve dwp/dwo debug info.
-/// For memory:// URIs, pathname is set to "<memory>[start, end)" for
+/// For memory:// URIs, pathname is set to "amd_memory_kernel[start, end)" for
 /// uniqueness (memory modules are not used for file probing).
 ///
 /// \param[in] code_object

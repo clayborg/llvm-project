@@ -3379,6 +3379,14 @@ protected:
     }
 
     bool dump_object_name = false;
+    auto dump_object_offset_range = [&module, &strm]() {
+      if (!module->GetObjectName() && module->GetObjectOffset() > 0 &&
+          module->GetObjectSize() > 0) {
+        uint64_t offset = module->GetObjectOffset();
+        uint64_t end = offset + module->GetObjectSize();
+        strm.Printf("[%#" PRIx64 "-%#" PRIx64 ")", offset, end);
+      }
+    };
     if (m_options.m_format_array.empty()) {
       m_options.m_format_array.push_back(std::make_pair('u', 0));
       m_options.m_format_array.push_back(std::make_pair('h', 0));
@@ -3404,15 +3412,8 @@ protected:
 
       case 'f':
         DumpFullpath(strm, &module->GetFileSpec(), width);
-        // Append byte range for embedded objects (e.g. GPU modules within a
-        // container binary) that don't have a named object.
-        if (!module->GetObjectName() && module->GetObjectOffset() > 0 &&
-            module->GetObjectSize() > 0) {
-          uint64_t offset = module->GetObjectOffset();
-          uint64_t end = offset + module->GetObjectSize();
-          strm.Printf("[%#" PRIx64 "-%#" PRIx64 ")", offset, end);
-        }
         dump_object_name = true;
+        dump_object_offset_range();
         break;
 
       case 'd':
@@ -3421,13 +3422,8 @@ protected:
 
       case 'b':
         DumpBasename(strm, &module->GetFileSpec(), width);
-        if (!module->GetObjectName() && module->GetObjectOffset() > 0 &&
-            module->GetObjectSize() > 0) {
-          uint64_t offset = module->GetObjectOffset();
-          uint64_t end = offset + module->GetObjectSize();
-          strm.Printf("[%#" PRIx64 "-%#" PRIx64 ")", offset, end);
-        }
         dump_object_name = true;
+        dump_object_offset_range();
         break;
 
       case 'h':
