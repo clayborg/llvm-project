@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstring>
 #include <hip/hip_runtime.h>
 
 constexpr int error_exit_code = -1;

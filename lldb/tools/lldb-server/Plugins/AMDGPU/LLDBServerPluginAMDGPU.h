@@ -65,6 +65,14 @@ public:
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
   }
+
+  /// Send an error/warning message to the LLDB client via the CPU GDB server
+  /// connection. This ensures the user sees the message in their console.
+  void SendErrorToClient(llvm::StringRef message);
+
+  /// Mark the plugin as being in an error state. This prevents further GPU
+  /// debugging operations (connection setup, breakpoints, etc.).
+  void SetErrorState() { m_amd_dbg_api_state = AmdDbgApiState::Error; }
   ProcessAMDGPU *GetGPUProcess() {
     return (ProcessAMDGPU *)m_gdb_server->GetCurrentProcess();
   }

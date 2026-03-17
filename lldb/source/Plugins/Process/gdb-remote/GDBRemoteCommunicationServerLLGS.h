@@ -119,6 +119,8 @@ public:
     return m_current_process;
   }
 
+  PacketResult SendONotification(const char *buffer, uint32_t len);
+
 protected:
   MainLoop &m_mainloop;
   MainLoop::ReadHandleUP m_network_handle_up;
@@ -158,8 +160,6 @@ protected:
   // don't know how much data we're recieving so we would have to heap allocate
   // a lot, or have a very large stack frame. So it's a member instead.
   uint8_t m_reg_bytes[RegisterValue::kMaxRegisterByteSize];
-
-  PacketResult SendONotification(const char *buffer, uint32_t len);
 
   PacketResult SendWResponse(NativeProcessProtocol *process);
 

@@ -71,6 +71,7 @@ protected:
 
 private:
   bool initRocm();
+  lldb_private::Status ProcessPendingEvents();
   const lldb_private::ArchSpec &GetArchitecture();
 
   void AddThread(amd_dbgapi_wave_id_t wave_id);

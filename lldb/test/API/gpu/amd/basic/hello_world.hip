@@ -22,6 +22,7 @@
 
 #include <hip/hip_runtime.h>
 
+#include <cstring>
 #include <iostream>
 
 /// \brief Checks if the provided error code is \p hipSuccess and if not,

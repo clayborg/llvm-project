@@ -5,7 +5,7 @@ if(NOT DEFINED ROCM_PATH)
   message(STATUS "ROCM_PATH not set, using default: ${ROCM_PATH}")
 endif()
 
-set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
+set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config" FORCE)
 message(STATUS "Looking for amd-dbgapi in: ${amd-dbgapi_DIR}")
 find_package(amd-dbgapi REQUIRED CONFIG)
 
