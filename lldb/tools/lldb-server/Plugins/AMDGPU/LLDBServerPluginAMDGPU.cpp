@@ -182,6 +182,12 @@ Status LLDBServerPluginAMDGPU::InitializeAmdDbgApi() {
         "Failed to initialize AMD debug API: %d", status);
   }
 
+  // Set log level from environment variable if available, otherwise default
+  // to warning. Use: AMD_DBGAPI_LOG_LEVEL=verbose
+  amd_dbgapi_log_level_t log_level =
+      GetAmdDbgApiLogLevelFromEnv().value_or(AMD_DBGAPI_LOG_LEVEL_WARNING);
+  amd_dbgapi_set_log_level(log_level);
+
   m_amd_dbg_api_state = AmdDbgApiState::Initialized;
   return Status();
 }

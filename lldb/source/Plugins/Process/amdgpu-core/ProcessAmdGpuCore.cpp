@@ -30,6 +30,66 @@ using namespace lldb;
 
 LLDB_PLUGIN_DEFINE(ProcessAmdGpuCore)
 
+namespace {
+
+enum DbgApiLogLevel {
+  eDbgApiLogLevelNone = 0,
+  eDbgApiLogLevelFatal = 1,
+  eDbgApiLogLevelWarning = 2,
+  eDbgApiLogLevelInfo = 3,
+  eDbgApiLogLevelVerbose = 4,
+  eDbgApiLogLevelTrace = 5,
+};
+
+static constexpr OptionEnumValueElement g_dbgapi_log_level_values[] = {
+    {eDbgApiLogLevelNone, "none", "No logging from AMD debug API"},
+    {eDbgApiLogLevelFatal, "fatal", "Fatal errors only"},
+    {eDbgApiLogLevelWarning, "warning",
+     "Warnings and fatal errors (default)"},
+    {eDbgApiLogLevelInfo, "info", "Informational messages"},
+    {eDbgApiLogLevelVerbose, "verbose", "Verbose debug output"},
+    {eDbgApiLogLevelTrace, "trace", "Full API call tracing"},
+};
+
+#define LLDB_PROPERTIES_processamdgpucore
+#include "ProcessAmdGpuCoreProperties.inc"
+
+enum {
+#define LLDB_PROPERTIES_processamdgpucore
+#include "ProcessAmdGpuCorePropertiesEnum.inc"
+};
+
+class PluginProperties : public Properties {
+public:
+  static llvm::StringRef GetSettingName() {
+    return ProcessAmdGpuCore::GetPluginNameStatic();
+  }
+
+  PluginProperties() : Properties() {
+    m_collection_sp = std::make_shared<OptionValueProperties>(GetSettingName());
+    m_collection_sp->Initialize(g_processamdgpucore_properties);
+    m_collection_sp->SetValueChangedCallback(ePropertyDbgApiLogLevel, [this] {
+      amd_dbgapi_set_log_level(
+          static_cast<amd_dbgapi_log_level_t>(GetDbgApiLogLevel()));
+    });
+  }
+
+  ~PluginProperties() override = default;
+
+  DbgApiLogLevel GetDbgApiLogLevel() const {
+    const uint32_t idx = ePropertyDbgApiLogLevel;
+    return static_cast<DbgApiLogLevel>(GetPropertyAtIndexAs<int64_t>(
+        idx, g_processamdgpucore_properties[idx].default_uint_value));
+  }
+};
+
+} // namespace
+
+static PluginProperties &GetGlobalPluginProperties() {
+  static PluginProperties g_settings;
+  return g_settings;
+}
+
 llvm::StringRef ProcessAmdGpuCore::GetPluginDescriptionStatic() {
   return "ELF amd gpu core dump plug-in.";
 }
@@ -238,6 +298,25 @@ bool ProcessAmdGpuCore::initRocm() {
     LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to initialize AMD debug API");
     return false;
   }
+
+  // Register plugin settings if not already done for this debugger.
+  Debugger &debugger = GetTarget().GetDebugger();
+  if (!PluginManager::GetSettingForProcessPlugin(
+          debugger, PluginProperties::GetSettingName())) {
+    PluginManager::CreateSettingForProcessPlugin(
+        debugger, GetGlobalPluginProperties().GetValueProperties(),
+        "Properties for the amdgpu-core process plug-in.",
+        /*is_global_setting=*/true);
+  }
+
+  // Set the dbgapi log level. Environment variable takes precedence,
+  // then the LLDB setting, then default to warning.
+  // Env: AMD_DBGAPI_LOG_LEVEL=verbose
+  // Setting: settings set plugin.process.amdgpu-core.dbgapi-log-level verbose
+  amd_dbgapi_log_level_t log_level =
+      GetAmdDbgApiLogLevelFromEnv().value_or(static_cast<amd_dbgapi_log_level_t>(
+          GetGlobalPluginProperties().GetDbgApiLogLevel()));
+  amd_dbgapi_set_log_level(log_level);
 
   // Attach to the process with AMD Debug API
   status = amd_dbgapi_process_attach(

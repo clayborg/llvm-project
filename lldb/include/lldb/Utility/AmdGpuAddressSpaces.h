@@ -9,11 +9,14 @@
 #ifndef LLDB_UTILITY_AMDGPUADDRESSSPACES_H
 #define LLDB_UTILITY_AMDGPUADDRESSSPACES_H
 
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Error.h"
 #include <amd-dbgapi/amd-dbgapi.h>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
+#include <optional>
 
 namespace lldb_private {
 
@@ -135,6 +138,24 @@ RunAmdDbgApiCommand(std::function<amd_dbgapi_status_t()> func) {
                                    "AMD_DBGAPI_STATUS_ERROR: %s",
                                    AmdDbgApiStatusToString(status));
   return llvm::Error::success();
+}
+
+/// Get the AMD debug API log level from the AMD_DBGAPI_LOG_LEVEL environment
+/// variable. Returns the log level if set, or std::nullopt if not set.
+/// Valid values: "none", "fatal", "warning", "info", "verbose", "trace".
+inline std::optional<amd_dbgapi_log_level_t> GetAmdDbgApiLogLevelFromEnv() {
+  const char *env = std::getenv("AMD_DBGAPI_LOG_LEVEL");
+  if (!env)
+    return std::nullopt;
+  llvm::StringRef val(env);
+  return llvm::StringSwitch<std::optional<amd_dbgapi_log_level_t>>(val.lower())
+      .Case("none", AMD_DBGAPI_LOG_LEVEL_NONE)
+      .Case("fatal", AMD_DBGAPI_LOG_LEVEL_FATAL_ERROR)
+      .Case("warning", AMD_DBGAPI_LOG_LEVEL_WARNING)
+      .Case("info", AMD_DBGAPI_LOG_LEVEL_INFO)
+      .Case("verbose", AMD_DBGAPI_LOG_LEVEL_VERBOSE)
+      .Case("trace", AMD_DBGAPI_LOG_LEVEL_TRACE)
+      .Default(std::nullopt);
 }
 
 } // namespace lldb_private
