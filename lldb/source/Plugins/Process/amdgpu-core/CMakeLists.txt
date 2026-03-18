@@ -24,6 +24,7 @@ add_lldb_library(lldbPluginProcessAmdGpuCore PLUGIN
     lldbTarget
     lldbPluginObjectFileELF
     lldbPluginProcessUtility
+    lldbPluginObjectFilePlaceholder
     lldbPluginProcessElfCore
     amd-dbgapi
   )
