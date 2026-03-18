@@ -153,6 +153,19 @@ Type *Value::GetType() {
   return nullptr;
 }
 
+uint64_t Value::GetValueAsUnsigned(lldb::ByteOrder byte_order) const {
+  // If this is a composite location description (from DW_OP_piece or
+  // DW_OP_bit_piece), extract the value from the data buffer.
+  if (IsCompositeLocation()) {
+    DataExtractor data(m_data_buffer.GetBytes(), m_data_buffer.GetByteSize(),
+                       byte_order, sizeof(uint64_t));
+    lldb::offset_t offset = 0;
+    return data.GetMaxU64(&offset, m_data_buffer.GetByteSize());
+  }
+  // Otherwise, return the scalar value directly.
+  return m_value.ULongLong();
+}
+
 size_t Value::AppendDataToHostBuffer(const Value &rhs) {
   if (this == &rhs)
     return 0;

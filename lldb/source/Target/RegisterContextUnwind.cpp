@@ -1682,9 +1682,10 @@ RegisterContextUnwind::SavedLocationForRegister(
       LLDB_LOG_ERROR(log, result.takeError(),
                      "DWARF expression failed to evaluate: {0}");
     } else {
-      addr_t val;
-      val = result->GetScalar().ULongLong();
-      if (abs_regloc->IsDWARFExpression()) {
+      addr_t val = result->GetValueAsUnsigned(process->GetByteOrder());
+      // Composite values from DW_OP_piece/DW_OP_bit_piece are always the
+      // actual value, not an address to dereference.
+      if (result->IsCompositeLocation() || abs_regloc->IsDWARFExpression()) {
         regloc.type =
             UnwindLLDB::ConcreteRegisterLocation::eRegisterValueInferred;
         regloc.location.inferred_value = val;
@@ -2101,8 +2102,11 @@ bool RegisterContextUnwind::ReadFrameAddress(
         dwarfexpr.Evaluate(&exe_ctx, this, 0, nullptr, nullptr);
     if (result) {
       address = result->GetScalar().ULongLong();
-      UnwindLogMsg("CFA value set by DWARF expression is 0x%" PRIx64,
-                   address);
+      UnwindLogMsg("CFA value set by DWARF expression is 0x%" PRIx64, address);
+      std::optional<uint64_t> address_space_id = result->GetAddressSpaceId();
+      UnwindLogMsg("CFA value has address space ID %" PRIu64,
+                     address_space_id.has_value()? *address_space_id: 0);
+        
       return true;
     }
     UnwindLogMsg("Failed to set CFA value via DWARF expression: %s",

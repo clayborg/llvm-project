@@ -23,8 +23,13 @@ lldb::RegisterContextSP ThreadAMDGPU::GetRegisterContext() {
 
 lldb::RegisterContextSP
 ThreadAMDGPU::CreateRegisterContextForFrame(StackFrame *frame) {
-  // TODO: Implement this
-  return GetRegisterContext();
+  // For frame 0 (leaf frame), return the live register context.
+  // For caller frames (frame > 0), use the unwinder to get the register
+  // context which computes caller register values using DWARF unwind info.
+  if (frame == nullptr || frame->GetConcreteFrameIndex() == 0)
+    return GetRegisterContext();
+
+  return GetUnwinder().CreateRegisterContextForFrame(frame);
 }
 
 // NativeThreadProtocol Interface

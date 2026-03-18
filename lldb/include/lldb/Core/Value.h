@@ -147,6 +147,18 @@ public:
 
   void Clear();
 
+  /// Check if this Value represents a composite location description
+  /// (built from DW_OP_piece or DW_OP_bit_piece operations).
+  /// \returns true if the data buffer contains composite location data.
+  bool IsCompositeLocation() const { return m_data_buffer.GetByteSize() > 0; }
+
+  /// Get the value as a scalar, handling both simple scalar values and
+  /// composite location descriptions (from DW_OP_piece/DW_OP_bit_piece).
+  /// For composite locations, this extracts the value from the data buffer.
+  /// \param byte_order The byte order to use when extracting from buffer.
+  /// \returns The value as a uint64_t.
+  uint64_t GetValueAsUnsigned(lldb::ByteOrder byte_order) const;
+
   static ValueType GetValueTypeFromAddressType(AddressType address_type);
 
   void SetAddressSpaceId(uint64_t address_space_id) {
@@ -188,6 +200,7 @@ protected:
   ValueType m_value_type = ValueType::Scalar;
   ContextType m_context_type = ContextType::Invalid;
   DataBufferHeap m_data_buffer;
+  uint64_t m_data_buffer_bit_offset = 0;
   std::optional<uint64_t> m_address_space_id;
 };
 
