@@ -8,6 +8,10 @@
 
 #include "PlatformNVGPU.h"
 #include "cudadebugger.h"
+#include "lldb/Breakpoint/Breakpoint.h"
+#include "lldb/Breakpoint/BreakpointList.h"
+#include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Core/Mangled.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
@@ -272,6 +276,125 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
   return llvm::Error::success();
 }
 
+void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
+                                            Target &target) {
+  Log *log = GetLog(LLDBLog::Modules);
+
+  // Always insert an entry so we don't reprocess this module.
+  auto &shadow_list = m_shadow_functions[module_sp];
+
+  // __device_stub_ should specifically be at the start of the special symbol.
+  const llvm::StringRef kStubPrefix = "__device_stub_";
+
+  SymbolContextList sc_list;
+  // Search for all code symbols whose mangled name contains "__device_stub_".
+  module_sp->FindSymbolsMatchingRegExAndType(
+      RegularExpression((llvm::Twine("^") + kStubPrefix).str()),
+      lldb::eSymbolTypeCode, sc_list,
+      Mangled::ePreferDemangledWithoutArguments);
+
+  LLDB_LOG(log, "IdentifyShadowFunctions: found {0} stub symbols in {1}",
+           sc_list.GetSize(), module_sp->GetSpecificationDescription());
+
+  for (uint32_t i = 0; i < sc_list.GetSize(); ++i) {
+    SymbolContext sc;
+    sc_list.GetContextAtIndex(i, sc);
+    if (!sc.symbol)
+      continue;
+
+    // TODO(toyang): this should be `__device_stub__Z9my_kerneli`
+    const ConstString &stub_name = sc.symbol->GetNameNoArguments();
+
+    LLDB_LOG(log, "IdentifyShadowFunctions: looking at stub symbol {0}",
+             stub_name.GetStringRef());
+
+    llvm::StringRef display_str = stub_name.GetStringRef();
+    assert(display_str.starts_with(kStubPrefix) &&
+           "stub name doesn't start with __device_stub_ despite our search.");
+    // For example: `_Z9my_kerneli`.
+    llvm::StringRef wrapper_mangled_name =
+        display_str.drop_front(kStubPrefix.size());
+    assert(!wrapper_mangled_name.empty());
+
+    // Look up the wrapper symbol in the module's symbol table.
+    SymbolContextList wrapper_sc_list;
+    module_sp->FindSymbolsWithNameAndType(ConstString(wrapper_mangled_name),
+                                          lldb::eSymbolTypeAny,
+                                          wrapper_sc_list);
+    if (wrapper_sc_list.GetSize() == 0) {
+      LLDB_LOG(log, "IdentifyShadowFunctions: wrapper symbol {0} not found",
+               wrapper_mangled_name.str());
+      continue;
+    }
+
+    SymbolContext wrapper_sc;
+    wrapper_sc_list.GetContextAtIndex(0, wrapper_sc);
+    if (!wrapper_sc.symbol || !wrapper_sc.symbol->ValueIsAddress())
+      continue;
+
+    lldb::addr_t start_pc = wrapper_sc.symbol->GetLoadAddress(&target);
+    lldb::addr_t byte_size = wrapper_sc.symbol->GetByteSize();
+    if (start_pc == LLDB_INVALID_ADDRESS)
+      continue;
+
+    ShadowFunction sf;
+    sf.stub_mangled_name = stub_name.GetString();
+    sf.wrapper_mangled_name = wrapper_mangled_name;
+    sf.start_pc = start_pc;
+    sf.end_pc = start_pc + byte_size;
+
+    LLDB_LOG(log,
+             "IdentifyShadowFunctions: stub={0} -> wrapper={1} "
+             "[0x{2:x16} - 0x{3:x16})",
+             sf.stub_mangled_name, sf.wrapper_mangled_name, sf.start_pc,
+             sf.end_pc);
+
+    shadow_list.push_back(std::move(sf));
+  }
+
+  LLDB_LOG(log, "IdentifyShadowFunctions: found {0} shadow functions in {1}",
+           shadow_list.size(), module_sp->GetSpecificationDescription());
+}
+
+// TODO(toyang): replace with intervalmap
+bool PlatformNVGPU::IsInShadowFunction(lldb::addr_t pc) {
+  for (auto &[module_sp, shadows] : m_shadow_functions)
+    for (const ShadowFunction &sf : shadows)
+      if (pc >= sf.start_pc && pc < sf.end_pc)
+        return true;
+  return false;
+}
+
+void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+
+  std::unique_lock<std::recursive_mutex> lock;
+  BreakpointList &bp_list = target.GetBreakpointList(/*internal=*/false);
+  bp_list.GetListMutex(lock);
+
+  for (size_t i = 0, n = bp_list.GetSize(); i < n; ++i) {
+    BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
+    if (!bp_sp)
+      continue;
+    for (size_t j = 0, m = bp_sp->GetNumLocations(); j < m; ++j) {
+      BreakpointLocationSP loc_sp = bp_sp->GetLocationAtIndex(j);
+      if (!loc_sp || !loc_sp->IsEnabled())
+        continue;
+      lldb::addr_t addr = loc_sp->GetLoadAddress();
+      if (addr == LLDB_INVALID_ADDRESS)
+        continue;
+      if (IsInShadowFunction(addr)) {
+        LLDB_LOG(log,
+                 "DisableShadowFunctionBreakpoints: disabling bp {0} loc {1} "
+                 "at 0x{2:x}",
+                 bp_sp->GetID(), loc_sp->GetID(), addr);
+        if (llvm::Error err = loc_sp->SetEnabled(false))
+          llvm::consumeError(std::move(err));
+      }
+    }
+  }
+}
+
 ///   The PTX to SASS register map table is made of a series of entries,
 ///   one per function. Each function entry is made of a list of register
 ///   mappings, from a PTX register to a SASS register. The table size is
@@ -305,6 +428,13 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
     LLDB_LOG(log, "RecordLoadedModule: module {0} already loaded", module_name);
     return;
   }
+
+  // Identify shadow functions (device stub wrappers) for this module.
+  IdentifyShadowFunctions(module_sp, target);
+
+  // Disable any existing CPU-target breakpoints whose load address falls within
+  // a shadow function range, so users aren't surprised by stops in glue code.
+  DisableShadowFunctionBreakpoints(target);
 
   ObjectFile *obj_file = module_sp->GetObjectFile();
   if (!obj_file) {
@@ -368,8 +498,7 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
       AddressRange func_range = sc.function->GetAddressRanges()[0];
       func_start = func_range.GetBaseAddress().GetLoadAddress(&target);
       func_end = func_start + func_range.GetByteSize();
-      LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name,
-               func_start, func_end);
+      LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name, func_start, func_end);
       break;
     }
   }
@@ -566,8 +695,7 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
   PTXPRegMap &ptx_reg_map = m_entries[module_sp];
   auto map_iter = ptx_reg_map.find(reg_num);
   if (map_iter == ptx_reg_map.end()) {
-    LLDB_LOG(log, "RecordLoadedModule: PTX register mapping not found in the module {0}",
-             module_name);
+    LLDB_LOG(log, "RecordLoadedModule: PTX register mapping not found in the module {0}", module_name);
     return 0;
   }
 
@@ -822,7 +950,7 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
         Address frame_addr = frame_sp->GetFrameCodeAddress();
 
         // Print frame address.
-        strm.Printf("0x%0*" PRIx64 " ",
+        strm.Printf("0x%0*" PRIx64 " ", 
                     target ? (target->GetArchitecture().GetAddressByteSize() * 2)
                            : 16,
                     frame_addr.GetLoadAddress(target));
