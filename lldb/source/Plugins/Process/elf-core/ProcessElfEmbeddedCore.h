@@ -147,6 +147,7 @@
 #define LLDB_SOURCE_PLUGINS_PROCESS_ELF_CORE_PROCESSELFEMBEDDEDCORE_H
 
 #include "ProcessElfCore.h"
+#include "lldb/lldb-private-interfaces.h"
 
 class ProcessElfEmbeddedCore : public lldb_private::PostMortemProcess {
 public:
@@ -180,11 +181,14 @@ public:
       *ELFEmbeddedCoreCreateInstance)(
       std::shared_ptr<ProcessElfCore> cpu_core_process,
       lldb::ListenerSP listener_sp, const lldb_private::FileSpec *crash_file);
-  static void
-  RegisterEmbeddedCorePlugin(llvm::StringRef name, llvm::StringRef description,
-                             ELFEmbeddedCoreCreateInstance create_instance);
+  static void RegisterEmbeddedCorePlugin(
+      llvm::StringRef name, llvm::StringRef description,
+      ELFEmbeddedCoreCreateInstance create_instance,
+      lldb_private::DebuggerInitializeCallback debugger_init_callback = nullptr);
   static bool
   UnregisterEmbeddedCorePlugin(ELFEmbeddedCoreCreateInstance create_callback);
+  static void
+  DebuggerInitializeEmbeddedCorePlugins(lldb_private::Debugger &debugger);
   static ELFEmbeddedCoreCreateInstance
   GetEmbeddedCoreCreateCallbackAtIndex(uint32_t idx);
   static llvm::StringRef GetEmbeddedCorePluginNameAtIndex(uint32_t idx);

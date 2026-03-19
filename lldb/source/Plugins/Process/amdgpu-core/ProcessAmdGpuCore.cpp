@@ -37,8 +37,8 @@ enum DbgApiLogLevel {
   eDbgApiLogLevelFatal = 1,
   eDbgApiLogLevelWarning = 2,
   eDbgApiLogLevelInfo = 3,
-  eDbgApiLogLevelVerbose = 4,
-  eDbgApiLogLevelTrace = 5,
+  eDbgApiLogLevelTrace = 4,
+  eDbgApiLogLevelVerbose = 5,
 };
 
 static constexpr OptionEnumValueElement g_dbgapi_log_level_values[] = {
@@ -47,8 +47,8 @@ static constexpr OptionEnumValueElement g_dbgapi_log_level_values[] = {
     {eDbgApiLogLevelWarning, "warning",
      "Warnings and fatal errors (default)"},
     {eDbgApiLogLevelInfo, "info", "Informational messages"},
-    {eDbgApiLogLevelVerbose, "verbose", "Verbose debug output"},
     {eDbgApiLogLevelTrace, "trace", "Full API call tracing"},
+    {eDbgApiLogLevelVerbose, "verbose", "Verbose debug output"},
 };
 
 #define LLDB_PROPERTIES_processamdgpucore
@@ -78,8 +78,9 @@ public:
 
   DbgApiLogLevel GetDbgApiLogLevel() const {
     const uint32_t idx = ePropertyDbgApiLogLevel;
-    return static_cast<DbgApiLogLevel>(GetPropertyAtIndexAs<int64_t>(
-        idx, g_processamdgpucore_properties[idx].default_uint_value));
+    return GetPropertyAtIndexAs<DbgApiLogLevel>(
+        idx, static_cast<DbgApiLogLevel>(
+                 g_processamdgpucore_properties[idx].default_uint_value));
   }
 };
 
@@ -101,13 +102,24 @@ void ProcessAmdGpuCore::Initialize() {
     // Register as GPU Process plugin (for merged CPU+GPU cores)
     // AMD only supports merged mode, not standalone GPU-only cores
     ProcessElfEmbeddedCore::RegisterEmbeddedCorePlugin(
-        GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
+        GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance,
+        DebuggerInitialize);
   });
 }
 
 void ProcessAmdGpuCore::Terminate() {
   ProcessElfEmbeddedCore::UnregisterEmbeddedCorePlugin(
       ProcessAmdGpuCore::CreateInstance);
+}
+
+void ProcessAmdGpuCore::DebuggerInitialize(Debugger &debugger) {
+  if (!PluginManager::GetSettingForProcessPlugin(
+          debugger, PluginProperties::GetSettingName())) {
+    PluginManager::CreateSettingForProcessPlugin(
+        debugger, GetGlobalPluginProperties().GetValueProperties(),
+        "Properties for the amdgpu-core process plug-in.",
+        /*is_global_setting=*/true);
+  }
 }
 
 static std::optional<CoreNote>
@@ -292,24 +304,8 @@ static amd_dbgapi_callbacks_t s_dbgapi_callbacks = {
 };
 
 bool ProcessAmdGpuCore::initRocm() {
-  // Initialize AMD Debug API with callbacks
-  amd_dbgapi_status_t status = amd_dbgapi_initialize(&s_dbgapi_callbacks);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to initialize AMD debug API");
-    return false;
-  }
-
-  // Register plugin settings if not already done for this debugger.
-  Debugger &debugger = GetTarget().GetDebugger();
-  if (!PluginManager::GetSettingForProcessPlugin(
-          debugger, PluginProperties::GetSettingName())) {
-    PluginManager::CreateSettingForProcessPlugin(
-        debugger, GetGlobalPluginProperties().GetValueProperties(),
-        "Properties for the amdgpu-core process plug-in.",
-        /*is_global_setting=*/true);
-  }
-
-  // Set the dbgapi log level. Environment variable takes precedence,
+  // Set the dbgapi log level before initialize so that log messages during
+  // initialization are captured. Environment variable takes precedence,
   // then the LLDB setting, then default to warning.
   // Env: AMD_DBGAPI_LOG_LEVEL=verbose
   // Setting: settings set plugin.process.amdgpu-core.dbgapi-log-level verbose
@@ -317,6 +313,13 @@ bool ProcessAmdGpuCore::initRocm() {
       GetAmdDbgApiLogLevelFromEnv().value_or(static_cast<amd_dbgapi_log_level_t>(
           GetGlobalPluginProperties().GetDbgApiLogLevel()));
   amd_dbgapi_set_log_level(log_level);
+
+  // Initialize AMD Debug API with callbacks
+  amd_dbgapi_status_t status = amd_dbgapi_initialize(&s_dbgapi_callbacks);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to initialize AMD debug API");
+    return false;
+  }
 
   // Attach to the process with AMD Debug API
   status = amd_dbgapi_process_attach(
