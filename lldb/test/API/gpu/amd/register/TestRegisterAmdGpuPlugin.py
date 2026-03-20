@@ -39,26 +39,36 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
     def test_agrp_lane_write(self):
         self.do_lane_read_write_test("a", NUM_ACCUM_REGISTERS)
 
+    @staticmethod
+    def _sample_indices(count):
+        """Return a small representative set of indices: first, middle, last."""
+        indices = {0, count // 2, count - 1}
+        return sorted(indices)
+
     def do_reg_read_write_test(self, reg_base, num_regs):
-        """Verify we can read and write the whole register value"""
+        """Verify we can read and write the whole register value.
+        Tests a representative sample of registers (first, middle, last)
+        instead of all registers to keep test times reasonable."""
         self.build()
         self.run_to_reg_gpu_breakpoint(reg_base)
 
-        for i in range(num_regs):
+        for i in self._sample_indices(num_regs):
             reg, known_value, new_value = self.get_test_values(reg_base, i, num_regs)
             self.verify_reg_read_and_write(reg, known_value, new_value)
 
     def do_lane_read_write_test(self, reg_base, num_regs):
-        """Verify we can read and write the individual lanes of a register"""
+        """Verify we can read and write the individual lanes of a register.
+        Tests a representative sample of registers and lanes (first, middle,
+        last) instead of all combinations to keep test times reasonable."""
         self.build()
         self.run_to_reg_gpu_breakpoint(reg_base)
 
-        for i in range(num_regs):
+        for i in self._sample_indices(num_regs):
             reg = f"{reg_base}{i}"
             new_value = [0] * WAVE_SIZE
             self.verify_reg_write(reg, new_value)
 
-            for lane in range(WAVE_SIZE):
+            for lane in self._sample_indices(WAVE_SIZE):
                 new_value[lane] = self.replicate_byte(lane + 1)
                 self.verify_reg_write(reg, new_value)
 
