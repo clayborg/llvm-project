@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <cstdlib>
-
 #include <memory>
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
@@ -305,9 +303,83 @@ Status ProcessAmdGpuCore::DoLoadCore() {
 
   GetTarget().SetArchitecture(GetArchitecture());
 
-  // Load modules directly
-  llvm::Error module_load_error = LoadModules();
-  return Status::FromError(std::move(module_load_error));
+  // Process pending events from the dbgapi. After attach, the dbgapi queues
+  // events for runtime state and code object list updates. Processing these
+  // events triggers LoadModules() for CODE_OBJECT_LIST_UPDATED and detects
+  // version mismatches via RUNTIME events.
+  return ProcessPendingEvents();
+}
+
+Status ProcessAmdGpuCore::ProcessPendingEvents() {
+  Log *log = GetLog(LLDBLog::Process);
+  Status error;
+
+  amd_dbgapi_event_id_t event_id;
+  amd_dbgapi_event_kind_t event_kind;
+  amd_dbgapi_status_t status = amd_dbgapi_process_next_pending_event(
+      m_gpu_pid, &event_id, &event_kind);
+
+  while (status == AMD_DBGAPI_STATUS_SUCCESS &&
+         event_id.handle != AMD_DBGAPI_EVENT_NONE.handle) {
+    LLDB_LOGF(log, "ProcessAmdGpuCore::ProcessPendingEvents: event kind %d",
+              event_kind);
+
+    switch (event_kind) {
+    case AMD_DBGAPI_EVENT_KIND_RUNTIME: {
+      amd_dbgapi_runtime_state_t runtime_state;
+      if (llvm::Error err = RunAmdDbgApiCommand([&] {
+            return amd_dbgapi_event_get_info(
+                event_id, AMD_DBGAPI_EVENT_INFO_RUNTIME_STATE,
+                sizeof(runtime_state), &runtime_state);
+          })) {
+        LLDB_LOG_ERROR(log, std::move(err),
+                       "Failed to get runtime state from event: {0}");
+        break;
+      }
+      switch (runtime_state) {
+      case AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS: {
+        LLDB_LOGF(log, "AMD GPU runtime loaded successfully, loading modules");
+        llvm::Error load_error = LoadModules();
+        if (load_error)
+          error = Status::FromError(std::move(load_error));
+        break;
+      }
+      case AMD_DBGAPI_RUNTIME_STATE_UNLOADED:
+        LLDB_LOGF(log, "AMD GPU runtime unloaded");
+        break;
+      case AMD_DBGAPI_RUNTIME_STATE_LOADED_ERROR_RESTRICTION: {
+        uint32_t major, minor, patch;
+        amd_dbgapi_get_version(&major, &minor, &patch);
+        std::string msg = llvm::formatv(
+            "AMD GPU runtime version in the core file is not supported by "
+            "the installed ROCm debug API (librocm-dbgapi v{0}.{1}.{2}). "
+            "GPU code objects will not be available. Please upgrade ROCm.",
+            major, minor, patch);
+        LLDB_LOGF(log, "%s", msg.c_str());
+        GetTarget().GetDebugger().ReportError(msg);
+        break;
+      }
+      }
+      break;
+    }
+    case AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED: {
+      LLDB_LOGF(log, "Code object list updated, loading modules");
+      llvm::Error load_error = LoadModules();
+      if (load_error)
+        error = Status::FromError(std::move(load_error));
+      break;
+    }
+    default:
+      LLDB_LOGF(log, "Unknown event kind: %d", event_kind);
+      break;
+    }
+
+    amd_dbgapi_event_processed(event_id);
+    status = amd_dbgapi_process_next_pending_event(m_gpu_pid, &event_id,
+                                                   &event_kind);
+  }
+
+  return error;
 }
 
 lldb_private::DynamicLoader *ProcessAmdGpuCore::GetDynamicLoader() {

@@ -162,6 +162,10 @@ LLDBServerPluginAMDGPU::LLDBServerPluginAMDGPU(
 
 LLDBServerPluginAMDGPU::~LLDBServerPluginAMDGPU() {}
 
+void LLDBServerPluginAMDGPU::SendErrorToClient(llvm::StringRef message) {
+  m_native_process.SendONotification(message.data(), message.size());
+}
+
 llvm::StringRef LLDBServerPluginAMDGPU::GetPluginName() { return "amd-gpu"; }
 
 llvm::StringRef LLDBServerPluginAMDGPU::GetSessionName() {
@@ -241,6 +245,12 @@ Status LLDBServerPluginAMDGPU::AttachAmdDbgApi() {
 
     // Mark event as processed
     amd_dbgapi_event_processed(eventId);
+  }
+
+  // Check if the event handler detected a fatal error (e.g. version mismatch)
+  if (m_amd_dbg_api_state == AmdDbgApiState::Error) {
+    return Status::FromErrorString(
+        "AMD GPU runtime version not supported by installed ROCm debug API");
   }
 
   LLDB_LOGF(log, "%s successfully attached to debug library", __FUNCTION__);
@@ -654,6 +664,16 @@ bool LLDBServerPluginAMDGPU::CreateGPUBreakpoint(uint64_t addr) {
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   Log *log = GetLog(GDBRLog::Plugin);
+
+  // If the GPU plugin is in an error state (e.g. version mismatch), don't
+  // try to handle breakpoints - just let the CPU process continue.
+  if (m_amd_dbg_api_state == AmdDbgApiState::Error) {
+    LLDB_LOGF(log, "%s: GPU plugin in error state, ignoring breakpoint hit",
+              __FUNCTION__);
+    GPUPluginBreakpointHitResponse response(GetNewGPUAction());
+    return response;
+  }
+
   std::string json_string;
   const auto bp_identifier = args.breakpoint.identifier;
   llvm::raw_string_ostream os(json_string);

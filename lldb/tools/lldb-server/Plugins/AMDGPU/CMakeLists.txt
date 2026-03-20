@@ -1,5 +1,5 @@
 # Find AMD-dbgapi package using the provided CMake config
-set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
+set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config" FORCE)
 find_package(amd-dbgapi REQUIRED CONFIG)
 
 include_directories(${ROCM_PATH}/include)

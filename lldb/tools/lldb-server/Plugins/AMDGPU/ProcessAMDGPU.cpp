@@ -8,6 +8,7 @@
 
 #include "ProcessAMDGPU.h"
 #include "AmdDbgApiHelpers.h"
+#include "Plugins/Utils/Utils.h"
 #include "ThreadAMDGPU.h"
 
 #include "LLDBServerPluginAMDGPU.h"
@@ -428,9 +429,23 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
         LLDB_LOGF(GetLog(GDBRLog::Plugin), "Runtime loaded successfully");
         m_debugger->GpuRuntimeDidLoad();
         break;
-      case AMD_DBGAPI_RUNTIME_STATE_LOADED_ERROR_RESTRICTION:
-        LLDB_LOGF(GetLog(GDBRLog::Plugin), "Runtime load restricted");
+      case AMD_DBGAPI_RUNTIME_STATE_LOADED_ERROR_RESTRICTION: {
+        uint32_t major, minor, patch;
+        amd_dbgapi_get_version(&major, &minor, &patch);
+        std::string err_msg = llvm::formatv(
+            "error: AMD GPU runtime version is not supported by the installed "
+            "ROCm debug API (librocm-dbgapi v{0}.{1}.{2}). GPU debugging "
+            "cannot proceed. Please upgrade ROCm.\n",
+            major, minor, patch);
+        LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s", err_msg.c_str());
+        // Send the error to the LLDB client via the CPU GDB server connection
+        // so the user sees it in their console.
+        m_debugger->SendErrorToClient(err_msg);
+        // Mark the plugin as errored so it won't try to set up a GPU
+        // connection or do further GPU debugging operations.
+        m_debugger->SetErrorState();
         break;
+      }
       case AMD_DBGAPI_RUNTIME_STATE_UNLOADED:
         LLDB_LOGF(GetLog(GDBRLog::Plugin), "Runtime unloaded");
         break;

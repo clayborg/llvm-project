@@ -85,7 +85,7 @@ if(LLDB_ENABLE_AMDGPU_PLUGIN)
   if(NOT DEFINED ROCM_PATH)
     set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to ROCm installation")
   endif()
-  set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config")
+  set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi" CACHE PATH "Path to amd-dbgapi cmake config" FORCE)
   find_package(amd-dbgapi REQUIRED CONFIG)
   include_directories(${ROCM_PATH}/include)
   
