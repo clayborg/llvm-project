@@ -368,14 +368,14 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
       AddressRange func_range = sc.function->GetAddressRanges()[0];
       func_start = func_range.GetBaseAddress().GetLoadAddress(&target);
       func_end = func_start + func_range.GetByteSize();
-      LLDB_LOG(log, "Function %s: [0x%" PRIx64 " - 0x%" PRIx64 ")\n",
-               function_name, func_start, func_end);
+      LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name,
+               func_start, func_end);
       break;
     }
   }
 
   if (i == sc_list.GetSize()) {
-    LLDB_LOG(log, "Function %s symbol not found.", function_name);
+    LLDB_LOG(log, "Function {0} symbol not found.", function_name);
     return;
   }
 
