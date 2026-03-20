@@ -11,6 +11,14 @@ find_package(amd-dbgapi REQUIRED CONFIG)
 
 include_directories(${ROCM_PATH}/include)
 
+lldb_tablegen(ProcessAmdGpuCoreProperties.inc -gen-lldb-property-defs
+  SOURCE ProcessAmdGpuCoreProperties.td
+  TARGET LLDBPluginProcessAmdGpuCorePropertiesGen)
+
+lldb_tablegen(ProcessAmdGpuCorePropertiesEnum.inc -gen-lldb-property-enum-defs
+  SOURCE ProcessAmdGpuCoreProperties.td
+  TARGET LLDBPluginProcessAmdGpuCorePropertiesEnumGen)
+
 add_lldb_library(lldbPluginProcessAmdGpuCore PLUGIN
   ProcessAmdGpuCore.cpp
   ThreadAMDGPU.cpp
@@ -27,6 +35,10 @@ add_lldb_library(lldbPluginProcessAmdGpuCore PLUGIN
     lldbPluginProcessElfCore
     amd-dbgapi
   )
+
+add_dependencies(lldbPluginProcessAmdGpuCore
+  LLDBPluginProcessAmdGpuCorePropertiesGen
+  LLDBPluginProcessAmdGpuCorePropertiesEnumGen)
 
 set_target_properties(lldbPluginProcessAmdGpuCore PROPERTIES LINK_FLAGS "-Wl,-rpath,${ROCM_PATH}/lib")
 target_include_directories(lldbPluginProcessAmdGpuCore PRIVATE "${LLDB_SOURCE_DIR}/source" ${ROCM_PATH}/include "../..")

@@ -502,8 +502,13 @@ void ProcessElfCore::Initialize() {
 
   llvm::call_once(g_once_flag, []() {
     PluginManager::RegisterPlugin(GetPluginNameStatic(),
-                                  GetPluginDescriptionStatic(), CreateInstance);
+                                  GetPluginDescriptionStatic(), CreateInstance,
+                                  DebuggerInitialize);
   });
+}
+
+void ProcessElfCore::DebuggerInitialize(Debugger &debugger) {
+  ProcessElfEmbeddedCore::DebuggerInitializeEmbeddedCorePlugins(debugger);
 }
 
 lldb::addr_t ProcessElfCore::GetImageInfoAddress() {

@@ -40,6 +40,8 @@ public:
 
   static void Terminate();
 
+  static void DebuggerInitialize(lldb_private::Debugger &debugger);
+
   static llvm::StringRef GetPluginNameStatic() { return "elf-core"; }
 
   static llvm::StringRef GetPluginDescriptionStatic();

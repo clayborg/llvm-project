@@ -73,13 +73,15 @@ void ProcessElfEmbeddedCore::LoadEmbeddedCoreFiles(
 struct EmbeddedCorePluginInstance {
   EmbeddedCorePluginInstance(
       llvm::StringRef name, llvm::StringRef description,
-      ProcessElfEmbeddedCore::ELFEmbeddedCoreCreateInstance create_callback)
-      : name(name), description(description), create_callback(create_callback) {
-  }
+      ProcessElfEmbeddedCore::ELFEmbeddedCoreCreateInstance create_callback,
+      DebuggerInitializeCallback debugger_init_callback = nullptr)
+      : name(name), description(description), create_callback(create_callback),
+        debugger_init_callback(debugger_init_callback) {}
 
   std::string name;
   std::string description;
   ProcessElfEmbeddedCore::ELFEmbeddedCoreCreateInstance create_callback;
+  DebuggerInitializeCallback debugger_init_callback;
 };
 
 static std::vector<EmbeddedCorePluginInstance> &
@@ -90,10 +92,12 @@ GetEmbeddedCorePluginInstances() {
 
 void ProcessElfEmbeddedCore::RegisterEmbeddedCorePlugin(
     llvm::StringRef name, llvm::StringRef description,
-    ELFEmbeddedCoreCreateInstance create_callback) {
+    ELFEmbeddedCoreCreateInstance create_callback,
+    DebuggerInitializeCallback debugger_init_callback) {
   if (create_callback) {
     auto &instances = GetEmbeddedCorePluginInstances();
-    instances.emplace_back(name, description, create_callback);
+    instances.emplace_back(name, description, create_callback,
+                           debugger_init_callback);
   }
 }
 
@@ -128,4 +132,12 @@ ProcessElfEmbeddedCore::GetEmbeddedCorePluginNameAtIndex(uint32_t idx) {
   if (idx < instances.size())
     return instances[idx].name;
   return llvm::StringRef();
+}
+
+void ProcessElfEmbeddedCore::DebuggerInitializeEmbeddedCorePlugins(
+    Debugger &debugger) {
+  for (auto &instance : GetEmbeddedCorePluginInstances()) {
+    if (instance.debugger_init_callback)
+      instance.debugger_init_callback(debugger);
+  }
 }
