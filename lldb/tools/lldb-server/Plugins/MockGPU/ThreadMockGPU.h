@@ -51,6 +51,13 @@ public:
 
   const ProcessMockGPU &GetProcess() const;
 
+  /// Set the thread to stopped state with a breakpoint stop reason.
+  /// Updates the PC register to \a bp_addr.
+  void SetStoppedByBreakpoint(lldb::addr_t bp_addr);
+
+  /// Set the thread to stopped state with a trace stop reason.
+  void SetStoppedByTrace();
+
 private:
   // Member Variables
   lldb::StateType m_state;

@@ -12,6 +12,8 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 
+#include <unordered_map>
+
 namespace lldb_private {
 namespace lldb_server {
 
@@ -89,6 +91,11 @@ class Manager : public NativeProcessProtocol::Manager {
   Status SetBreakpoint(lldb::addr_t addr, uint32_t size,
                        bool hardware) override;
 
+  // Use base class software breakpoint infrastructure (like NativeProcessLinux).
+  // Requires working ReadMemory/WriteMemory + a trap opcode.
+  llvm::Expected<llvm::ArrayRef<uint8_t>>
+  GetSoftwareBreakpointTrapOpcode(size_t size_hint) override;
+
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   GetAuxvData() const override;
 
@@ -108,6 +115,11 @@ class Manager : public NativeProcessProtocol::Manager {
 
   /// Called when the native process exits to set the GPU process exit status
   void HandleNativeProcessExit(const WaitStatus &exit_status);
+
+private:
+  /// Simple byte-addressable memory backing store.
+  /// Enables software breakpoints via base class SetSoftwareBreakpoint.
+  std::unordered_map<lldb::addr_t, uint8_t> m_memory;
 };
 
 
