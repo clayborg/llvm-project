@@ -355,6 +355,10 @@ if "FREEBSD_LEGACY_PLUGIN" in os.environ:
 if "XDG_CACHE_HOME" in os.environ:
     config.environment["XDG_CACHE_HOME"] = os.environ["XDG_CACHE_HOME"]
 
+# Propagate LLDB_TEST_EXHAUSTIVE for running exhaustive/long-running tests.
+if "LLDB_TEST_EXHAUSTIVE" in os.environ:
+    config.environment["LLDB_TEST_EXHAUSTIVE"] = os.environ["LLDB_TEST_EXHAUSTIVE"]
+
 # Transfer some environment variables into the tests on Windows build host.
 if platform.system() == "Windows":
     for v in ["SystemDrive"]:

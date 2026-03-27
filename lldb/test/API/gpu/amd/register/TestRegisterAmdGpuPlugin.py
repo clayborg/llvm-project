@@ -2,6 +2,8 @@
 Register tests for the AMDGPU plugin.
 """
 
+import os
+
 import lldb
 from amdgpu_testcase import AmdGpuTestCaseBase
 import lldbsuite.test.lldbutil as lldbutil
@@ -41,14 +43,16 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
 
     @staticmethod
     def _sample_indices(count):
-        """Return a small representative set of indices: first, middle, last."""
-        indices = {0, count // 2, count - 1}
-        return sorted(indices)
+        """Return indices to test. By default returns a small representative
+        set (first, middle, last). Set LLDB_TEST_EXHAUSTIVE=1 to test all."""
+        if os.environ.get("LLDB_TEST_EXHAUSTIVE"):
+            return list(range(count))
+        return sorted({0, count // 2, count - 1})
 
     def do_reg_read_write_test(self, reg_base, num_regs):
         """Verify we can read and write the whole register value.
         Tests a representative sample of registers (first, middle, last)
-        instead of all registers to keep test times reasonable."""
+        by default. Set LLDB_TEST_EXHAUSTIVE=1 to test all registers."""
         self.build()
         self.run_to_reg_gpu_breakpoint(reg_base)
 
@@ -59,7 +63,7 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
     def do_lane_read_write_test(self, reg_base, num_regs):
         """Verify we can read and write the individual lanes of a register.
         Tests a representative sample of registers and lanes (first, middle,
-        last) instead of all combinations to keep test times reasonable."""
+        last) by default. Set LLDB_TEST_EXHAUSTIVE=1 to test all."""
         self.build()
         self.run_to_reg_gpu_breakpoint(reg_base)
 
