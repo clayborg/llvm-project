@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
+#include "Plugins/ObjectFile/Placeholder/ObjectFilePlaceholder.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
@@ -544,25 +545,22 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
                native_mem_addr);
 
       TargetSP cpu_target_sp = target.GetNativeTargetForGPU();
-      if (!cpu_target_sp) {
-        LLDB_LOG(log, "Invalid CPU target for \"{0}\" from memory at {1:x}",
-                 lib_info->pathname, native_mem_addr);
-        continue;
-      }
-      ProcessSP cpu_process_sp = cpu_target_sp->GetProcessSP();
-      if (!cpu_process_sp) {
-        LLDB_LOG(log, "Invalid CPU process for \"{0}\" from memory at {1:x}",
-                 lib_info->pathname, native_mem_addr);
-        continue;
-      }
-      data_sp = std::make_shared<DataBufferHeap>(native_mem_size, 0);
-      Status error;
-      const size_t bytes_read = cpu_process_sp->ReadMemory(
-          native_mem_addr, data_sp->GetBytes(), data_sp->GetByteSize(), error);
-      if (bytes_read != native_mem_size) {
-        LLDB_LOG(log, "Failed to read \"{0}\" from memory at {1:x}: {2}",
-                 lib_info->pathname, native_mem_addr, error);
-        continue;
+      ProcessSP cpu_process_sp =
+          cpu_target_sp ? cpu_target_sp->GetProcessSP() : nullptr;
+      if (cpu_process_sp) {
+        data_sp = std::make_shared<DataBufferHeap>(native_mem_size, 0);
+        Status error;
+        const size_t bytes_read = cpu_process_sp->ReadMemory(
+            native_mem_addr, data_sp->GetBytes(), data_sp->GetByteSize(),
+            error);
+        if (bytes_read != native_mem_size) {
+          LLDB_LOG(log, "Failed to read \"{0}\" from memory at {1:x}: {2}",
+                   lib_info->pathname, native_mem_addr, error);
+          data_sp.reset(); // Fall through to try file or placeholder
+        }
+      } else {
+        LLDB_LOG(log, "No CPU process available to read \"{0}\" from memory",
+                 lib_info->pathname);
       }
     }
 
@@ -579,6 +577,34 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
     // Get or create the module from the module spec
     ModuleSP module_sp = target.GetOrCreateModule(module_spec,
                                                   /*notify=*/true);
+    if (!module_sp) {
+      // The module file could not be found on disk. Create a placeholder
+      // module so it still shows up in "image list" and can be re-hydrated
+      // later (e.g. via a symbol server).
+      lldb::addr_t load_addr = lib_info->load_address.value_or(0);
+      lldb::addr_t load_size =
+          lib_info->native_memory_size.value_or(
+              lib_info->file_size.value_or(0));
+      if (load_size > 0) {
+        LLDB_LOG(log,
+                 "Unable to locate module file, creating placeholder for: "
+                 "{0} (addr={1:x}, size={2})",
+                 lib_info->pathname, load_addr, load_size);
+        // Set the architecture so ObjectFilePlaceholder::GetArchitecture()
+        // returns a valid ArchSpec (required by CreateModuleFromObjectFile).
+        module_spec.GetArchitecture() = target.GetArchitecture();
+        module_sp = Module::CreateModuleFromObjectFile<ObjectFilePlaceholder>(
+            module_spec, load_addr, load_size);
+        if (module_sp) {
+          target.GetImages().Append(module_sp, /*notify=*/true);
+        }
+      } else {
+        LLDB_LOG(log, "Unable to locate module file and no size info "
+                      "available for placeholder: {0}",
+                 lib_info->pathname);
+      }
+    }
+
     if (module_sp) {
       LLDB_LOG(log, "Created module for \"{0}\": {1:x}", lib_info->pathname,
                module_sp.get());
@@ -587,8 +613,13 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
                lib_info->pathname, lib_info->load_address.value_or(0));
 
       if (lib_info->load_address.has_value()) {
+        // ObjectFilePlaceholder::SetLoadAddress asserts value_is_offset=false
+        // because it uses absolute addresses for its section.
+        bool is_placeholder =
+            module_sp->GetObjectFile() &&
+            module_sp->GetObjectFile()->GetPluginName() == "placeholder";
         module_sp->SetLoadAddress(target, lib_info->load_address.value(),
-                                  /*value_is_offset=*/true, changed);
+                                  /*value_is_offset=*/!is_placeholder, changed);
         if (changed) {
           LLDB_LOG(log, "Module \"{0}\" was loaded", lib_info->pathname);
           loaded_modules.AppendIfNeeded(module_sp);

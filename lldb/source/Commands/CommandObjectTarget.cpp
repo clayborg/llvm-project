@@ -3517,6 +3517,11 @@ protected:
       if (object_name)
         strm.Printf("(%s)", object_name);
     }
+    // Mark placeholder modules so users can identify missing binaries
+    if (ObjectFile *obj = module->GetObjectFile()) {
+      if (obj->GetPluginName() == "placeholder")
+        strm.PutCString(" (*)");
+    }
     strm.EOL();
   }
 
