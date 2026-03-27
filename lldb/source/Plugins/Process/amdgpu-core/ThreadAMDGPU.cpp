@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 #include "ThreadAMDGPU.h"
 #include "lldb/Target/StopInfo.h"
+#include "lldb/Utility/AmdGpuStopReason.h"
+#include <csignal>
 
 using namespace lldb_private;
 
@@ -55,7 +57,49 @@ bool ThreadAMDGPU::CalculateStopInfo() {
   if (!process_sp)
     return false;
 
-  // TODO: how to implement this?
-  SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, 5));
+  // The shadow thread (no wave_id) doesn't have GPU-specific stop info.
+  if (!m_wave_id) {
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP));
+    return true;
+  }
+
+  // Query the wave's stop reason from the AMD debug API.
+  amd_dbgapi_wave_stop_reasons_t stop_reason = AMD_DBGAPI_WAVE_STOP_REASON_NONE;
+  amd_dbgapi_status_t status =
+      amd_dbgapi_wave_get_info(*m_wave_id, AMD_DBGAPI_WAVE_INFO_STOP_REASON,
+                               sizeof(stop_reason), &stop_reason);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    // Matching rocgdb behavior: treat API failure as an error.
+    SetStopInfo(StopInfo::CreateStopReasonWithException(
+        *this, "failed to query wave stop reason"));
+    return true;
+  }
+
+  std::string description;
+  lldb::StopReason reason =
+      GetLldbStopReasonForDbgApiStopReason(stop_reason, &description);
+
+  switch (reason) {
+  case lldb::eStopReasonException:
+    SetStopInfo(
+        StopInfo::CreateStopReasonWithException(*this, description.c_str()));
+    break;
+  case lldb::eStopReasonBreakpoint:
+    SetStopInfo(StopInfo::CreateStopReasonWithBreakpointSiteID(*this, 0));
+    break;
+  case lldb::eStopReasonWatchpoint:
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP));
+    break;
+  case lldb::eStopReasonTrace:
+    SetStopInfo(StopInfo::CreateStopReasonToTrace(*this));
+    break;
+  case lldb::eStopReasonInterrupt:
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGSTOP));
+    break;
+  default:
+    // No recognized stop reason — match rocgdb's GDB_SIGNAL_0 fallback.
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, 0));
+    break;
+  }
   return true;
 }
