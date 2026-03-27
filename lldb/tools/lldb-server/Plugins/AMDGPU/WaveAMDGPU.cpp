@@ -16,6 +16,7 @@
 #include "AmdDbgApiHelpers.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ThreadAMDGPU.h"
+#include "lldb/Utility/AmdGpuStopReason.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/Support/MathExtras.h"
@@ -114,73 +115,6 @@ void WaveAMDGPU::AddThreadsToList(
 void WaveAMDGPU::SetDbgApiInfo(const DbgApiWaveInfo &wave_info) {
   m_wave_info = wave_info;
   UpdateStopReasonFromWaveInfo();
-}
-
-static lldb::StopReason
-GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason,
-                                     std::string *description) {
-  // If none of the bits are set, then we explicitly stopped the wave with
-  // a call to `amd_dbgapi_wave_stop`.
-  if (reason == AMD_DBGAPI_WAVE_STOP_REASON_NONE)
-    return lldb::StopReason::eStopReasonInterrupt;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT)
-    return lldb::StopReason::eStopReasonBreakpoint;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_WATCHPOINT)
-    return lldb::StopReason::eStopReasonWatchpoint;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_SINGLE_STEP)
-    return lldb::StopReason::eStopReasonTrace;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_INPUT_DENORMAL)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_DIVIDE_BY_0)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_OVERFLOW)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_UNDERFLOW)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_INEXACT)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_INVALID_OPERATION)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_INT_DIVIDE_BY_0)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_DEBUG_TRAP)
-    return lldb::StopReason::eStopReasonBreakpoint;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_ASSERT_TRAP)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_TRAP)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_MEMORY_VIOLATION) {
-    *description = "Memory access violation";
-    return lldb::StopReason::eStopReasonException;
-  }
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_ADDRESS_ERROR)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_ILLEGAL_INSTRUCTION)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_ECC_ERROR)
-    return lldb::StopReason::eStopReasonException;
-
-  if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FATAL_HALT)
-    return lldb::StopReason::eStopReasonException;
-
-  return lldb::StopReason::eStopReasonInvalid;
 }
 
 void WaveAMDGPU::UpdateStopReasonFromWaveInfo() {
