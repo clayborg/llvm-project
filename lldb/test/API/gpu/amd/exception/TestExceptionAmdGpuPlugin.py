@@ -1,6 +1,7 @@
 """
 Exception tests for the AMDGPU plugin.
-Tests that GPU memory violations are reported as eStopReasonException.
+Tests that GPU exceptions are reported as eStopReasonException with correct
+descriptions for memory violations, assert traps, and illegal instructions.
 """
 
 import lldb
@@ -10,12 +11,17 @@ from amdgpu_testcase import *
 
 
 class ExceptionAmdGpuTestCase(AmdGpuTestCaseBase):
-    def run_to_gpu_exception(self):
-        """Launch the kernel and wait for the GPU to stop with an exception."""
+    def run_to_gpu_exception(self, scenario=None):
+        """Launch the kernel and wait for the GPU to stop with an exception.
+        If scenario is provided, it is passed as a command-line argument to
+        select which kernel to launch (memory_violation, assert_trap,
+        illegal_instruction).
+        """
         self.build()
 
         target = self.createTestTarget()
-        process = target.LaunchSimple(None, None, self.get_process_working_directory())
+        args = [scenario] if scenario else None
+        process = target.LaunchSimple(args, None, self.get_process_working_directory())
         self.assertTrue(process.IsValid(), "Process is valid")
 
         # The GPU target should be created after launch. The GPU plugin
@@ -41,74 +47,70 @@ class ExceptionAmdGpuTestCase(AmdGpuTestCaseBase):
             self, listener, self.cpu_process, [lldb.eStateRunning]
         )
 
-        # Wait for the GPU process to stop due to the memory violation.
+        # Wait for the GPU process to stop due to the exception.
         lldbutil.expect_state_changes(
             self, listener, self.gpu_process, [lldb.eStateStopped]
         )
 
-        # At least one GPU thread should be stopped with an exception.
-        exception_threads = []
+    def find_exception_thread(self):
+        """Find and return a GPU thread stopped with eStopReasonException."""
         for thread in self.gpu_process.threads:
             if thread.GetStopReason() == lldb.eStopReasonException:
-                exception_threads.append(thread)
+                return thread
+        return None
 
-        self.assertGreater(
-            len(exception_threads),
-            0,
-            "At least one GPU thread should be stopped with eStopReasonException",
-        )
+    def verify_exception_with_description(self, scenario, expected_description):
+        """Run a scenario and verify eStopReasonException with the expected
+        description string."""
+        self.run_to_gpu_exception(scenario)
 
-    def test_gpu_exception_description(self):
-        """Test that the exception description contains useful information."""
-        self.run_to_gpu_exception()
-
-        # Find a thread with an exception stop reason.
-        exception_thread = None
-        for thread in self.gpu_process.threads:
-            if thread.GetStopReason() == lldb.eStopReasonException:
-                exception_thread = thread
-                break
-
+        exception_thread = self.find_exception_thread()
         self.assertIsNotNone(
             exception_thread, "Should find a thread stopped with an exception"
         )
 
-        # The stop description should indicate a memory access violation.
         stop_description = exception_thread.GetStopDescription(256)
         self.assertIn(
-            "Memory access violation",
+            expected_description,
             stop_description,
-            f"Exception stop description should contain 'Memory access violation', "
+            f"Exception description should contain '{expected_description}', "
             f"got: '{stop_description}'",
         )
 
+    def test_gpu_memory_violation(self):
+        """Test that a GPU memory violation reports the correct description."""
+        self.verify_exception_with_description(
+            "memory_violation", "Memory access violation"
+        )
+
+    def test_gpu_assert_trap(self):
+        """Test that a GPU assert trap reports the correct description."""
+        self.verify_exception_with_description("assert_trap", "Assert trap")
+
+    def test_gpu_illegal_instruction(self):
+        """Test that a GPU illegal instruction reports the correct description."""
+        self.verify_exception_with_description(
+            "illegal_instruction", "Illegal instruction"
+        )
+
     def test_gpu_exception_backtrace(self):
-        """Test that we can get a backtrace from the excepting GPU thread."""
-        self.run_to_gpu_exception()
+        """Test that we can get a backtrace from an excepting GPU thread."""
+        self.run_to_gpu_exception("memory_violation")
 
-        # Find a thread with an exception stop reason.
-        exception_thread = None
-        for thread in self.gpu_process.threads:
-            if thread.GetStopReason() == lldb.eStopReasonException:
-                exception_thread = thread
-                break
-
+        exception_thread = self.find_exception_thread()
         self.assertIsNotNone(
             exception_thread, "Should find a thread stopped with an exception"
         )
 
-        # We should be able to get at least one frame from the backtrace.
         self.assertGreater(
             exception_thread.GetNumFrames(),
             0,
             "Exception thread should have at least one frame in backtrace",
         )
 
-        # The top frame should be in the kernel function.
         frame = exception_thread.GetFrameAtIndex(0)
         self.assertTrue(frame.IsValid(), "Top frame should be valid")
 
-        # Verify the top frame is in the memory_violation_kernel function.
         frame_name = frame.GetFunctionName()
         self.assertIsNotNone(frame_name, "Top frame should have a function name")
         self.assertIn(
