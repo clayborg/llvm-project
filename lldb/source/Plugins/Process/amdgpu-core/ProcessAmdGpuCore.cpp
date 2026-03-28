@@ -564,7 +564,7 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
       }
     }
 
-    // Create a module specification from the info we got
+    // Create a module specification from the info we got.
     UUID uuid;
     ModuleSpec module_spec(FileSpec(lib_info->pathname), uuid, data_sp);
 

@@ -231,6 +231,7 @@ Module::Module(const ModuleSpec &module_spec)
   // (for mod time in a BSD static archive) of from the matching module
   // specification
   m_object_offset = matching_module_spec.GetObjectOffset();
+  m_object_size = matching_module_spec.GetObjectSize();
   m_object_mod_time = matching_module_spec.GetObjectModificationTime();
 }
 
@@ -1023,6 +1024,9 @@ std::string Module::GetSpecificationDescription() const {
     spec += '(';
     spec += m_object_name.GetCString();
     spec += ')';
+  } else if (m_object_offset > 0 && m_object_size > 0) {
+    spec += llvm::formatv("[{0}-{1})", llvm::format_hex(m_object_offset, 1),
+                          llvm::format_hex(m_object_offset + m_object_size, 1));
   }
   return spec;
 }
@@ -1047,6 +1051,9 @@ void Module::GetDescription(llvm::raw_ostream &s,
   const char *object_name = m_object_name.GetCString();
   if (object_name)
     s << llvm::formatv("({0})", object_name);
+  else if (m_object_offset > 0 && m_object_size > 0)
+    s << llvm::formatv("[{0}-{1})", llvm::format_hex(m_object_offset, 1),
+                       llvm::format_hex(m_object_offset + m_object_size, 1));
 }
 
 bool Module::FileHasChanged() const {
