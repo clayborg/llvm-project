@@ -220,6 +220,7 @@ class DebugCommunication(object):
         # changes.
         self._recv_condition = threading.Condition()
         self._recv_thread = threading.Thread(target=self._read_packet_thread)
+        self._recv_thread.daemon = True
 
         # session state
         self.init_commands = init_commands if init_commands else []
@@ -1657,7 +1658,14 @@ class DebugAdapterServer(DebugCommunication):
         """Handle startDebugging reverse request by creating child DAP sessions.
 
         This override creates child DAP sessions for GPU debugging.
+        When no connection is available (stdio mode), falls back to the base
+        class behavior of just acknowledging the request.
         """
+        if self.connection is None:
+            # In stdio mode, we can't create child sessions over the same
+            # connection. Fall back to base class which just sends success.
+            super()._handle_startDebugging_request(request)
+            return
         try:
             arguments = request.get("arguments", {})
             request_type = arguments.get("request", "attach")

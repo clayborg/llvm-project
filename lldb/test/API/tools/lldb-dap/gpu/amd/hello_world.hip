@@ -28,6 +28,7 @@ int main() {
     HIP_CHECK(hipMalloc(&device_data, n * sizeof(int)));
     // Copy data to device
     HIP_CHECK(hipMemcpy(device_data, host_data, n * sizeof(int), hipMemcpyHostToDevice));
+    printf("GPU initialized\n"); // CPU BREAKPOINT - AFTER GPU INIT
     // Launch kernel (single block, 4 threads)
     add_one<<<1, n>>>(device_data);
     // Check for kernel launch errors

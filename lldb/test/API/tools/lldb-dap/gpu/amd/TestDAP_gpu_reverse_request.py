@@ -20,10 +20,12 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         """
         program = self.getBuildArtifact("a.out")
 
-        # Build and launch with settings that trigger reverse requests
+        # Build and launch with settings that trigger reverse requests.
+        # The breakpoint must be after GPU code objects are loaded (which
+        # happens during hipMalloc) so the GPU target has been created.
         self.build_and_launch(program)
         source = "hello_world.hip"
-        breakpoint_line = line_number(source, "// CPU BREAKPOINT - BEFORE LAUNCH")
+        breakpoint_line = line_number(source, "// CPU BREAKPOINT - AFTER GPU INIT")
         self.set_source_breakpoints(source, [breakpoint_line])
         self.continue_to_next_stop()
 
@@ -78,12 +80,11 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         """
         self.build()
         log_file_path = self.getBuildArtifact("dap.txt")
-        # Enable detailed DAP logging to debug any issues
         program = self.getBuildArtifact("a.out")
         source = "hello_world.hip"
-        cpu_breakpoint_line = line_number(source, "// CPU BREAKPOINT")
+        cpu_breakpoint_line = line_number(source, "// CPU BREAKPOINT - AFTER GPU INIT")
         gpu_breakpoint_line = line_number(source, "// GPU BREAKPOINT")
-        # Launch DAP server
+        # Launch DAP server with connection mode (required for child sessions)
         _, connection = self.start_server(connection="listen://localhost:0")
 
         self.dap_server = dap_server.DebugAdapterServer(
@@ -94,9 +95,22 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
             disconnectAutomatically=False,
         )
 
-        # Set CPU breakpoint and stop.
+        # Set CPU breakpoint.
         breakpoint_ids = self.set_source_breakpoints(source, [cpu_breakpoint_line])
-        self.continue_to_breakpoints(breakpoint_ids)
+
+        # Continue - with lazy GPU target creation, the process may first stop
+        # at the internal GPU loader breakpoint (_loader_debug_state) before
+        # reaching the user breakpoint. The internal breakpoint stop triggers
+        # the startDebugging reverse request which creates the GPU child session.
+        stopped_events = self.continue_to_next_stop()
+        body = stopped_events[0].get("body", {}) if stopped_events else {}
+        hit_bp_ids = body.get("hitBreakpointIds", [])
+
+        # If we stopped at an internal breakpoint (negative ID), continue
+        # to the user breakpoint.
+        if not any(str(bp_id) in breakpoint_ids for bp_id in hit_bp_ids):
+            self.continue_to_breakpoints(breakpoint_ids)
+
         # We should have a GPU child session automatically spawned now
         self.assertEqual(
             len(self.dap_server.get_child_sessions()), 1, "Expected 1 child GPU session"

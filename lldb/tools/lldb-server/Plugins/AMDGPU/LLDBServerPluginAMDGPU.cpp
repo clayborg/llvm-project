@@ -717,8 +717,10 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
       } else {
         // Create new connection on demand first time there are new GPU modules
         // detected.
-        if (!m_is_connected && !m_is_listening)
+        if (!m_is_connected && !m_is_listening) {
           response.actions.connect_info = CreateConnection();
+          response.actions.session_name = GetSessionName();
+        }
         response.actions.load_libraries = true;
         response.auto_resume_native = false;
       }
