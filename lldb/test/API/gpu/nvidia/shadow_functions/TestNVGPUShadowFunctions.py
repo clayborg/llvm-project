@@ -17,7 +17,6 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
         self.runCmd(f"file {exe}")
 
         source = "shadow_functions.cu"
-        cpu_bp_line: int = line_number(source, "// cpu breakpoint")
         gpu_bp_line: int = line_number(source, "// gpu breakpoint")
 
         # Set a breakpoint on the GPU kernel by name. On the CPU target, this
@@ -25,14 +24,12 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
         kernel_bp = self.cpu_target.BreakpointCreateByName("my_kernel")
         self.assertTrue(kernel_bp.IsValid())
 
+        print(gpu_bp_line)
+
         # Set a GPU source line breakpoint and a CPU breakpoint before launch.
         self.runCmd(f"b {gpu_bp_line}")
-        self.runCmd(f"b {cpu_bp_line}")
         self.runCmd("r")
 
-        # Continue the CPU past the kernel launch and wait for the GPU to stop.
-        # This triggers RecordLoadedModule → IdentifyShadowFunctions →
-        # DisableShadowFunctionBreakpoints on the CPU target.
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         # All locations of the kernel-name breakpoint should be disabled —

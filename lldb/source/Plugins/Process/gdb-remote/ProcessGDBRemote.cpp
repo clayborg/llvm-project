@@ -56,6 +56,7 @@
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/MemoryRegionInfo.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/RegisterFlags.h"
 #include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
@@ -1102,7 +1103,11 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!platform_sp)
     return Status::FromErrorString("invalid platform for target needed for "
                                    "connecting to process");
-                                   
+
+  // Process any CPU modules that were already loaded before the GPU target
+  // existed so host-side shadow wrappers are discovered immediately.
+  platform_sp->ProcessHostModules(GetTarget().GetImages(), GetTarget());
+
   ProcessSP process_sp =
       gpu_action.connect_info->synchronous
           ? platform_sp->ConnectProcessSynchronous(
@@ -5872,6 +5877,10 @@ void ProcessGDBRemote::ModulesDidLoad(ModuleList &module_list) {
   // We must call the lldb_private::Process::ModulesDidLoad () first before we
   // do anything
   Process::ModulesDidLoad(module_list);
+
+  if (TargetSP gpu_target_sp = GetTarget().GetAnyGPUPluginTarget())
+    if (PlatformSP platform_sp = gpu_target_sp->GetPlatform())
+      platform_sp->ProcessHostModules(module_list, GetTarget());
 
   // After loading shared libraries, we can ask our remote GDB server if it
   // needs any symbols.

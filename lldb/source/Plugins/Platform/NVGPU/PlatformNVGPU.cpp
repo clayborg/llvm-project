@@ -280,14 +280,19 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
                                             Target &target) {
   Log *log = GetLog(LLDBLog::Modules);
 
-  // Always insert an entry so we don't reprocess this module.
-  auto &shadow_list = m_shadow_functions[module_sp];
+  auto [it, inserted] = m_shadow_functions.try_emplace(module_sp);
+  if (!inserted) {
+    LLDB_LOG(log, "IdentifyShadowFunctions: module {0} already processed",
+             module_sp->GetSpecificationDescription());
+    return;
+  }
+  auto &shadow_list = it->second;
 
   // __device_stub_ should specifically be at the start of the special symbol.
   const llvm::StringRef kStubPrefix = "__device_stub_";
 
   SymbolContextList sc_list;
-  // Search for all code symbols whose mangled name contains "__device_stub_".
+  // Search for all code symbols whose demangled name starts with "__device_stub_".
   module_sp->FindSymbolsMatchingRegExAndType(
       RegularExpression((llvm::Twine("^") + kStubPrefix).str()),
       lldb::eSymbolTypeCode, sc_list,
@@ -302,7 +307,7 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
     if (!sc.symbol)
       continue;
 
-    // TODO(toyang): this should be `__device_stub__Z9my_kerneli`
+    // This should look something like `__device_stub__Z9my_kerneli`.
     const ConstString &stub_name = sc.symbol->GetNameNoArguments();
 
     LLDB_LOG(log, "IdentifyShadowFunctions: looking at stub symbol {0}",
@@ -354,6 +359,16 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
 
   LLDB_LOG(log, "IdentifyShadowFunctions: found {0} shadow functions in {1}",
            shadow_list.size(), module_sp->GetSpecificationDescription());
+}
+
+void PlatformNVGPU::ProcessHostModules(ModuleList &module_list,
+                                       Target &target) {
+  for (lldb::ModuleSP module_sp : module_list.Modules())
+    IdentifyShadowFunctions(module_sp, target);
+
+  // Disable any CPU-target breakpoints whose load address falls within a
+  // shadow function range, so users aren't surprised by stops in glue code.
+  DisableShadowFunctionBreakpoints(target);
 }
 
 // TODO(toyang): replace with intervalmap
@@ -428,13 +443,6 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
     LLDB_LOG(log, "RecordLoadedModule: module {0} already loaded", module_name);
     return;
   }
-
-  // Identify shadow functions (device stub wrappers) for this module.
-  IdentifyShadowFunctions(module_sp, target);
-
-  // Disable any existing CPU-target breakpoints whose load address falls within
-  // a shadow function range, so users aren't surprised by stops in glue code.
-  DisableShadowFunctionBreakpoints(target);
 
   ObjectFile *obj_file = module_sp->GetObjectFile();
   if (!obj_file) {

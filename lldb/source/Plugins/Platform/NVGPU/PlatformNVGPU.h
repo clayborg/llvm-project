@@ -95,6 +95,8 @@ public:
   void RecordLoadedModule(const lldb::ModuleSP &module_sp,
                           Target &target) override;
 
+  void ProcessHostModules(ModuleList &module_list, Target &target) override;
+
   size_t GetGPUThreadStatus(Process &process, Stream &strm,
                             bool only_threads_with_stop_reason) override;
 

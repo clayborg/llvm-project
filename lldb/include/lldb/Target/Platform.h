@@ -420,6 +420,10 @@ public:
     return;
   }
 
+  virtual void ProcessHostModules(ModuleList &module_list, Target &target) {
+    return;
+  }
+
   /// Attach to an existing process by process name.
   ///
   /// This function is not meant to be overridden by Process subclasses. It
