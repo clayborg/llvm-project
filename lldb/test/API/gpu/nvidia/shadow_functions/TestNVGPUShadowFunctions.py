@@ -1,11 +1,19 @@
 import lldb
-from lldbsuite.test import lldbutil
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
+
+    def assertBreakpointLocationsDisabled(self, breakpoint):
+        num_locations = breakpoint.GetNumLocations()
+        self.assertGreater(
+            num_locations,
+            0)
+        for i in range(num_locations):
+            loc = breakpoint.GetLocationAtIndex(i)
+            self.assertFalse(loc.IsEnabled())
 
     def test_shadow_function_breakpoint_disabled(self):
         """Test that breakpoints set on kernel function names have their CPU-side
@@ -18,35 +26,73 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
 
         source = "shadow_functions.cu"
         gpu_bp_line: int = line_number(source, "// gpu breakpoint")
+        # NOTE: this CPU breakpoint isn't really important to this test.
+        # However, it seems that in the test runner context, we need to set some
+        # CPU breakpoint before the GPU target launch otherwise the test will
+        # hang during "r".
+        cpu_bp_line: int = line_number(source, "// cpu breakpoint")
 
-        # Set a breakpoint on the GPU kernel by name. On the CPU target, this
-        # resolves to the host-side shadow wrapper (the __device_stub_ wrapper).
-        kernel_bp = self.cpu_target.BreakpointCreateByName("my_kernel")
-        self.assertTrue(kernel_bp.IsValid())
+        # These breakpoints should all not be hit. They point to the GPU
+        # function in different ways.
+        cpu_target_kernel_bp_by_name = self.cpu_target.BreakpointCreateByName("my_kernel")
+        self.assertTrue(cpu_target_kernel_bp_by_name.IsValid())
+        cpu_target_kernel_bp_by_file_line = self.cpu_target.BreakpointCreateByLocation("shadow_functions.cu", gpu_bp_line)
+        self.assertTrue(cpu_target_kernel_bp_by_file_line.IsValid())
 
-        print(gpu_bp_line)
-
-        # Set a GPU source line breakpoint and a CPU breakpoint before launch.
+        self.runCmd(f"b {cpu_bp_line}")
         self.runCmd(f"b {gpu_bp_line}")
         self.runCmd("r")
 
         self.continue_cpu_and_wait_for_gpu_to_stop()
-
-        # All locations of the kernel-name breakpoint should be disabled —
-        # they all fell within the __device_stub_ shadow wrapper range.
-        num_locations = kernel_bp.GetNumLocations()
-        self.assertGreater(num_locations, 0,
-            "kernel breakpoint should have resolved to at least one location")
-        for i in range(num_locations):
-            loc = kernel_bp.GetLocationAtIndex(i)
-            self.assertFalse(
-                loc.IsEnabled(),
-                f"shadow function breakpoint location {i} should be disabled"
-            )
-
-        # The GPU should have stopped at the actual kernel body.
+        
+        # Should be stopped on GPU breakpoint
         self.select_gpu()
         self.expect(
             "thread list",
             substrs=[f"at {source}:{gpu_bp_line}"],
         )
+
+        # All locations of the kernel-name breakpoint should be disabled —
+        # they all fell within the __device_stub_ shadow wrapper range.
+        self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_name)
+        self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_file_line)
+
+    # def test_future_shadow_function_breakpoint_disabled(self):
+    #     """Test that breakpoints created after module load are disabled when
+    #     they resolve within a shadow wrapper's address range."""
+    #     self.killCPUOnTeardown()
+
+    #     self.build()
+    #     exe = self.getBuildArtifact("a.out")
+    #     self.runCmd(f"file {exe}")
+
+    #     source = "shadow_functions.cu"
+    #     gpu_bp_line: int = line_number(source, "// gpu breakpoint")
+
+    #     # Resolve one kernel-name breakpoint first so we can reuse one of its
+    #     # shadow wrapper load addresses for a later address breakpoint.
+    #     cpu_target_kernel_bp = self.cpu_target.BreakpointCreateByName("my_kernel")
+    #     self.assertTrue(cpu_target_kernel_bp.IsValid())
+
+    #     self.runCmd(f"b {gpu_bp_line}")
+    #     self.runCmd("r")
+
+    #     self.continue_cpu_and_wait_for_gpu_to_stop()
+
+    #     self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp, "kernel breakpoint")
+
+    #     shadow_addr = cpu_target_kernel_bp.GetLocationAtIndex(0).GetLoadAddress()
+    #     self.assertNotEqual(
+    #         shadow_addr,
+    #         lldb.LLDB_INVALID_ADDRESS,
+    #         "shadow function breakpoint should have a valid load address",
+    #     )
+
+    #     # This breakpoint is created after the shadow function ranges are
+    #     # already known to the platform. Its resolved location should be
+    #     # disabled immediately by the future-location callback.
+    #     future_bp = self.cpu_target.BreakpointCreateByAddress(shadow_addr)
+    #     self.assertTrue(future_bp.IsValid())
+    #     self.assertBreakpointLocationsDisabled(
+    #         future_bp, "future shadow-range breakpoint"
+    #     )

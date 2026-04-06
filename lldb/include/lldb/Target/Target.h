@@ -1767,6 +1767,12 @@ public:
     return m_should_step_over_breakpoints_on_resume;
   }
 
+  /// Consult all GPU plugin platforms associated with this target to see if any
+  /// host-side breakpoints should be disabled.
+  // TODO(toyang): will this cause GPU plugin targets to disable their own breakpoints?
+  // TODO(toyang): if the target is a GPU target itself, we don't disable the host breakpoint
+  bool ShouldDisableHostBreakpointLocation(lldb::BreakpointLocationSP &bp_loc_sp) const;
+
 protected:
   /// Implementing of ModuleList::Notifier.
 

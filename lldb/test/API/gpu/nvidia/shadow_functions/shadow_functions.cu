@@ -5,7 +5,9 @@ __global__ void my_kernel(int value) {
 }
 
 int main(void) {
-    my_kernel<<<1, 1>>>(42);
-    cudaDeviceSynchronize();
-    return 0;
+  cudaDeviceReset();
+
+  my_kernel<<<1, 1>>>(42); // cpu breakpoint
+  cudaDeviceSynchronize();
+  return 0;
 }

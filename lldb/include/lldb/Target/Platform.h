@@ -424,6 +424,11 @@ public:
     return;
   }
 
+  // TODO(toyang): docs
+  virtual bool ShouldDisableHostBreakpointLocation(BreakpointLocation &bp_loc) {
+    return false;
+  }
+
   /// Attach to an existing process by process name.
   ///
   /// This function is not meant to be overridden by Process subclasses. It

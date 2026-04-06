@@ -232,6 +232,15 @@ BreakpointLocationSP BreakpointLocationList::AddLocation(
       }
     }
   }
+
+  if (m_owner.GetTarget().ShouldDisableHostBreakpointLocation(bp_loc_sp)) {
+    if (llvm::Error error = bp_loc_sp->SetEnabled(false)) {
+      Log *log = GetLog(LLDBLog::Breakpoints);
+      LLDB_LOG_ERROR(log, std::move(error),
+                     "Failed to disable host breakpoint location: {0}");
+    }
+  }
+
   return bp_loc_sp;
 }
 

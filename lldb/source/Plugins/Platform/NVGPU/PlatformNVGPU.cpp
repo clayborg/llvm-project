@@ -372,7 +372,10 @@ void PlatformNVGPU::ProcessHostModules(ModuleList &module_list,
 }
 
 // TODO(toyang): replace with intervalmap
-bool PlatformNVGPU::IsInShadowFunction(lldb::addr_t pc) {
+bool PlatformNVGPU::IsInShadowFunction(lldb::addr_t pc) const {
+  if (pc == LLDB_INVALID_ADDRESS)
+    return false;
+
   for (auto &[module_sp, shadows] : m_shadow_functions)
     for (const ShadowFunction &sf : shadows)
       if (pc >= sf.start_pc && pc < sf.end_pc)
@@ -391,13 +394,13 @@ void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
     BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
     if (!bp_sp)
       continue;
+    // TODO(toyang): probably can reuse the ShouldDisableHostBreakpointLocation
+    // callback?
     for (size_t j = 0, m = bp_sp->GetNumLocations(); j < m; ++j) {
       BreakpointLocationSP loc_sp = bp_sp->GetLocationAtIndex(j);
       if (!loc_sp || !loc_sp->IsEnabled())
         continue;
       lldb::addr_t addr = loc_sp->GetLoadAddress();
-      if (addr == LLDB_INVALID_ADDRESS)
-        continue;
       if (IsInShadowFunction(addr)) {
         LLDB_LOG(log,
                  "DisableShadowFunctionBreakpoints: disabling bp {0} loc {1} "
@@ -408,6 +411,11 @@ void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
       }
     }
   }
+}
+
+bool PlatformNVGPU::ShouldDisableHostBreakpointLocation(
+    BreakpointLocation &bp_loc) {
+  return IsInShadowFunction(bp_loc.GetLoadAddress());
 }
 
 ///   The PTX to SASS register map table is made of a series of entries,

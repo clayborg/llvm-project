@@ -118,9 +118,12 @@ private:
 
   void IdentifyShadowFunctions(const lldb::ModuleSP &module_sp, Target &target);
 
-  bool IsInShadowFunction(lldb::addr_t pc);
+  bool IsInShadowFunction(lldb::addr_t pc) const;
 
   void DisableShadowFunctionBreakpoints(Target &target);
+
+  bool ShouldDisableHostBreakpointLocation(
+      BreakpointLocation &bp_loc) override;
 
   std::vector<ArchSpec> m_supported_architectures;
 
