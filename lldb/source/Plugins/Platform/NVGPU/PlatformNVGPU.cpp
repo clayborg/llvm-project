@@ -280,12 +280,17 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
                                             Target &target) {
   Log *log = GetLog(LLDBLog::Modules);
 
+  // When the GPU target first loads and we're looking through all current
+  // target modules, some of these modules may not have resolved load addresses
+  // yet. In that case, we might visit it twice, once when the GPU target first
+  // loads, and afterwards on a `ModulesDidLoad` event. For simplicity, we allow
+  // ourselves to search for shadow functions in a given module multiple times
+  // until we have a strong reason to optimize this.
   auto [it, inserted] = m_shadow_functions.try_emplace(module_sp);
-  if (!inserted) {
-    LLDB_LOG(log, "IdentifyShadowFunctions: module {0} already processed",
+  if (!inserted)
+    LLDB_LOG(log, "PlatformNVGPU::{0}: already visited module {1}. Continuing anyway...", __FUNCTION__, 
              module_sp->GetSpecificationDescription());
-    return;
-  }
+
   auto &shadow_list = it->second;
 
   // __device_stub_ should specifically be at the start of the special symbol.
@@ -342,6 +347,7 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
     if (start_pc == LLDB_INVALID_ADDRESS)
       continue;
 
+    // TODO(toyang): need to change this implementation to an IntervalMap
     ShadowFunction sf;
     sf.stub_mangled_name = stub_name.GetString();
     sf.wrapper_mangled_name = wrapper_mangled_name;
@@ -376,7 +382,7 @@ bool PlatformNVGPU::IsInShadowFunction(lldb::addr_t pc) const {
   if (pc == LLDB_INVALID_ADDRESS)
     return false;
 
-  for (auto &[module_sp, shadows] : m_shadow_functions)
+  for (auto &[_module_sp, shadows] : m_shadow_functions)
     for (const ShadowFunction &sf : shadows)
       if (pc >= sf.start_pc && pc < sf.end_pc)
         return true;
