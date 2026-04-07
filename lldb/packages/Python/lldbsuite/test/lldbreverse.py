@@ -100,9 +100,15 @@ class ReverseTestBase(GDBProxyTestBase):
         if self.is_command(packet, "qSupported", ":"):
             # Disable multiprocess support in the server and in LLDB
             # since Mac debugserver doesn't support it and we want lldb-server to
-            # be consistent with that
+            # be consistent with that.
+            # Also strip binary-upload features since the proxy suppresses
+            # binary 'x' packet reads (results starting with "O" can be
+            # mistaken for output packets by the test server code).
             reply = self.pass_through(packet.replace(";multiprocess", ""))
-            return reply.replace(";multiprocess", "") + ";ReverseStep+;ReverseContinue+"
+            reply = reply.replace(";multiprocess", "")
+            reply = reply.replace(";binary-upload+", "")
+            reply = reply.replace(";binary-upload-bare+", "")
+            return reply + ";ReverseStep+;ReverseContinue+"
         if packet == "c" or packet == "s":
             packet = "vCont;" + packet
         elif (
@@ -230,6 +236,7 @@ class ReverseTestBase(GDBProxyTestBase):
                     "mecount",
                     "medata",
                     "memory",
+                    "stop_id",
                 ]:
                     continue
                 raise ValueError(f"Unknown stop key '{key}' in {reply}")

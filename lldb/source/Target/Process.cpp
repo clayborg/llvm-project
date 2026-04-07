@@ -1930,9 +1930,10 @@ size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf,
     llvm::Expected<lldb::addr_t> load_addr = 
         addr_spec.ResolveAddressInDefaultAddressSpace(*this);
     if (load_addr) {
-      // We were able to resolve the address to an address in the default 
-      // address space. Just call our standard read memory method.
-      return DoReadMemory(*load_addr, buf, size, error);
+      // We were able to resolve the address to an address in the default
+      // address space. Just call our standard read memory method which goes
+      // through memory caching and ABI address fixing.
+      return ReadMemory(*load_addr, buf, size, error);
     }
     error = Status::FromError(load_addr.takeError());
     return 0;

@@ -932,6 +932,10 @@ class GdbRemoteTestCaseBase(Base, metaclass=GdbRemoteTestCaseFactory):
         "SupportedWatchpointTypes",
         "SupportedCompressions",
         "MultiMemRead",
+        "binary-upload-bare",
+        "gpu-plugins",
+        "lldb-settings",
+        "address-spaces",
     ]
 
     def parse_qSupported_response(self, context):

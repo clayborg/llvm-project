@@ -1175,7 +1175,8 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Exited(
     // Terminate the main loop only if vKill has not been used.
     // When running in non-stop mode, wait for the vStopped to clear
     // the notification queue.
-    if (m_debugged_processes.empty() && !m_non_stop && !vkilled) {
+    if (m_debugged_processes.empty() && !m_non_stop && !vkilled &&
+        !m_plugin_instance) {
       // Close the pipe to the inferior terminal i/o if we launched it and set
       // one up.
       MaybeCloseInferiorTerminalConnection();
