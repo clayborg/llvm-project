@@ -364,13 +364,6 @@ void PlatformNVGPU::ProcessHostModules(ModuleList &module_list,
   DisableShadowFunctionBreakpoints(target);
 }
 
-bool PlatformNVGPU::IsInShadowFunction(lldb::addr_t pc) const {
-  if (pc == LLDB_INVALID_ADDRESS)
-    return false;
-
-  return m_shadow_function_ranges.lookup(pc);
-}
-
 void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
   Log *log = GetLog(LLDBLog::Breakpoints);
 
@@ -382,18 +375,15 @@ void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
     BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
     if (!bp_sp)
       continue;
-    // TODO(toyang): probably can reuse the ShouldDisableHostBreakpointLocation
-    // callback?
     for (size_t j = 0, m = bp_sp->GetNumLocations(); j < m; ++j) {
       BreakpointLocationSP loc_sp = bp_sp->GetLocationAtIndex(j);
-      if (!loc_sp || !loc_sp->IsEnabled())
+      if (!loc_sp)
         continue;
-      lldb::addr_t addr = loc_sp->GetLoadAddress();
-      if (IsInShadowFunction(addr)) {
+      if (ShouldDisableHostBreakpointLocation(*loc_sp)) {
         LLDB_LOG(log,
                  "DisableShadowFunctionBreakpoints: disabling bp {0} loc {1} "
                  "at 0x{2:x}",
-                 bp_sp->GetID(), loc_sp->GetID(), addr);
+                 bp_sp->GetID(), loc_sp->GetID(), loc_sp->GetLoadAddress());
         if (llvm::Error err = loc_sp->SetEnabled(false))
           llvm::consumeError(std::move(err));
       }
@@ -403,7 +393,15 @@ void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
 
 bool PlatformNVGPU::ShouldDisableHostBreakpointLocation(
     BreakpointLocation &bp_loc) {
-  return IsInShadowFunction(bp_loc.GetLoadAddress());
+  // No need to re-disable an already-disabled breakpoint location.
+  if (!bp_loc.IsEnabled())
+      return false;
+
+  addr_t load_addr = bp_loc.GetLoadAddress();
+  if (load_addr == LLDB_INVALID_ADDRESS)
+    return false;
+
+  return m_shadow_function_ranges.lookup(load_addr);
 }
 
 ///   The PTX to SASS register map table is made of a series of entries,
