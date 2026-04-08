@@ -11,6 +11,7 @@
 
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Target/Platform.h"
+#include "llvm/ADT/IntervalMap.h"
 
 #include <map>
 #include <string>
@@ -29,15 +30,6 @@ struct PTXPieceToSassEntry {
 };
 
 typedef std::map<uint64_t, std::list<PTXPieceToSassEntry>> PTXPRegMap;
-
-/// Represents a host-side shadow (wrapper) function that launches a GPU kernel.
-/// These wrappers call the device stub and are not relevant to the CPU target.
-struct ShadowFunction {
-  std::string stub_mangled_name;    // e.g., "_Z30__device_stub__Z11breakpointsii"
-  std::string wrapper_mangled_name; // e.g., "_Z11breakpointsi"
-  lldb::addr_t start_pc;           // load address of start of wrapper function
-  lldb::addr_t end_pc;             // load address of end (start + size)
-};
 
 class PlatformNVGPU : public Platform {
 public:
@@ -107,6 +99,10 @@ public:
                           GPUDim3 &thread_idx) override;
 
 private:
+  using ShadowFunctionRangeMap =
+      llvm::IntervalMap<lldb::addr_t, bool, 4,
+                        llvm::IntervalMapHalfOpenInfo<lldb::addr_t>>;
+
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
   uint64_t FindRegisterLocations(const lldb::ModuleSP &module_sp,
@@ -128,7 +124,8 @@ private:
   std::vector<ArchSpec> m_supported_architectures;
 
   std::map<lldb::ModuleSP, PTXPRegMap> m_entries;
-  std::map<lldb::ModuleSP, std::vector<ShadowFunction>> m_shadow_functions;
+  ShadowFunctionRangeMap::Allocator m_shadow_function_range_alloc;
+  ShadowFunctionRangeMap m_shadow_function_ranges;
 };
 
 } // namespace lldb_private::platform_NVGPU
