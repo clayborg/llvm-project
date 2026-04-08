@@ -1117,9 +1117,7 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!process_sp)
     return Status::FromErrorString("invalid process after connecting");
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
-                "created process");
-  // Set the session name on the GPU target so it can be retrieved later
-  gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
+                "created process!!!");
 
   // Process any CPU modules that were already loaded before the GPU target
   // existed so host-side shadow wrappers are discovered immediately.
@@ -5887,11 +5885,12 @@ void ProcessGDBRemote::ModulesDidLoad(ModuleList &module_list) {
   // do anything
   Process::ModulesDidLoad(module_list);
 
-  // TODO(toyang): does this specifically need to be in ProcessGDBRemote?
-  // TODO(toyang): iterate through all plugin targets?
-  if (TargetSP gpu_target_sp = GetTarget().GetAnyGPUPluginTarget())
-    if (PlatformSP platform_sp = gpu_target_sp->GetPlatform())
-      platform_sp->ProcessHostModules(module_list, GetTarget());
+  GetTarget().ForEachGPUPluginTarget(
+      [&](llvm::StringRef, const TargetSP &gpu_target_sp) {
+        if (PlatformSP platform_sp = gpu_target_sp->GetPlatform())
+          platform_sp->ProcessHostModules(module_list, GetTarget());
+        return IterationAction::Continue;
+      });
 
   // After loading shared libraries, we can ask our remote GDB server if it
   // needs any symbols.

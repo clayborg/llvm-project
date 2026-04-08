@@ -1729,6 +1729,22 @@ public:
     return m_gpu_plugin_targets.begin()->second.lock();
   }
 
+  /// Applies \a callback to each live GPU plugin target associated with this
+  /// target. Expired weak pointers are skipped. Iteration stops if the
+  /// callback returns IterationAction::Stop.
+  void ForEachGPUPluginTarget(
+      std::function<IterationAction(llvm::StringRef plugin_name,
+                                    const lldb::TargetSP &gpu_target_sp)> const
+          &callback) const {
+    for (const auto &[plugin_name, gpu_target_wp] : m_gpu_plugin_targets) {
+      lldb::TargetSP gpu_target_sp = gpu_target_wp.lock();
+      if (!gpu_target_sp)
+        continue;
+      if (callback(plugin_name, gpu_target_sp) == IterationAction::Stop)
+        return;
+    }
+  }
+
   /// \return
   ///   The GPU plugin target associated with the given plugin name, or null if
   ///   no such target exists.
@@ -1766,12 +1782,6 @@ public:
   std::optional<bool> ShouldStepOverBreakpointsOnResume() const {
     return m_should_step_over_breakpoints_on_resume;
   }
-
-  /// Consult all GPU plugin platforms associated with this target to see if any
-  /// host-side breakpoints should be disabled.
-  // TODO(toyang): will this cause GPU plugin targets to disable their own breakpoints?
-  // TODO(toyang): if the target is a GPU target itself, we don't disable the host breakpoint
-  bool ShouldDisableHostBreakpointLocation(lldb::BreakpointLocationSP &bp_loc_sp) const;
 
 protected:
   /// Implementing of ModuleList::Notifier.

@@ -420,11 +420,13 @@ public:
     return;
   }
 
+  /// Allows a GPU platform to act on modules loaded on a host target. For
+  /// example: disabling breakpoints on the host target if better matches are
+  /// found on the GPU platform.
   virtual void ProcessHostModules(ModuleList &module_list, Target &target) {
     return;
   }
 
-  // TODO(toyang): docs
   virtual bool ShouldDisableHostBreakpointLocation(BreakpointLocation &bp_loc) {
     return false;
   }

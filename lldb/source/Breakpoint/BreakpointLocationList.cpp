@@ -12,6 +12,7 @@
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
@@ -233,7 +234,32 @@ BreakpointLocationSP BreakpointLocationList::AddLocation(
     }
   }
 
-  if (m_owner.GetTarget().ShouldDisableHostBreakpointLocation(bp_loc_sp)) {
+  // When we add a new location, check if the target is a host and has
+  // associated GPU targets that suggest disabling the location. I.e. the GPU
+  // target has a better match than the CPU target.
+  bool disable_host_location = false;
+  Target &target = m_owner.GetTarget();
+  if (bp_loc_sp && !target.IsGPUTarget()) {
+    target.ForEachGPUPluginTarget(
+        [&](llvm::StringRef plugin_name, const TargetSP &gpu_target_sp) {
+          PlatformSP platform_sp = gpu_target_sp->GetPlatform();
+          if (!platform_sp ||
+              !platform_sp->ShouldDisableHostBreakpointLocation(*bp_loc_sp)) {
+            return IterationAction::Continue;
+          }
+
+          LLDB_LOG(GetLog(LLDBLog::Breakpoints),
+                   "BreakpointLocationList::{0} disabling host breakpoint "
+                   "location (load_addr = 0x{1:x}) for GPU plugin '{2}'",
+                   __FUNCTION__, bp_loc_sp->GetLoadAddress(), plugin_name);
+          disable_host_location = true;
+          return IterationAction::Stop;
+        });
+  }
+
+  // We still add the location in spite of disabling it because we want to allow
+  // users to re-enable the breakpoint location for special use cases.
+  if (disable_host_location) {
     if (llvm::Error error = bp_loc_sp->SetEnabled(false)) {
       Log *log = GetLog(LLDBLog::Breakpoints);
       LLDB_LOG_ERROR(log, std::move(error),

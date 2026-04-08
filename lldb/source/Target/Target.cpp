@@ -5379,28 +5379,3 @@ void Target::NotifyBreakpointChanged(
   if (EventTypeHasListeners(Target::eBroadcastBitBreakpointChanged))
     BroadcastEvent(Target::eBroadcastBitBreakpointChanged, breakpoint_data_sp);
 }
-
-bool Target::ShouldDisableHostBreakpointLocation(
-    BreakpointLocationSP &bp_loc_sp) const {
-  // TODO(toyang): does a GPU target even have associated gpu plugin targets?
-  if (!bp_loc_sp || IsGPUTarget()) {
-    return false;
-  }
-
-  for (const auto &[plugin_name, gpu_target_wp] : m_gpu_plugin_targets) {
-    lldb::TargetSP gpu_target_sp = gpu_target_wp.lock();
-    if (!gpu_target_sp)
-      continue;
-    if (gpu_target_sp->GetPlatform()
-            ->ShouldDisableHostBreakpointLocation(*bp_loc_sp)) {
-      LLDB_LOG(GetLog(LLDBLog::Breakpoints),
-               "Target::{0} disabling host breakpoint location (load_addr = "
-               "0x{1:x}) for GPU "
-               "plugin '{2}'",
-               __FUNCTION__, bp_loc_sp->GetLoadAddress(), plugin_name);
-      return true;
-    }
-  }
-
-  return false;
-}

@@ -398,9 +398,6 @@ bool PlatformNVGPU::ShouldDisableHostBreakpointLocation(
       return false;
 
   addr_t load_addr = bp_loc.GetLoadAddress();
-  if (load_addr == LLDB_INVALID_ADDRESS)
-    return false;
-
   return m_shadow_function_ranges.lookup(load_addr);
 }
 

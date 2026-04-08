@@ -52,47 +52,11 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
             substrs=[f"at {source}:{gpu_bp_line}"],
         )
 
+        # New breakpoints set after GPU target loading should also be disabled.
+        cpu_target_kernel_bp_by_name_after_gpu_target = self.cpu_target.BreakpointCreateByName("my_kernel")
+
         # All locations of the kernel-name breakpoint should be disabled —
         # they all fell within the __device_stub_ shadow wrapper range.
         self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_name)
         self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_file_line)
-
-    # def test_future_shadow_function_breakpoint_disabled(self):
-    #     """Test that breakpoints created after module load are disabled when
-    #     they resolve within a shadow wrapper's address range."""
-    #     self.killCPUOnTeardown()
-
-    #     self.build()
-    #     exe = self.getBuildArtifact("a.out")
-    #     self.runCmd(f"file {exe}")
-
-    #     source = "shadow_functions.cu"
-    #     gpu_bp_line: int = line_number(source, "// gpu breakpoint")
-
-    #     # Resolve one kernel-name breakpoint first so we can reuse one of its
-    #     # shadow wrapper load addresses for a later address breakpoint.
-    #     cpu_target_kernel_bp = self.cpu_target.BreakpointCreateByName("my_kernel")
-    #     self.assertTrue(cpu_target_kernel_bp.IsValid())
-
-    #     self.runCmd(f"b {gpu_bp_line}")
-    #     self.runCmd("r")
-
-    #     self.continue_cpu_and_wait_for_gpu_to_stop()
-
-    #     self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp, "kernel breakpoint")
-
-    #     shadow_addr = cpu_target_kernel_bp.GetLocationAtIndex(0).GetLoadAddress()
-    #     self.assertNotEqual(
-    #         shadow_addr,
-    #         lldb.LLDB_INVALID_ADDRESS,
-    #         "shadow function breakpoint should have a valid load address",
-    #     )
-
-    #     # This breakpoint is created after the shadow function ranges are
-    #     # already known to the platform. Its resolved location should be
-    #     # disabled immediately by the future-location callback.
-    #     future_bp = self.cpu_target.BreakpointCreateByAddress(shadow_addr)
-    #     self.assertTrue(future_bp.IsValid())
-    #     self.assertBreakpointLocationsDisabled(
-    #         future_bp, "future shadow-range breakpoint"
-    #     )
+        self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_name_after_gpu_target)
