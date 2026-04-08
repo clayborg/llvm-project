@@ -1104,10 +1104,6 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     return Status::FromErrorString("invalid platform for target needed for "
                                    "connecting to process");
 
-  // Process any CPU modules that were already loaded before the GPU target
-  // existed so host-side shadow wrappers are discovered immediately.
-  platform_sp->ProcessHostModules(GetTarget().GetImages(), GetTarget());
-
   ProcessSP process_sp =
       gpu_action.connect_info->synchronous
           ? platform_sp->ConnectProcessSynchronous(
@@ -1121,7 +1117,20 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!process_sp)
     return Status::FromErrorString("invalid process after connecting");
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
-                "created process!!!");
+                "created process");
+  // Set the session name on the GPU target so it can be retrieved later
+  gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
+
+  // Process any CPU modules that were already loaded before the GPU target
+  // existed so host-side shadow wrappers are discovered immediately.
+  platform_sp->ProcessHostModules(GetTarget().GetImages(), GetTarget());
+
+  // Broadcast the target creation event so DAP can create a child session
+  auto event_sp = std::make_shared<Event>(
+      Target::eBroadcastBitNewTargetCreated,
+      new Target::TargetEventData(GetTarget().shared_from_this(),
+                                  gpu_target_sp));
+  GetTarget().BroadcastEvent(event_sp);
   return Status();
 }
 
