@@ -20,6 +20,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StackFrame.h"
+#include "lldb/Target/Statistics.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
@@ -356,6 +357,9 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
 
 void PlatformNVGPU::ProcessHostModules(ModuleList &module_list,
                                        Target &target) {
+  ElapsedTime elapsed(
+      target.GetStatistics().GetShadowFunctionIdentificationTime());
+
   for (lldb::ModuleSP module_sp : module_list.Modules())
     IdentifyShadowFunctions(module_sp, target);
 

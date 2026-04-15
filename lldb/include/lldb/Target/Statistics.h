@@ -323,6 +323,9 @@ public:
 
   StatsDuration &GetCreateTime() { return m_create_time; }
   StatsDuration &GetLoadCoreTime() { return m_load_core_time; }
+  StatsDuration &GetShadowFunctionIdentificationTime() {
+    return m_shadow_function_identification_time;
+  }
   StatsSuccessFail &GetExpressionStats() { return m_expr_eval; }
   StatsSuccessFail &GetFrameVariableStats() { return m_frame_var; }
   void Reset(Target &target);
@@ -330,6 +333,7 @@ public:
 protected:
   StatsDuration m_create_time;
   StatsDuration m_load_core_time;
+  StatsDuration m_shadow_function_identification_time;
   std::optional<StatsTimepoint> m_launch_or_attach_time;
   std::optional<StatsTimepoint> m_first_private_stop_time;
   std::optional<StatsTimepoint> m_first_public_stop_time;

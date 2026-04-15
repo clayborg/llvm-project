@@ -152,6 +152,9 @@ TargetStats::ToJSON(Target &target,
       target_metrics_json.try_emplace("loadCoreTime",
                                       m_load_core_time.get().count());
     }
+    target_metrics_json.try_emplace(
+        "shadowFunctionIdentificationTime",
+        m_shadow_function_identification_time.get().count());
 
     json::Array breakpoints_array;
     double totalBreakpointResolveTime = 0.0;
@@ -223,6 +226,7 @@ void TargetStats::Reset(Target &target) {
   m_launch_or_attach_time.reset();
   m_first_private_stop_time.reset();
   m_first_public_stop_time.reset();
+  m_shadow_function_identification_time.reset();
   // Report both the normal breakpoint list and the internal breakpoint list.
   for (int i = 0; i < 2; ++i) {
     BreakpointList &breakpoints = target.GetBreakpointList(i == 1);
