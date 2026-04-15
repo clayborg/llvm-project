@@ -317,24 +317,17 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
         display_str.drop_front(kStubPrefix.size());
     assert(!wrapper_mangled_name.empty());
 
-    // Look up the wrapper symbol in the module's symbol table.
-    SymbolContextList wrapper_sc_list;
-    module_sp->FindSymbolsWithNameAndType(ConstString(wrapper_mangled_name),
-                                          lldb::eSymbolTypeAny,
-                                          wrapper_sc_list);
-    if (wrapper_sc_list.GetSize() == 0) {
+    // Generally, there should only be the one wrapper symbol for the kernel
+    const Symbol *wrapper_symbol = module_sp->FindFirstSymbolWithNameAndType(
+        ConstString(wrapper_mangled_name), lldb::eSymbolTypeCode);
+    if (!wrapper_symbol) {
       LLDB_LOG(log, "IdentifyShadowFunctions: wrapper symbol {0} not found",
                wrapper_mangled_name.str());
       continue;
     }
 
-    SymbolContext wrapper_sc;
-    wrapper_sc_list.GetContextAtIndex(0, wrapper_sc);
-    if (!wrapper_sc.symbol || !wrapper_sc.symbol->ValueIsAddress())
-      continue;
-
-    lldb::addr_t start_pc = wrapper_sc.symbol->GetLoadAddress(&target);
-    lldb::addr_t byte_size = wrapper_sc.symbol->GetByteSize();
+    lldb::addr_t start_pc = wrapper_symbol->GetLoadAddress(&target);
+    lldb::addr_t byte_size = wrapper_symbol->GetByteSize();
     if (start_pc == LLDB_INVALID_ADDRESS || byte_size == 0)
       continue;
 
