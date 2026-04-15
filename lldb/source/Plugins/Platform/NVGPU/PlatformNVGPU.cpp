@@ -305,17 +305,20 @@ void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
 
     // This should look something like `__device_stub__Z9my_kerneli`.
     const ConstString &stub_name = sc.symbol->GetNameNoArguments();
-
-    LLDB_LOG(log, "IdentifyShadowFunctions: looking at stub symbol {0}",
-             stub_name.GetStringRef());
-
     llvm::StringRef display_str = stub_name.GetStringRef();
-    assert(display_str.starts_with(kStubPrefix) &&
-           "stub name doesn't start with __device_stub_ despite our search.");
+    LLDB_LOG(log, "IdentifyShadowFunctions: looking at stub symbol {0}",
+             display_str);
+
     // For example: `_Z9my_kerneli`.
     llvm::StringRef wrapper_mangled_name =
         display_str.drop_front(kStubPrefix.size());
-    assert(!wrapper_mangled_name.empty());
+    if (wrapper_mangled_name.empty()) {
+      LLDB_LOG(log,
+               "IdentifyShadowFunctions: skipping malformed stub symbol {0} "
+               "with empty wrapper name",
+               display_str);
+      continue;
+    }
 
     // Generally, there should only be the one wrapper symbol for the kernel
     const Symbol *wrapper_symbol = module_sp->FindFirstSymbolWithNameAndType(
