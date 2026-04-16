@@ -18,7 +18,7 @@ endif()
 
 # Set up CUDA debugger include directory
 set(NVGPU_DEBUGGER_INCLUDE_DIR_DESC 
-    "Path to the folder containing the CUDA debugger header file (cudadebugger.h)")
+    "Path to the folder containing the CUDA debugger header files (cudadebugger.h, cudacoredump.h)")
 set(NVGPU_DEBUGGER_INCLUDE_DIR CACHE STRING ${NVGPU_DEBUGGER_INCLUDE_DIR_DESC})
 
 # Try to find CUDA Toolkit if include dir not explicitly set

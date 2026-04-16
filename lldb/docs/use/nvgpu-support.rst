@@ -25,9 +25,10 @@ CMake variables
 
 - `LLDB_ENABLE_NVGPU_PLUGIN`: enables this plugin at the build system level.
 - `NVGPU_DEBUGGER_INCLUDE_DIR`: path to the CUDA debugger headers required
-  to build this plugin. This is the folder that contains the `cudadebugger.h`
-  header file, e.g. `/usr/local/cuda/extras/Debugger/include`. If the CUDA
-  Toolkit is installed in a standard location, this variable will be deduced
+  to build this plugin. This is the folder that contains the
+  `cudadebugger.h` and `cudacoredump.h` header files, e.g.
+  `/usr/local/cuda/extras/Debugger/include`. If the CUDA Toolkit is
+  installed in a standard location, this variable will be deduced
   automatically.
 - `NVGPU_NVCC_PATH`: path to the NVCC compiler to use in tests. If the CUDA
   Toolkit is installed in a standard location, this variable will be deduced

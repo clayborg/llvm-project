@@ -786,6 +786,31 @@ enum SectionType {
   eSectionTypeLLDBFormatters,
   eSectionTypeSwiftModules,
   eSectionTypeWasmName,
+  // [NVIDIA] CUDA GPU corefile sections (from cudacoredump.h CUDBG_SHT_* types)
+  // Added for ProcessNVGPUCore plugin.
+  eSectionTypeCUDAGlobalMemory,
+  eSectionTypeCUDAManagedMemory,
+  eSectionTypeCUDALocalMemory,
+  eSectionTypeCUDASharedMemory,
+  eSectionTypeCUDAParamMemory,
+  eSectionTypeCUDARegisters,
+  eSectionTypeCUDAPredicates,
+  eSectionTypeCUDAUniformRegisters,
+  eSectionTypeCUDAUniformPredicates,
+  eSectionTypeCUDARelocatedImage,
+  eSectionTypeCUDAUnrelocatedImage,
+  eSectionTypeCUDABacktrace,
+  eSectionTypeCUDADeviceTable,
+  eSectionTypeCUDAContextTable,
+  eSectionTypeCUDASmTable,
+  eSectionTypeCUDAGridTable,
+  eSectionTypeCUDACtaTable,
+  eSectionTypeCUDAWarpTable,
+  eSectionTypeCUDALaneTable,
+  eSectionTypeCUDAModuleTable,
+  eSectionTypeCUDAConstBankTable,
+  eSectionTypeCUDAMetadata,
+  eSectionTypeCUDAConvergenceBarrier,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){

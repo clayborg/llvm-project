@@ -1757,6 +1757,12 @@ public:
 
   bool IsGPUTarget() const { return !m_is_cpu_target; }
 
+  /// [NVIDIA] Mark this target as a GPU target without a parent CPU target.
+  ///
+  /// Use this for standalone GPU targets (e.g. GPU corefiles) where there
+  /// is no CPU target to call SetGPUPluginTarget on.
+  void SetIsGPUTarget(bool is_gpu) { m_is_cpu_target = !is_gpu; }
+
   void SetShouldStepOverBreakpointsOnResume(
       std::optional<bool> should_step_over_breakpoints_on_resume) {
     m_should_step_over_breakpoints_on_resume =

@@ -8,6 +8,7 @@
 #include "ThreadNVGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ProcessNVGPU.h"
+#include "lldb/Utility/NVGPU/ThreadName.h"
 
 using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
@@ -32,9 +33,8 @@ std::string ThreadNVGPU::GetName() {
 
   const ThreadIdx &thread_idx = m_thread_state->GetThreadIdx();
   const BlockIdx &block_idx = m_thread_state->GetWarpState().GetBlockIdx();
-  return llvm::formatv("blockIdx(x={} y={} z={}) threadIdx(x={} y={} z={})",
-                       block_idx.x, block_idx.y, block_idx.z,
-                       thread_idx.x, thread_idx.y, thread_idx.z);
+  return nvgpu::FormatThreadName(block_idx.x, block_idx.y, block_idx.z,
+                                 thread_idx.x, thread_idx.y, thread_idx.z);
 }
 
 lldb::StateType ThreadNVGPU::GetState() { return m_state; }
