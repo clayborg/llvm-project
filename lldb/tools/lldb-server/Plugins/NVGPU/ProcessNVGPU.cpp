@@ -440,22 +440,7 @@ const CUDBGAPI_st &ProcessNVGPU::GetCudaAPI() {
 }
 
 std::vector<AddressSpaceInfo> ProcessNVGPU::GetAddressSpaces() {
-  std::vector<AddressSpaceInfo> result;
-  // is_thread_specific should be true for all address spaces that may return a
-  // different value for different threads.
-  result.push_back(
-      {"const", AddressSpace::ConstStorage, /*is_thread_specific=*/false});
-  result.push_back(
-      {"global", AddressSpace::GlobalStorage, /*is_thread_specific=*/false});
-  result.push_back(
-      {"local", AddressSpace::LocalStorage, /*is_thread_specific=*/true});
-  result.push_back(
-      {"param", AddressSpace::ParamStorage, /*is_thread_specific=*/true});
-  result.push_back(
-      {"shared", AddressSpace::SharedStorage, /*is_thread_specific=*/true});
-  result.push_back(
-      {"generic", AddressSpace::GenericStorage, /*is_thread_specific=*/true});
-  return result;
+  return nvgpu::GetAddressSpaceInfos();
 }
 
 Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,

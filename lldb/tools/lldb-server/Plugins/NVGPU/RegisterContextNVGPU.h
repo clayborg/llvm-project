@@ -11,20 +11,17 @@
 
 #include "cudadebugger.h"
 #include "lldb/Host/common/NativeRegisterContext.h"
+#include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/lldb-forward.h"
 
 namespace lldb_private::lldb_server {
 
 class ThreadNVGPU;
 
-// SASS supports up to 255 general purpose registers (R0-R254)
-static constexpr size_t kNumRRegs = 255;
-// SASS supports up to 255 uniform registers (UR0-UR254)
-static constexpr size_t kNumURRegs = 255;
-// SASS supports 8 predicate registers (P0-P7)
-static constexpr size_t kNumPRegs = 8;
-// SASS supports 8 uniform predicate registers (UP0-UP7)
-static constexpr size_t kNumUPRegs = 8;
+using sass::kNumPRegs;
+using sass::kNumRRegs;
+using sass::kNumUPRegs;
+using sass::kNumURRegs;
 
 /// Store all the registers for a single thread.
 struct ThreadRegistersValues {
