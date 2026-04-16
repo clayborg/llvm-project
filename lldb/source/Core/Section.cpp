@@ -155,6 +155,53 @@ const char *Section::GetTypeAsCString() const {
     return "swift-modules";
   case eSectionTypeWasmName:
     return "wasm-name";
+  // [NVIDIA] CUDA section type strings.
+  case eSectionTypeCUDAGlobalMemory:
+    return "cuda-global-memory";
+  case eSectionTypeCUDAManagedMemory:
+    return "cuda-managed-memory";
+  case eSectionTypeCUDALocalMemory:
+    return "cuda-local-memory";
+  case eSectionTypeCUDASharedMemory:
+    return "cuda-shared-memory";
+  case eSectionTypeCUDAParamMemory:
+    return "cuda-param-memory";
+  case eSectionTypeCUDARegisters:
+    return "cuda-registers";
+  case eSectionTypeCUDAPredicates:
+    return "cuda-predicates";
+  case eSectionTypeCUDAUniformRegisters:
+    return "cuda-uniform-registers";
+  case eSectionTypeCUDAUniformPredicates:
+    return "cuda-uniform-predicates";
+  case eSectionTypeCUDARelocatedImage:
+    return "cuda-relocated-image";
+  case eSectionTypeCUDAUnrelocatedImage:
+    return "cuda-unrelocated-image";
+  case eSectionTypeCUDABacktrace:
+    return "cuda-backtrace";
+  case eSectionTypeCUDADeviceTable:
+    return "cuda-device-table";
+  case eSectionTypeCUDAContextTable:
+    return "cuda-context-table";
+  case eSectionTypeCUDASmTable:
+    return "cuda-sm-table";
+  case eSectionTypeCUDAGridTable:
+    return "cuda-grid-table";
+  case eSectionTypeCUDACtaTable:
+    return "cuda-cta-table";
+  case eSectionTypeCUDAWarpTable:
+    return "cuda-warp-table";
+  case eSectionTypeCUDALaneTable:
+    return "cuda-lane-table";
+  case eSectionTypeCUDAModuleTable:
+    return "cuda-module-table";
+  case eSectionTypeCUDAConstBankTable:
+    return "cuda-constbank-table";
+  case eSectionTypeCUDAMetadata:
+    return "cuda-metadata";
+  case eSectionTypeCUDAConvergenceBarrier:
+    return "cuda-convergence-barrier";
   case eSectionTypeOther:
     return "regular";
   }
@@ -418,6 +465,30 @@ bool Section::ContainsOnlyDebugInfo() const {
   case eSectionTypeGoSymtab:
   case eSectionTypeAbsoluteAddress:
   case eSectionTypeWasmName:
+  // [NVIDIA] CUDA section types for GetAddressClass.
+  case eSectionTypeCUDAGlobalMemory:
+  case eSectionTypeCUDAManagedMemory:
+  case eSectionTypeCUDALocalMemory:
+  case eSectionTypeCUDASharedMemory:
+  case eSectionTypeCUDAParamMemory:
+  case eSectionTypeCUDARegisters:
+  case eSectionTypeCUDAPredicates:
+  case eSectionTypeCUDAUniformRegisters:
+  case eSectionTypeCUDAUniformPredicates:
+  case eSectionTypeCUDARelocatedImage:
+  case eSectionTypeCUDAUnrelocatedImage:
+  case eSectionTypeCUDABacktrace:
+  case eSectionTypeCUDADeviceTable:
+  case eSectionTypeCUDAContextTable:
+  case eSectionTypeCUDASmTable:
+  case eSectionTypeCUDAGridTable:
+  case eSectionTypeCUDACtaTable:
+  case eSectionTypeCUDAWarpTable:
+  case eSectionTypeCUDALaneTable:
+  case eSectionTypeCUDAModuleTable:
+  case eSectionTypeCUDAConstBankTable:
+  case eSectionTypeCUDAMetadata:
+  case eSectionTypeCUDAConvergenceBarrier:
   case eSectionTypeOther:
   // Used for "__dof_cache" in mach-o or ".debug" for COFF which isn't debug
   // information that we parse at all. This was causing system files with no
