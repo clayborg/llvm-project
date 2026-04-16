@@ -1699,6 +1699,13 @@ ObjectFileELF::GetSectionHeaderByIndex(lldb::user_id_t id) {
   return nullptr;
 }
 
+// [NVIDIA] Added for ProcessNVGPUCore SectionTree.
+size_t ObjectFileELF::GetNumSectionHeaders() {
+  if (!ParseSectionHeaders())
+    return 0;
+  return m_section_headers.size();
+}
+
 lldb::user_id_t ObjectFileELF::GetSectionIndexByName(const char *name) {
   if (!name || !name[0] || !ParseSectionHeaders())
     return 0;
@@ -1746,6 +1753,32 @@ SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
     return eSectionTypeELFRelocationEntries;
   case SHT_DYNAMIC:
     return eSectionTypeELFDynamicLinkInfo;
+  // [NVIDIA] CUDA corefile section types from cudacoredump.h (SHT_LOUSER + offset).
+  // These values are stable, defined by the public CUDA corefile format spec.
+  // Added for ProcessNVGPUCore plugin.
+  case SHT_LOUSER + 1:  return eSectionTypeCUDAManagedMemory;
+  case SHT_LOUSER + 2:  return eSectionTypeCUDAGlobalMemory;
+  case SHT_LOUSER + 3:  return eSectionTypeCUDALocalMemory;
+  case SHT_LOUSER + 4:  return eSectionTypeCUDASharedMemory;
+  case SHT_LOUSER + 5:  return eSectionTypeCUDARegisters;
+  case SHT_LOUSER + 6:  return eSectionTypeCUDAUnrelocatedImage;
+  case SHT_LOUSER + 7:  return eSectionTypeCUDARelocatedImage;
+  case SHT_LOUSER + 8:  return eSectionTypeCUDABacktrace;
+  case SHT_LOUSER + 9:  return eSectionTypeCUDADeviceTable;
+  case SHT_LOUSER + 10: return eSectionTypeCUDAContextTable;
+  case SHT_LOUSER + 11: return eSectionTypeCUDASmTable;
+  case SHT_LOUSER + 12: return eSectionTypeCUDAGridTable;
+  case SHT_LOUSER + 13: return eSectionTypeCUDACtaTable;
+  case SHT_LOUSER + 14: return eSectionTypeCUDAWarpTable;
+  case SHT_LOUSER + 15: return eSectionTypeCUDALaneTable;
+  case SHT_LOUSER + 16: return eSectionTypeCUDAModuleTable;
+  case SHT_LOUSER + 17: return eSectionTypeCUDAPredicates;
+  case SHT_LOUSER + 18: return eSectionTypeCUDAParamMemory;
+  case SHT_LOUSER + 19: return eSectionTypeCUDAUniformRegisters;
+  case SHT_LOUSER + 20: return eSectionTypeCUDAUniformPredicates;
+  case SHT_LOUSER + 21: return eSectionTypeCUDAConstBankTable;
+  case SHT_LOUSER + 22: return eSectionTypeCUDAMetadata;
+  case SHT_LOUSER + 23: return eSectionTypeCUDAConvergenceBarrier;
   }
   return GetSectionTypeFromName(H.section_name.GetStringRef());
 }
@@ -1930,6 +1963,9 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
     return;
 
   m_sections_up = std::make_unique<SectionList>();
+  // [NVIDIA] CUDA corefiles need special section handling.
+  bool is_cuda_corefile = m_header.e_machine == llvm::ELF::EM_CUDA &&
+                          GetType() == ObjectFile::eTypeCoreFile;
   VMAddressProvider regular_provider(GetType(), "PT_LOAD");
   VMAddressProvider tls_provider(GetType(), "PT_TLS");
 
@@ -1963,7 +1999,15 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
 
   for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
        I != m_section_headers.end(); ++I) {
-    const ELFSectionHeaderInfo &header = *I;
+    ELFSectionHeaderInfo header = *I;
+
+    // CUDA corefile sections use sh_addr for window-relative offsets or
+    // metadata placeholders rather than unique virtual addresses, causing
+    // many sections to share the same address. Clear SHF_ALLOC so they
+    // bypass VM address overlap detection. This flag will be removed
+    // in a future CTK release.
+    if (is_cuda_corefile)
+      header.sh_flags &= ~SHF_ALLOC;
 
     ConstString &name = I->section_name;
     const uint64_t file_size =

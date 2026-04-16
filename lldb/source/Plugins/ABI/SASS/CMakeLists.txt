@@ -17,6 +17,3 @@ add_lldb_library(lldbPluginABISASS PLUGIN
 
 # Include the CUDA debugger headers
 lldb_add_cuda_include_dirs(lldbPluginABISASS PRIVATE)
-
-# Include path for SASSRegisterNumbers.h
-target_include_directories(lldbPluginABISASS PRIVATE ${LLDB_SOURCE_DIR})

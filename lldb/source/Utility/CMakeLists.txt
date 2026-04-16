@@ -94,3 +94,7 @@ add_lldb_library(lldbUtility NO_INTERNAL_DEPENDENCIES
     ${LLDB_SYSTEM_LIBS}
     # lldbUtility does not depend on other LLDB libraries
   )
+
+if(LLDB_ENABLE_NVGPU_PLUGIN)
+  add_subdirectory(NVGPU)
+endif()
