@@ -381,6 +381,30 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
           case eSectionTypeELFRelocationEntries:
           case eSectionTypeELFDynamicLinkInfo:
           case eSectionTypeWasmName:
+          // [NVIDIA] CUDA section types for GetAddressClass.
+          case eSectionTypeCUDAGlobalMemory:
+          case eSectionTypeCUDAManagedMemory:
+          case eSectionTypeCUDALocalMemory:
+          case eSectionTypeCUDASharedMemory:
+          case eSectionTypeCUDAParamMemory:
+          case eSectionTypeCUDARegisters:
+          case eSectionTypeCUDAPredicates:
+          case eSectionTypeCUDAUniformRegisters:
+          case eSectionTypeCUDAUniformPredicates:
+          case eSectionTypeCUDARelocatedImage:
+          case eSectionTypeCUDAUnrelocatedImage:
+          case eSectionTypeCUDABacktrace:
+          case eSectionTypeCUDADeviceTable:
+          case eSectionTypeCUDAContextTable:
+          case eSectionTypeCUDASmTable:
+          case eSectionTypeCUDAGridTable:
+          case eSectionTypeCUDACtaTable:
+          case eSectionTypeCUDAWarpTable:
+          case eSectionTypeCUDALaneTable:
+          case eSectionTypeCUDAModuleTable:
+          case eSectionTypeCUDAConstBankTable:
+          case eSectionTypeCUDAMetadata:
+          case eSectionTypeCUDAConvergenceBarrier:
           case eSectionTypeOther:
             return AddressClass::eUnknown;
           case eSectionTypeAbsoluteAddress:
