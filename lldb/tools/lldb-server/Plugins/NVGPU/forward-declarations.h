@@ -9,6 +9,8 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_NVGPU_FORWARD_DECLARATIONS_H
 #define LLDB_TOOLS_LLDB_SERVER_NVGPU_FORWARD_DECLARATIONS_H
 
+#include "lldb/Utility/NVGPU/CUDAException.h"
+
 namespace lldb_private {
 class TCPSocket;
 
@@ -20,7 +22,7 @@ class SMState;
 class ThreadNVGPU;
 class ThreadState;
 class WarpState;
-struct ExceptionInfo;
+using ExceptionInfo = lldb_private::CUDAExceptionInfo;
 } // namespace lldb_server
 
 } // namespace lldb_private

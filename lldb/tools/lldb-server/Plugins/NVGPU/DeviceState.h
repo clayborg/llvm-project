@@ -71,30 +71,6 @@ struct Index3D {
 using ThreadIdx = Index3D;
 using BlockIdx = Index3D;
 
-/// Represents information about an exception that occurred during CUDA kernel
-/// execution.
-struct ExceptionInfo {
-  /// The type of CUDA exception that occurred. It's guaranteed not to be CUDBG_EXCEPTION_NONE.
-  CUDBGException_t exception;
-
-  /// The program counter address where the exception occurred, if available.
-  std::optional<uint64_t> errorPC;
-
-  /// Construct exception information.
-  ///
-  /// \param[in] exception
-  ///     The CUDA exception type that occurred.
-  /// \param[in] errorPC
-  ///     Optional program counter where the exception occurred.
-  ExceptionInfo(CUDBGException_t exception, std::optional<uint64_t> errorPC);
-
-  /// Convert the exception information to a human-readable string.
-  ///
-  /// \return
-  ///     A string representation of the exception information.
-  std::string ToString() const;
-};
-
 /// Represents the state of a single CUDA thread.
 class ThreadState {
 public:
