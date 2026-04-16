@@ -52,7 +52,10 @@ public:
 
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
-  void RefreshStateAfterStop() override {}
+  void RefreshStateAfterStop() override {
+    if (m_exception_tid != LLDB_INVALID_THREAD_ID)
+      GetThreadList().SetSelectedThreadByID(m_exception_tid);
+  }
 
   lldb_private::Status WillResume() override {
     return lldb_private::Status::FromErrorStringWithFormatv(
@@ -91,6 +94,7 @@ private:
 
   lldb::ModuleSP m_core_module_sp;
   lldb_private::NVGPUCoreData m_core_data;
+  lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
