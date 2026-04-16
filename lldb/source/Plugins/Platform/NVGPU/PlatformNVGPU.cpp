@@ -689,9 +689,12 @@ static void FormatDim3Range(Stream &strm, const char *prefix,
   strm.PutChar(')');
 }
 
-/// Represents a group of consecutive threads sharing the same PC.
+/// Represents a group of consecutive threads sharing the same PC and stop
+/// reason.
 struct ConsecutiveThreadGroup {
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
+  lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
+  uint64_t stop_value = 0;
   std::vector<CUDAThreadCoord> coords;
   ThreadSP representative_thread;
 };
@@ -753,13 +756,24 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
     if (pc == LLDB_INVALID_ADDRESS)
       continue;
 
-    // Check if this thread can be added to the current group (same PC).
-    if (!groups.empty() && groups.back().pc == pc) {
+    lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
+    uint64_t stop_value = 0;
+    StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
+    if (stop_info_sp) {
+      stop_reason = stop_info_sp->GetStopReason();
+      stop_value = stop_info_sp->GetValue();
+    }
+
+    // Group consecutive threads that share the same PC and stop reason.
+    if (!groups.empty() && groups.back().pc == pc &&
+        groups.back().stop_reason == stop_reason &&
+        groups.back().stop_value == stop_value) {
       groups.back().coords.push_back(coord);
     } else {
-      // Start a new group.
       ConsecutiveThreadGroup new_group;
       new_group.pc = pc;
+      new_group.stop_reason = stop_reason;
+      new_group.stop_value = stop_value;
       new_group.coords.push_back(coord);
       new_group.representative_thread = thread_sp;
       groups.push_back(std::move(new_group));
@@ -804,6 +818,12 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
     FormatDim3Range(strm, "blockIdx", range.block_min, range.block_max);
     strm.PutChar(' ');
     FormatDim3Range(strm, "threadIdx", range.thread_min, range.thread_max);
+    if (group.stop_reason != lldb::eStopReasonInvalid) {
+      StopInfoSP stop_info =
+          group.representative_thread->GetStopInfo();
+      if (stop_info)
+        strm.Printf(", stop reason = %s", stop_info->GetDescription());
+    }
     strm.EOL();
 
     // Print the frame info from the representative thread.
