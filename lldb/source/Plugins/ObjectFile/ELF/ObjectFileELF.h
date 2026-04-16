@@ -150,6 +150,20 @@ public:
   llvm::ArrayRef<elf::ELFProgramHeader> ProgramHeaders();
   lldb_private::DataExtractor GetSegmentData(const elf::ELFProgramHeader &H);
 
+  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
+  /// Section header info extending ELFSectionHeader with the resolved name.
+  struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
+    lldb_private::ConstString section_name;
+  };
+
+  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
+  /// Returns the section header with the given id or NULL.
+  const ELFSectionHeaderInfo *GetSectionHeaderByIndex(lldb::user_id_t id);
+
+  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
+  /// Returns the number of section headers
+  size_t GetNumSectionHeaders();
+
   llvm::StringRef
   StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const override;
 
@@ -174,10 +188,6 @@ private:
                 const lldb::ProcessSP &process_sp, lldb::addr_t header_addr);
 
   typedef std::vector<elf::ELFProgramHeader> ProgramHeaderColl;
-
-  struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
-    lldb_private::ConstString section_name;
-  };
 
   typedef std::vector<ELFSectionHeaderInfo> SectionHeaderColl;
   typedef SectionHeaderColl::iterator SectionHeaderCollIter;
@@ -345,9 +355,6 @@ private:
   /// name can be found (note that section indices are always 1 based, and so
   /// section index 0 is never valid).
   lldb::user_id_t GetSectionIndexByName(const char *name);
-
-  /// Returns the section header with the given id or NULL.
-  const ELFSectionHeaderInfo *GetSectionHeaderByIndex(lldb::user_id_t id);
 
   /// \name  ELF header dump routines
   //@{

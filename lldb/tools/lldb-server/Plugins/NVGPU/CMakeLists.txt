@@ -32,4 +32,7 @@ lldb_add_cuda_include_dirs(lldbServerPluginNVGPU PUBLIC)
 lldb_apply_cuda_env_definitions(lldbServerPluginNVGPU)
 
 # Link against CUDA libraries if needed
-target_link_libraries(lldbServerPluginNVGPU PRIVATE ${CUDA_LIBRARIES})
+target_link_libraries(lldbServerPluginNVGPU PRIVATE
+  ${CUDA_LIBRARIES}
+  lldbUtilityNVGPU
+)
