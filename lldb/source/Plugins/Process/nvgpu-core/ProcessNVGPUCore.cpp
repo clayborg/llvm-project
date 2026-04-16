@@ -224,6 +224,10 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
             auto thread_sp =
                 std::make_shared<ThreadNVGPUCore>(*this, tid, coords);
             new_thread_list.AddThread(thread_sp);
+
+            if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
+                lanes[lane_idx].entry.exception != 0)
+              m_exception_tid = tid;
           }
         }
       }
