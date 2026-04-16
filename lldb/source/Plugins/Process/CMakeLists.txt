@@ -32,6 +32,10 @@ if(LLDB_ENABLE_AMDGPU_PLUGIN)
   add_subdirectory(amdgpu-core)
 endif()
 
+if(LLDB_ENABLE_NVGPU_PLUGIN)
+  add_subdirectory(nvgpu-core)
+endif()
+
 add_subdirectory(mach-core)
 add_subdirectory(minidump)
 add_subdirectory(FreeBSDKernel)
