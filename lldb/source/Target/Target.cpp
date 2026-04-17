@@ -51,6 +51,7 @@
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
 #include "lldb/Target/Process.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/RegisterTypeBuilder.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/StackFrame.h"
@@ -216,6 +217,34 @@ Target::~Target() {
   Log *log = GetLog(LLDBLog::Object);
   LLDB_LOG(log, "{0} Target::~Target()", static_cast<void *>(this));
   DeleteCurrentProcess();
+}
+
+void Target::SetGPUPluginTarget(llvm::StringRef plugin_name,
+                                lldb::TargetSP gpu_target_sp) {
+  gpu_target_sp->m_native_target_gpu_wp = shared_from_this();
+  gpu_target_sp->m_is_cpu_target = false;
+  m_gpu_plugin_targets[plugin_name] = gpu_target_sp;
+
+  lldb::PlatformSP platform_sp = gpu_target_sp->GetPlatform();
+  if (!platform_sp)
+    return;
+
+  // Iterate through all breakpoints in the native target. See
+  // `Platform::HandleNativeBreakpointLocation` for details.
+  std::unique_lock<std::recursive_mutex> bp_list_lock;
+  BreakpointList &bp_list = GetBreakpointList(/*internal=*/false);
+  bp_list.GetListMutex(bp_list_lock);
+  for (size_t i = 0, n = bp_list.GetSize(); i < n; ++i) {
+    lldb::BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
+    if (!bp_sp)
+      continue;
+    for (size_t j = 0, m = bp_sp->GetNumLocations(); j < m; ++j) {
+      lldb::BreakpointLocationSP loc_sp = bp_sp->GetLocationAtIndex(j);
+      if (!loc_sp)
+        continue;
+      platform_sp->HandleNativeBreakpointLocation(*loc_sp);
+    }
+  }
 }
 
 void Target::PrimeFromDummyTarget(Target &target) {

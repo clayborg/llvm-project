@@ -1757,11 +1757,7 @@ public:
 
   /// Assign a GPU plugin target to this target.
   void SetGPUPluginTarget(llvm::StringRef plugin_name,
-                          lldb::TargetSP gpu_target_sp) {
-    gpu_target_sp->m_native_target_gpu_wp = shared_from_this();
-    gpu_target_sp->m_is_cpu_target = false;
-    m_gpu_plugin_targets[plugin_name] = gpu_target_sp;
-  }
+                          lldb::TargetSP gpu_target_sp);
 
   /// \return
   ///   The CPU native target for this target.

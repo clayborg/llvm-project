@@ -1119,10 +1119,6 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
                 "created process!!!");
 
-  // Process any CPU modules that were already loaded before the GPU target
-  // existed so host-side shadow wrappers are discovered immediately.
-  platform_sp->ProcessHostModules(GetTarget().GetImages(), GetTarget());
-
   // Broadcast the target creation event so DAP can create a child session
   auto event_sp = std::make_shared<Event>(
       Target::eBroadcastBitNewTargetCreated,
@@ -5884,13 +5880,6 @@ void ProcessGDBRemote::ModulesDidLoad(ModuleList &module_list) {
   // We must call the lldb_private::Process::ModulesDidLoad () first before we
   // do anything
   Process::ModulesDidLoad(module_list);
-
-  GetTarget().ForEachGPUPluginTarget(
-      [&](llvm::StringRef, const TargetSP &gpu_target_sp) {
-        if (PlatformSP platform_sp = gpu_target_sp->GetPlatform())
-          platform_sp->ProcessHostModules(module_list, GetTarget());
-        return IterationAction::Continue;
-      });
 
   // After loading shared libraries, we can ask our remote GDB server if it
   // needs any symbols.

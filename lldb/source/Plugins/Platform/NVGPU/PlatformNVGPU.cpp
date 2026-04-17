@@ -29,6 +29,7 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Stream.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -49,6 +50,67 @@ enum {
 #define LLDB_PROPERTIES_platformnvgpuuser
 #include "PlatformNVGPUUserPropertiesEnum.inc"
 };
+
+constexpr llvm::StringLiteral kDeviceStubPrefix = "__device_stub_";
+
+static ConstString GetConcreteOwningMangledName(const SymbolContext &sc) {
+  if (sc.function)
+    return sc.function->GetMangled().GetMangledName();
+
+  if (sc.symbol)
+    return sc.symbol->GetMangled().GetMangledName();
+
+  return {};
+}
+
+static bool HasDeviceStubSymbol(const ModuleSP &module_sp,
+                                ConstString mangled_name) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+  if (!module_sp || !mangled_name)
+    return false;
+
+  llvm::SmallString<128> stub_name(kDeviceStubPrefix);
+  stub_name += mangled_name.GetStringRef();
+  ConstString stub_name_cs{llvm::StringRef(stub_name)};
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: searching for device stub base name {1}",
+           __FUNCTION__, stub_name);
+
+  SymbolContextList sc_list;
+  module_sp->FindFunctionSymbols(stub_name_cs, lldb::eFunctionNameTypeBase,
+                                 sc_list);
+  if (sc_list.GetSize() == 0) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup failed in module "
+             "{1}",
+             __FUNCTION__, module_sp->GetSpecificationDescription());
+    return false;
+  }
+
+  SymbolContext sc;
+  if (!sc_list.GetContextAtIndex(0, sc) || !sc.symbol) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup produced an "
+             "unexpected symbol context",
+             __FUNCTION__);
+    return false;
+  }
+
+  const Mangled &candidate_name = sc.symbol->GetMangled();
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: found matching device stub: mangled={1}, "
+           "demangled={2}",
+           __FUNCTION__, candidate_name.GetMangledName().GetStringRef(),
+           candidate_name.GetDemangledName().GetStringRef());
+  if (sc_list.GetSize() > 1) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup returned {1} "
+             "candidates for base name {2}",
+             __FUNCTION__, sc_list.GetSize(), stub_name);
+  }
+  return true;
+}
 } // namespace
 
 PlatformNVGPU::PluginProperties::PluginProperties() {
@@ -279,126 +341,43 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
   return llvm::Error::success();
 }
 
-void PlatformNVGPU::IdentifyShadowFunctions(const lldb::ModuleSP &module_sp,
-                                            Target &target) {
-  Log *log = GetLog(LLDBLog::Modules);
-  size_t num_shadow_ranges = 0;
-
-  // __device_stub_ should specifically be at the start of the special symbol.
-  const llvm::StringRef kStubPrefix = "__device_stub_";
-
-  SymbolContextList sc_list;
-  // Search for all code symbols whose demangled name starts with "__device_stub_".
-  module_sp->FindSymbolsMatchingRegExAndType(
-      RegularExpression((llvm::Twine("^") + kStubPrefix).str()),
-      lldb::eSymbolTypeCode, sc_list,
-      Mangled::ePreferDemangledWithoutArguments);
-
-  LLDB_LOG(log, "IdentifyShadowFunctions: found {0} stub symbols in {1}",
-           sc_list.GetSize(), module_sp->GetSpecificationDescription());
-
-  for (uint32_t i = 0; i < sc_list.GetSize(); ++i) {
-    SymbolContext sc;
-    sc_list.GetContextAtIndex(i, sc);
-    if (!sc.symbol)
-      continue;
-
-    // This should look something like `__device_stub__Z9my_kerneli`.
-    const ConstString &stub_name = sc.symbol->GetNameNoArguments();
-    llvm::StringRef display_str = stub_name.GetStringRef();
-    LLDB_LOG(log, "IdentifyShadowFunctions: looking at stub symbol {0}",
-             display_str);
-
-    // For example: `_Z9my_kerneli`.
-    llvm::StringRef wrapper_mangled_name =
-        display_str.drop_front(kStubPrefix.size());
-    if (wrapper_mangled_name.empty()) {
-      LLDB_LOG(log,
-               "IdentifyShadowFunctions: skipping malformed stub symbol {0} "
-               "with empty wrapper name",
-               display_str);
-      continue;
-    }
-
-    // Generally, there should only be the one wrapper symbol for the kernel
-    const Symbol *wrapper_symbol = module_sp->FindFirstSymbolWithNameAndType(
-        ConstString(wrapper_mangled_name), lldb::eSymbolTypeCode);
-    if (!wrapper_symbol) {
-      LLDB_LOG(log, "IdentifyShadowFunctions: wrapper symbol {0} not found",
-               wrapper_mangled_name.str());
-      continue;
-    }
-
-    lldb::addr_t start_pc = wrapper_symbol->GetLoadAddress(&target);
-    lldb::addr_t byte_size = wrapper_symbol->GetByteSize();
-    if (start_pc == LLDB_INVALID_ADDRESS || byte_size == 0)
-      continue;
-
-    lldb::addr_t end_pc = start_pc + byte_size;
-    if (end_pc <= start_pc)
-      continue;
-
-    LLDB_LOG(log,
-             "IdentifyShadowFunctions: stub={0} -> wrapper={1} "
-             "[0x{2:x16} - 0x{3:x16})",
-             stub_name.GetStringRef(), wrapper_mangled_name, start_pc, end_pc);
-
-    m_shadow_function_ranges.insert(start_pc, end_pc, true);
-    ++num_shadow_ranges;
-  }
-
-  LLDB_LOG(log, "IdentifyShadowFunctions: found {0} shadow functions in {1}",
-           num_shadow_ranges, module_sp->GetSpecificationDescription());
-}
-
-void PlatformNVGPU::ProcessHostModules(ModuleList &module_list,
-                                       Target &target) {
-  ElapsedTime elapsed(
-      target.GetStatistics().GetShadowFunctionIdentificationTime());
-
-  for (lldb::ModuleSP module_sp : module_list.Modules())
-    IdentifyShadowFunctions(module_sp, target);
-
-  // Disable any CPU-target breakpoints whose load address falls within a
-  // shadow function range, so users aren't surprised by stops in glue code.
-  DisableShadowFunctionBreakpoints(target);
-}
-
-void PlatformNVGPU::DisableShadowFunctionBreakpoints(Target &target) {
+static bool IsShadowFunction(const SymbolContext &candidate_sc) {
   Log *log = GetLog(LLDBLog::Breakpoints);
 
-  std::unique_lock<std::recursive_mutex> lock;
-  BreakpointList &bp_list = target.GetBreakpointList(/*internal=*/false);
-  bp_list.GetListMutex(lock);
+  if (!candidate_sc.module_sp)
+    return false;
 
-  for (size_t i = 0, n = bp_list.GetSize(); i < n; ++i) {
-    BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
-    if (!bp_sp)
-      continue;
-    for (size_t j = 0, m = bp_sp->GetNumLocations(); j < m; ++j) {
-      BreakpointLocationSP loc_sp = bp_sp->GetLocationAtIndex(j);
-      if (!loc_sp)
-        continue;
-      if (ShouldDisableHostBreakpointLocation(*loc_sp)) {
-        LLDB_LOG(log,
-                 "DisableShadowFunctionBreakpoints: disabling bp {0} loc {1} "
-                 "at 0x{2:x}",
-                 bp_sp->GetID(), loc_sp->GetID(), loc_sp->GetLoadAddress());
-        if (llvm::Error err = loc_sp->SetEnabled(false))
-          llvm::consumeError(std::move(err));
-      }
-    }
-  }
+  ConstString function_name = GetConcreteOwningMangledName(candidate_sc);
+  if (!function_name)
+    return false;
+
+  LLDB_LOG(log, "PlatformNVGPU::{0}: searching for device stub corresponding to {1}",
+           __FUNCTION__, function_name.GetStringRef());
+  return HasDeviceStubSymbol(candidate_sc.module_sp, function_name);
 }
 
-bool PlatformNVGPU::ShouldDisableHostBreakpointLocation(
-    BreakpointLocation &bp_loc) {
+bool PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+
   // No need to re-disable an already-disabled breakpoint location.
   if (!bp_loc.IsEnabled())
       return false;
 
-  addr_t load_addr = bp_loc.GetLoadAddress();
-  return m_shadow_function_ranges.lookup(load_addr);
+  SymbolContext sc;
+  bp_loc.GetAddress().CalculateSymbolContext(
+      &sc, lldb::eSymbolContextFunction | lldb::eSymbolContextSymbol);
+  if (!IsShadowFunction(sc))
+    return false;
+
+  if (llvm::Error err = bp_loc.SetEnabled(false))
+    LLDB_LOG_ERROR(log, std::move(err),
+                   "Error when disabling native breakpoint location: {0}");
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0} disabling native breakpoint "
+           "location (load_addr = 0x{1:x}) for GPU platform '{2}'",
+           __FUNCTION__, bp_loc.GetLoadAddress(), GetName());
+  return true;
 }
 
 ///   The PTX to SASS register map table is made of a series of entries,

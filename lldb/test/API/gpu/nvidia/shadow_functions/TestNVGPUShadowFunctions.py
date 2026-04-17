@@ -1,4 +1,3 @@
-import json
 import lldb
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
@@ -71,10 +70,3 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
         self.assertBreakpointLocationsDisabled(
             cpu_target_kernel_bp_by_name_after_gpu_target
         )
-
-        stats_stream = lldb.SBStream()
-        self.assertSuccess(self.cpu_target.GetStatistics().GetAsJSON(stats_stream))
-        stats = json.loads(stats_stream.GetData())
-        target_stats = stats["targets"][0]
-        self.assertIn("shadowFunctionIdentificationTime", target_stats)
-        self.assertGreater(target_stats["shadowFunctionIdentificationTime"], 0)

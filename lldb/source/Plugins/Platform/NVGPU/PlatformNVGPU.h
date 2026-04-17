@@ -87,8 +87,6 @@ public:
   void RecordLoadedModule(const lldb::ModuleSP &module_sp,
                           Target &target) override;
 
-  void ProcessHostModules(ModuleList &module_list, Target &target) override;
-
   size_t GetGPUThreadStatus(Process &process, Stream &strm,
                             bool only_threads_with_stop_reason) override;
 
@@ -97,6 +95,11 @@ public:
 
   bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
                           GPUDim3 &thread_idx) override;
+
+  /// Check if the native breakpoint location is within a "shadow function", a
+  /// trampoline function that wraps around a `__device_stub` call to a GPU
+  /// kernel.
+  bool HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) override;
 
 private:
   using ShadowFunctionRangeMap =
@@ -111,15 +114,6 @@ private:
   llvm::Error LocationToValue(RegisterContext *reg_ctx,
                               lldb::RegisterKind reg_kind, uint32_t location,
                               Value &value);
-
-  void IdentifyShadowFunctions(const lldb::ModuleSP &module_sp, Target &target);
-
-  bool IsInShadowFunction(lldb::addr_t pc) const;
-
-  void DisableShadowFunctionBreakpoints(Target &target);
-
-  bool ShouldDisableHostBreakpointLocation(
-      BreakpointLocation &bp_loc) override;
 
   std::vector<ArchSpec> m_supported_architectures;
 
