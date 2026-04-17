@@ -24,7 +24,38 @@ using namespace lldb_private;
 
 ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
                                  const NVGPULaneCoords &coords)
-    : Thread(process, tid), m_coords(coords) {}
+    : Thread(process, tid), m_coords(coords) {
+  // Walk device -> SM -> CTA -> warp -> lane. Bail on any out-of-range
+  // coord; later pointers stay null. This establishes the invariant that
+  // a non-null later pointer implies all earlier ones are non-null.
+  auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
+  NVGPUCoreData &core_data = nvgpu_process.GetCoreData();
+  ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
+
+  if (!core || m_coords.dev_idx >= core_data.GetNumDevices())
+    return;
+  m_dev = &core_data.GetDevice(m_coords.dev_idx);
+
+  llvm::ArrayRef<SMData> sms = m_dev->GetSMs(core);
+  if (m_coords.sm_idx >= sms.size())
+    return;
+  m_sm = &sms[m_coords.sm_idx];
+
+  llvm::ArrayRef<CTAData> ctas = m_sm->GetCTAs(core);
+  if (m_coords.cta_idx >= ctas.size())
+    return;
+  m_cta = &ctas[m_coords.cta_idx];
+
+  llvm::ArrayRef<WarpData> warps = m_cta->GetWarps(core);
+  if (m_coords.warp_idx >= warps.size())
+    return;
+  m_warp = &warps[m_coords.warp_idx];
+
+  llvm::ArrayRef<LaneData> lanes = m_warp->GetLanes(core);
+  if (m_coords.lane_idx >= lanes.size())
+    return;
+  m_lane = &lanes[m_coords.lane_idx];
+}
 
 ThreadNVGPUCore::~ThreadNVGPUCore() { DestroyThread(); }
 
@@ -44,93 +75,35 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
   }
   auto *nvgpu_process = static_cast<ProcessNVGPUCore *>(process_sp.get());
   return std::make_shared<RegisterContextNVGPUCore>(
-      *this, nvgpu_process->GetCoreData(), m_coords,
-      nvgpu_process->GetCoreObjectFile());
-}
-
-/// Resolved hierarchy state for a single GPU lane within the corefile.
-struct ResolvedLaneInfo {
-  const SMData *sm = nullptr;
-  const CTAData *cta = nullptr;
-  const WarpData *warp = nullptr;
-  const LaneData *lane = nullptr;
-};
-
-/// Walk the device -> SM -> CTA -> warp -> lane hierarchy for a given set
-/// of coordinates. Returns partially filled results if any level is out
-/// of range.
-static ResolvedLaneInfo
-ResolveLane(NVGPUCoreData &core_data, ObjectFileELF *core,
-            const NVGPULaneCoords &coords) {
-  ResolvedLaneInfo info;
-  if (!core || coords.dev_idx >= core_data.devices.size())
-    return info;
-
-  DeviceData &dev = core_data.devices[coords.dev_idx];
-  llvm::ArrayRef<SMData> sms = dev.GetSMs(core);
-  if (coords.sm_idx >= sms.size())
-    return info;
-  info.sm = &sms[coords.sm_idx];
-
-  llvm::ArrayRef<CTAData> ctas = info.sm->GetCTAs(core);
-  if (coords.cta_idx >= ctas.size())
-    return info;
-  info.cta = &ctas[coords.cta_idx];
-
-  llvm::ArrayRef<WarpData> warps = info.cta->GetWarps(core);
-  if (coords.warp_idx >= warps.size())
-    return info;
-  info.warp = &warps[coords.warp_idx];
-
-  llvm::ArrayRef<LaneData> lanes = info.warp->GetLanes(core);
-  if (coords.lane_idx >= lanes.size())
-    return info;
-  info.lane = &lanes[coords.lane_idx];
-
-  return info;
+      *this, nvgpu_process->GetCoreObjectFile());
 }
 
 const char *ThreadNVGPUCore::GetName() {
   if (m_name.empty()) {
-    ProcessSP process_sp = GetProcess();
-    if (!process_sp)
-      return "NVIDIA GPU Thread";
-    auto *nvgpu_process = static_cast<ProcessNVGPUCore *>(process_sp.get());
-    ResolvedLaneInfo info = ResolveLane(
-        nvgpu_process->GetCoreData(), nvgpu_process->GetCoreObjectFile(),
-        m_coords);
-    if (info.cta && info.lane)
+    if (m_lane) // m_lane non-null implies m_cta non-null
       m_name = nvgpu::FormatThreadName(
-          info.cta->entry.blockIdxX, info.cta->entry.blockIdxY,
-          info.cta->entry.blockIdxZ, info.lane->entry.threadIdxX,
-          info.lane->entry.threadIdxY, info.lane->entry.threadIdxZ);
+          m_cta->GetEntry().blockIdxX, m_cta->GetEntry().blockIdxY,
+          m_cta->GetEntry().blockIdxZ, m_lane->GetEntry().threadIdxX,
+          m_lane->GetEntry().threadIdxY, m_lane->GetEntry().threadIdxZ);
     if (m_name.empty())
       m_name = "NVIDIA GPU Thread";
   }
   return m_name.c_str();
 }
 
+uint32_t ThreadNVGPUCore::GetAttributedException() const {
+  // Policy documented on the declaration in ThreadNVGPUCore.h.
+  if (m_lane && m_lane->GetEntry().exception != 0)
+    return m_lane->GetEntry().exception;
+  if (m_warp && m_warp->GetEntry().errorPCValid &&
+      (m_warp->GetEntry().activeLanesMask & (1u << m_coords.lane_idx)))
+    return m_sm->GetEntry().exception; // m_warp non-null implies m_sm
+  return 0;
+}
+
 bool ThreadNVGPUCore::CalculateStopInfo() {
-  ProcessSP process_sp = GetProcess();
-  if (!process_sp)
-    return false;
-
-  auto *nvgpu_process = static_cast<ProcessNVGPUCore *>(process_sp.get());
-  ResolvedLaneInfo info = ResolveLane(
-      nvgpu_process->GetCoreData(), nvgpu_process->GetCoreObjectFile(),
-      m_coords);
-
-  // Check for exceptions at lane, then warp level. Only attribute an
-  // exception to this thread if it occurred at the lane or warp level.
-  // The SM-level exception indicates which SM had a fault but doesn't mean
-  // every thread on that SM faulted.
-  uint32_t exception = 0;
-  if (info.lane)
-    exception = info.lane->entry.exception;
-  if (exception == 0 && info.warp && info.warp->entry.errorPCValid && info.sm)
-    exception = info.sm->entry.exception;
-
-  CUDBGException_t exc = static_cast<CUDBGException_t>(exception);
+  CUDBGException_t exc =
+      static_cast<CUDBGException_t>(GetAttributedException());
   if (exc != CUDBG_EXCEPTION_NONE) {
     std::string desc =
         ("CUDA Exception: " + CUDAExceptionToString(exc)).str();

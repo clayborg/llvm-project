@@ -10,9 +10,8 @@
 /// Process plugin for NVIDIA GPU core files.
 ///
 /// This plugin handles standalone CUDA core files (ET_CORE + EM_CUDA) that
-/// contain GPU execution state. It builds a DOM-like SectionTree from the
-/// ELF section hierarchy and lazily parses table entries and register data
-/// on demand.
+/// contain GPU execution state. It indexes ELF sections via a SectionTree
+/// and lazily parses table entries and register data on demand.
 ///
 //===----------------------------------------------------------------------===//
 

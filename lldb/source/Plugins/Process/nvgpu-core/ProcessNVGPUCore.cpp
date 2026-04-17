@@ -123,8 +123,19 @@ Status ProcessNVGPUCore::DoLoadCore() {
   // Build section tree and parse top-level data (device table + global
   // memory regions). SM/CTA/warp/thread tables are deferred until
   // DoUpdateThreadList.
-  if (llvm::Error err = m_core_data.ParseTopLevel(core))
+  if (llvm::Error err = m_core_data.Parse(core))
     return Status::FromError(std::move(err));
+
+  llvm::ArrayRef<std::string> truncated = m_core_data.GetTruncatedSections();
+  if (!truncated.empty()) {
+    std::string sections = llvm::join(truncated, ", ");
+    Debugger::ReportWarning(
+        llvm::formatv("GPU corefile appears truncated: {0} section(s) extend "
+                      "beyond file size and were skipped ({1}). Some data "
+                      "(memory, registers) may be unavailable.",
+                      truncated.size(), sections)
+            .str());
+  }
 
   if (llvm::Error err = LoadCubinModules())
     return Status::FromError(std::move(err));
@@ -147,27 +158,17 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
 
   Target &target = GetTarget();
   ModuleList loaded_modules;
-
-  llvm::SmallVector<SectionNode *, 16> cubin_nodes =
-      m_core_data.section_tree.FindAllByType(eSectionTypeCUDARelocatedImage);
-
   const FileSpec &core_file = core->GetFileSpec();
 
-  for (size_t i = 0; i < cubin_nodes.size(); ++i) {
-    SectionNode *node = cubin_nodes[i];
-    if (!node || !node->section || !node->header)
-      continue;
-
-    uint64_t file_offset = node->header->sh_offset;
-    uint64_t file_size = node->header->sh_size;
-    if (file_size == 0)
-      continue;
+  llvm::ArrayRef<CubinLocation> cubins = m_core_data.GetCubinLocations();
+  for (size_t i = 0; i < cubins.size(); ++i) {
+    const CubinLocation &cubin = cubins[i];
 
     // Point the module at the cubin's range within the core file so the
     // module system mmaps the same file -- no bulk copy of the cubin data.
     ModuleSpec module_spec(core_file);
-    module_spec.SetObjectOffset(file_offset);
-    module_spec.SetObjectSize(file_size);
+    module_spec.SetObjectOffset(cubin.file_offset);
+    module_spec.SetObjectSize(cubin.file_size);
 
     ModuleSP module_sp = target.GetOrCreateModule(module_spec, /*notify=*/true);
     if (module_sp) {
@@ -180,7 +181,7 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
         platform_sp->RecordLoadedModule(module_sp, target);
 
       LLDB_LOG(log, "  loaded cubin module {0} at offset {1:x} ({2} bytes)",
-               i, file_offset, file_size);
+               i, cubin.file_offset, cubin.file_size);
     }
   }
 
@@ -196,8 +197,8 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
     return false;
 
   uint32_t tid = 0;
-  for (size_t dev_idx = 0; dev_idx < m_core_data.devices.size(); ++dev_idx) {
-    DeviceData &dev = m_core_data.devices[dev_idx];
+  for (size_t dev_idx = 0; dev_idx < m_core_data.GetNumDevices(); ++dev_idx) {
+    const DeviceData &dev = m_core_data.GetDevice(dev_idx);
     llvm::ArrayRef<SMData> sms = dev.GetSMs(core);
     for (size_t sm_idx = 0; sm_idx < sms.size(); ++sm_idx) {
       const SMData &sm = sms[sm_idx];
@@ -207,7 +208,7 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
         llvm::ArrayRef<WarpData> warps = cta.GetWarps(core);
         for (size_t warp_idx = 0; warp_idx < warps.size(); ++warp_idx) {
           const WarpData &warp = warps[warp_idx];
-          uint32_t valid_mask = warp.entry.validLanesMask;
+          uint32_t valid_mask = warp.GetEntry().validLanesMask;
           llvm::ArrayRef<LaneData> lanes = warp.GetLanes(core);
           for (size_t lane_idx = 0; lane_idx < lanes.size(); ++lane_idx) {
             if (!(valid_mask & (1u << lane_idx)))
@@ -225,8 +226,11 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
                 std::make_shared<ThreadNVGPUCore>(*this, tid, coords);
             new_thread_list.AddThread(thread_sp);
 
+            // Select the first thread that any CUDA exception is attributed
+            // to (matches ThreadNVGPUCore::CalculateStopInfo's policy, so
+            // thread selection and stop reason stay consistent).
             if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
-                lanes[lane_idx].entry.exception != 0)
+                thread_sp->GetAttributedException() != 0)
               m_exception_tid = tid;
           }
         }
@@ -254,7 +258,8 @@ static size_t ReadFromMemorySection(const MemorySection &mem, addr_t addr,
 
   const uint64_t offset = addr - mem.addr;
   const uint64_t bytes_left = mem.size - offset;
-  const size_t bytes_to_read = std::min(static_cast<uint64_t>(size), bytes_left);
+  const size_t bytes_to_read =
+      std::min(static_cast<uint64_t>(size), bytes_left);
 
   return mem.data.CopyData(offset, bytes_to_read, buf);
 }
@@ -299,12 +304,11 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
     return 0;
 
   // Get the thread from the AddressSpec (set by the DWARF evaluator).
-  llvm::Expected<ThreadSP> thread_or_err = addr_spec.GetThread();
   ThreadSP thread_sp;
-  if (thread_or_err)
-    thread_sp = *thread_or_err;
+  if (llvm::Expected<ThreadSP> t = addr_spec.GetThread())
+    thread_sp = *t;
   else
-    llvm::consumeError(thread_or_err.takeError());
+    llvm::consumeError(t.takeError());
 
   if (!thread_sp)
     thread_sp = GetThreadList().GetSelectedThread();
@@ -314,48 +318,24 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
     return 0;
   }
 
+  // The thread has already resolved its device/SM/CTA/warp/lane chain in its
+  // constructor; borrow those pointers instead of re-walking from coords.
   auto *gpu_thread = static_cast<ThreadNVGPUCore *>(thread_sp.get());
-  const NVGPULaneCoords &coords = gpu_thread->GetCoords();
 
-  if (coords.dev_idx >= m_core_data.devices.size()) {
-    error = Status::FromErrorStringWithFormat(
-        "device index %u out of range", coords.dev_idx);
-    return 0;
+  // Shared memory (per-CTA) -- address space "shared" (8).
+  if (const CTAData *cta = gpu_thread->GetCTA()) {
+    size_t bytes =
+        ReadFromMemorySection(cta->GetSharedMemory(core), addr, buf, size);
+    if (bytes > 0)
+      return bytes;
   }
-  DeviceData &dev = m_core_data.devices[coords.dev_idx];
-  llvm::ArrayRef<SMData> sms = dev.GetSMs(core);
-  if (coords.sm_idx >= sms.size()) {
-    error = Status::FromErrorStringWithFormat(
-        "SM index %u out of range", coords.sm_idx);
-    return 0;
-  }
-  const SMData &sm = sms[coords.sm_idx];
-  llvm::ArrayRef<CTAData> ctas = sm.GetCTAs(core);
-  if (coords.cta_idx >= ctas.size()) {
-    error = Status::FromErrorStringWithFormat(
-        "CTA index %u out of range", coords.cta_idx);
-    return 0;
-  }
-  const CTAData &cta = ctas[coords.cta_idx];
 
-  // Shared memory (per-CTA) -- address space "shared" (8)
-  size_t bytes = ReadFromMemorySection(cta.GetSharedMemory(core), addr, buf,
-                                       size);
-  if (bytes > 0)
-    return bytes;
-
-  llvm::ArrayRef<WarpData> warps = cta.GetWarps(core);
-  if (coords.warp_idx < warps.size()) {
-    const WarpData &warp = warps[coords.warp_idx];
-    llvm::ArrayRef<LaneData> lanes = warp.GetLanes(core);
-    if (coords.lane_idx < lanes.size()) {
-      const LaneData &lane = lanes[coords.lane_idx];
-
-      // Local memory (per-lane) -- address space "local" (6)
-      bytes = ReadFromMemorySection(lane.GetLocalMemory(core), addr, buf, size);
-      if (bytes > 0)
-        return bytes;
-    }
+  // Local memory (per-lane) -- address space "local" (6).
+  if (const LaneData *lane = gpu_thread->GetLane()) {
+    size_t bytes =
+        ReadFromMemorySection(lane->GetLocalMemory(core), addr, buf, size);
+    if (bytes > 0)
+      return bytes;
   }
 
   error = Status::FromErrorStringWithFormat(
