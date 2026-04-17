@@ -11,7 +11,6 @@
 
 #include "NVGPUCoreData.h"
 #include "lldb/Target/RegisterContext.h"
-#include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 
 class ObjectFileELF;
 
@@ -19,9 +18,19 @@ namespace lldb_private {
 
 class RegisterContextNVGPUCore : public RegisterContext {
 public:
-  RegisterContextNVGPUCore(Thread &thread, NVGPUCoreData &core_data,
-                           const NVGPULaneCoords &coords,
-                           ObjectFileELF *core);
+  /// Construct a RegisterContext that borrows its hierarchy pointers
+  /// from the owning `ThreadNVGPUCore`. No additional walk of the
+  /// device/SM/CTA/warp/lane tables happens here.
+  ///
+  /// \pre `thread` must be a `ThreadNVGPUCore`.
+  ///
+  /// \param[in] thread
+  ///     The owning thread.
+  ///
+  /// \param[in] core
+  ///     The CUDA corefile ObjectFile (used for lazy register section
+  ///     reads).
+  RegisterContextNVGPUCore(Thread &thread, ObjectFileELF *core);
 
   ~RegisterContextNVGPUCore() override;
 
@@ -46,23 +55,22 @@ public:
   bool WriteAllRegisterValues(const lldb::DataBufferSP &data_sp) override;
 
 private:
-  void LoadRegistersFromCore();
+  ObjectFileELF *m_core = nullptr;
 
-  NVGPUCoreData &m_core_data;
-  ObjectFileELF *m_core;
-  NVGPULaneCoords m_coords;
+  /// Borrowed from the owning ThreadNVGPUCore. Null if the thread's coords
+  /// didn't resolve to a valid warp/lane. Register reads pull bytes directly
+  /// from these, aliasing the corefile mmap via NVGPUCoreData's lazy caches
+  /// -- no per-RegisterContext copy of the register data. Ordered top-down
+  /// (warp before lane) to match ThreadNVGPUCore's hierarchy field order.
+  const WarpData *m_warp = nullptr;
+  const LaneData *m_lane = nullptr;
 
-  uint64_t m_pc = 0;
-  uint64_t m_error_pc = 0;
-  uint32_t m_gp_regs[sass::kNumRRegs] = {};
-  uint32_t m_pred_regs[sass::kNumPRegs] = {};
-  uint32_t m_uniform_regs[sass::kNumURRegs] = {};
-  uint32_t m_uniform_pred_regs[sass::kNumUPRegs] = {};
+  /// Device-advertised register counts (clamped to the SASS max). Used
+  /// to bound register indices in ReadRegister.
   uint32_t m_num_gp_regs = 0;
   uint32_t m_num_pred_regs = 0;
   uint32_t m_num_uniform_regs = 0;
   uint32_t m_num_uniform_pred_regs = 0;
-  bool m_loaded = false;
 };
 
 } // namespace lldb_private
