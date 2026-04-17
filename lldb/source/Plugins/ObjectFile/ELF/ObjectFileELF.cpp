@@ -2000,13 +2000,27 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
   for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
        I != m_section_headers.end(); ++I) {
     ELFSectionHeaderInfo header = *I;
+    SectionType sect_type = GetSectionType(header);
 
-    // CUDA corefile sections use sh_addr for window-relative offsets or
-    // metadata placeholders rather than unique virtual addresses, causing
-    // many sections to share the same address. Clear SHF_ALLOC so they
-    // bypass VM address overlap detection. This flag will be removed
-    // in a future CTK release.
-    if (is_cuda_corefile)
+    // CUDA corefile sections fall into three categories:
+    //   * Global / managed memory: sh_addr is the real GPU virtual
+    //     address and is unique across sections. These should participate
+    //     in normal VM mapping and overlap detection.
+    //   * Local / shared memory: sh_addr is a window-relative base that's
+    //     intentionally shared across lanes (local) or CTAs (shared).
+    //     Letting LLDB see these as SHF_ALLOC would trigger overlap
+    //     detection and drop all but the first.
+    //   * Tables, register/predicate dumps, metadata, cubin blobs: not
+    //     memory -- sh_addr is 0 (or a placeholder). No VM footprint.
+    // Clear SHF_ALLOC for the last two groups so they bypass overlap
+    // detection; keep it for global/managed memory so consumers can use
+    // Section::GetByteSize() and benefit from overlap diagnostics. This
+    // workaround will be removed once the CUDA corefile generator sets
+    // SHF_ALLOC only on CUDBG_SHT_GLOBAL_MEM / CUDBG_SHT_MANAGED_MEM.
+    if (is_cuda_corefile &&
+        (sect_type == eSectionTypeCUDALocalMemory ||
+         sect_type == eSectionTypeCUDASharedMemory ||
+         header.sh_addr == 0))
       header.sh_flags &= ~SHF_ALLOC;
 
     ConstString &name = I->section_name;
@@ -2018,8 +2032,6 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
     auto InfoOr = provider.GetAddressInfo(header);
     if (!InfoOr)
       continue;
-
-    SectionType sect_type = GetSectionType(header);
 
     const uint32_t target_bytes_size =
         GetTargetByteSize(sect_type, m_arch_spec);
