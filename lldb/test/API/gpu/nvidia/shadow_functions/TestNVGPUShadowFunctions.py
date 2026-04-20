@@ -26,6 +26,7 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
 
         source = "shadow_functions.cu"
         gpu_bp_line: int = line_number(source, "// gpu breakpoint")
+        second_gpu_bp_line: int = line_number(source, "// second gpu breakpoint")
         # NOTE: this CPU breakpoint isn't really important to this test.
         # However, it seems that in the test runner context, we need to set some
         # CPU breakpoint before the GPU target launch otherwise the test will
@@ -38,12 +39,22 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
             "my_kernel"
         )
         self.assertTrue(cpu_target_kernel_bp_by_name.IsValid())
+        cpu_target_second_kernel_bp_by_name = self.cpu_target.BreakpointCreateByName(
+            "my_other_kernel"
+        )
+        self.assertTrue(cpu_target_second_kernel_bp_by_name.IsValid())
         cpu_target_kernel_bp_by_file_line = (
             self.cpu_target.BreakpointCreateByLocation(
                 "shadow_functions.cu", gpu_bp_line
             )
         )
         self.assertTrue(cpu_target_kernel_bp_by_file_line.IsValid())
+        cpu_target_second_kernel_bp_by_file_line = (
+            self.cpu_target.BreakpointCreateByLocation(
+                "shadow_functions.cu", second_gpu_bp_line
+            )
+        )
+        self.assertTrue(cpu_target_second_kernel_bp_by_file_line.IsValid())
 
         self.runCmd(f"b {cpu_bp_line}")
         self.runCmd(f"b {gpu_bp_line}")
@@ -62,11 +73,21 @@ class TestNVGPUShadowFunctions(NVGPUTestCaseBase):
         cpu_target_kernel_bp_by_name_after_gpu_target = (
             self.cpu_target.BreakpointCreateByName("my_kernel")
         )
+        cpu_target_second_kernel_bp_by_name_after_gpu_target = (
+            self.cpu_target.BreakpointCreateByName("my_other_kernel")
+        )
 
         # All locations of the kernel-name breakpoint should be disabled —
         # they all fell within the __device_stub_ shadow wrapper range.
         self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_name)
+        self.assertBreakpointLocationsDisabled(cpu_target_second_kernel_bp_by_name)
         self.assertBreakpointLocationsDisabled(cpu_target_kernel_bp_by_file_line)
         self.assertBreakpointLocationsDisabled(
+            cpu_target_second_kernel_bp_by_file_line
+        )
+        self.assertBreakpointLocationsDisabled(
             cpu_target_kernel_bp_by_name_after_gpu_target
+        )
+        self.assertBreakpointLocationsDisabled(
+            cpu_target_second_kernel_bp_by_name_after_gpu_target
         )
