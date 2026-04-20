@@ -420,8 +420,17 @@ public:
     return;
   }
 
-  /// TODO(toyang): add docs here
-  /// Return true if the bp location has been modified?
+  /// Give the platform a chance to adjust a native target breakpoint location.
+  ///
+  /// This hook is used by targets that have associated plugin-managed targets,
+  /// such as GPU targets paired with a native CPU target. The platform can
+  /// inspect the resolved native breakpoint location and mutate it when the
+  /// platform has a better target-specific match. A typical use is disabling a
+  /// CPU-side trampoline or launch-stub breakpoint location when the
+  /// corresponding GPU breakpoint should be preferred instead.
+  ///
+  /// \return
+  ///     Returns \b true if \a bp_loc was modified, \b false otherwise.
   virtual bool HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
     return false;
   }

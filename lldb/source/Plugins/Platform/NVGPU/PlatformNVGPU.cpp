@@ -53,7 +53,7 @@ enum {
 
 constexpr llvm::StringLiteral kDeviceStubPrefix = "__device_stub_";
 
-static ConstString GetConcreteOwningMangledName(const SymbolContext &sc) {
+ConstString GetConcreteOwningMangledName(const SymbolContext &sc) {
   if (sc.function)
     return sc.function->GetMangled().GetMangledName();
 
@@ -63,8 +63,7 @@ static ConstString GetConcreteOwningMangledName(const SymbolContext &sc) {
   return {};
 }
 
-static bool HasDeviceStubSymbol(const ModuleSP &module_sp,
-                                ConstString mangled_name) {
+bool HasDeviceStubSymbol(const ModuleSP &module_sp, ConstString mangled_name) {
   Log *log = GetLog(LLDBLog::Breakpoints);
   if (!module_sp || !mangled_name)
     return false;
@@ -110,6 +109,21 @@ static bool HasDeviceStubSymbol(const ModuleSP &module_sp,
              __FUNCTION__, sc_list.GetSize(), stub_name);
   }
   return true;
+}
+bool IsShadowFunction(const SymbolContext &candidate_sc) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+
+  if (!candidate_sc.module_sp)
+    return false;
+
+  ConstString function_name = GetConcreteOwningMangledName(candidate_sc);
+  if (!function_name)
+    return false;
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: searching for device stub corresponding to {1}",
+           __FUNCTION__, function_name.GetStringRef());
+  return HasDeviceStubSymbol(candidate_sc.module_sp, function_name);
 }
 } // namespace
 
@@ -339,21 +353,6 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
 
   value.AppendDataToHostBuffer(hi_half_value);
   return llvm::Error::success();
-}
-
-static bool IsShadowFunction(const SymbolContext &candidate_sc) {
-  Log *log = GetLog(LLDBLog::Breakpoints);
-
-  if (!candidate_sc.module_sp)
-    return false;
-
-  ConstString function_name = GetConcreteOwningMangledName(candidate_sc);
-  if (!function_name)
-    return false;
-
-  LLDB_LOG(log, "PlatformNVGPU::{0}: searching for device stub corresponding to {1}",
-           __FUNCTION__, function_name.GetStringRef());
-  return HasDeviceStubSymbol(candidate_sc.module_sp, function_name);
 }
 
 bool PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
