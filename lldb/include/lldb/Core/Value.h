@@ -90,8 +90,8 @@ public:
   void SetValueType(ValueType value_type) {
     if ((value_type == ValueType::LoadAddress ||
          value_type == ValueType::FileAddress) &&
-        !m_addr_space_id.has_value()) {
-      m_addr_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
+        !m_address_space_id.has_value()) {
+      m_address_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
     }
     m_value_type = value_type;
   }
@@ -100,7 +100,7 @@ public:
                        ExecutionContext *exe_ctx);
 
   std::optional<lldb::addr_space_t> GetAddressSpace() const {
-    return m_addr_space_id;
+    return m_address_space_id;
   }
 
   void ClearContext() {
@@ -177,10 +177,10 @@ public:
   static ValueType GetValueTypeFromAddressType(AddressType address_type);
 
   void SetAddressSpaceId(uint64_t address_space_id) {
-    m_addr_space_id = address_space_id;
+    m_address_space_id = address_space_id;
   }
 
-  std::optional<uint64_t> GetAddressSpaceId() { return m_addr_space_id; }
+  std::optional<uint64_t> GetAddressSpaceId() { return m_address_space_id; }
 
 protected:
   /// Represents a value, which can be a scalar, a load address, a file address,
