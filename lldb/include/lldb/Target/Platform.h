@@ -429,11 +429,7 @@ public:
   /// CPU-side trampoline or launch-stub breakpoint location when the
   /// corresponding GPU breakpoint should be preferred instead.
   ///
-  /// \return
-  ///     Returns \b true if \a bp_loc was modified, \b false otherwise.
-  virtual bool HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
-    return false;
-  }
+  virtual void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {}
 
   /// Attach to an existing process by process name.
   ///

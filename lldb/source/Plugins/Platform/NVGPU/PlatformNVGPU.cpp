@@ -355,18 +355,18 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
   return llvm::Error::success();
 }
 
-bool PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
+void PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
   Log *log = GetLog(LLDBLog::Breakpoints);
 
   // No need to re-disable an already-disabled breakpoint location.
   if (!bp_loc.IsEnabled())
-      return false;
+    return;
 
   SymbolContext sc;
   bp_loc.GetAddress().CalculateSymbolContext(
       &sc, lldb::eSymbolContextFunction | lldb::eSymbolContextSymbol);
   if (!IsShadowFunction(sc))
-    return false;
+    return;
 
   if (llvm::Error err = bp_loc.SetEnabled(false))
     LLDB_LOG_ERROR(log, std::move(err),
@@ -376,7 +376,6 @@ bool PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
            "PlatformNVGPU::{0} disabling native breakpoint "
            "location (load_addr = 0x{1:x}) for GPU platform '{2}'",
            __FUNCTION__, bp_loc.GetLoadAddress(), GetName());
-  return true;
 }
 
 ///   The PTX to SASS register map table is made of a series of entries,

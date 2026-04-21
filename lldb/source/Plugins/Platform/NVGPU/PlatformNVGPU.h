@@ -99,7 +99,7 @@ public:
   /// Check if the native breakpoint location is within a "shadow function", a
   /// trampoline function that wraps around a `__device_stub` call to a GPU
   /// kernel.
-  bool HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) override;
+  void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) override;
 
 private:
   using ShadowFunctionRangeMap =
