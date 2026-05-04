@@ -8,18 +8,21 @@
 #include "ThreadMockGPU.h"
 #include "ProcessMockGPU.h"
 
+#include "lldb/Utility/RegisterValue.h"
+
 using namespace lldb_private;
 using namespace lldb_server;
 
 ThreadMockGPU::ThreadMockGPU(ProcessMockGPU &process, lldb::tid_t tid)
     : NativeThreadProtocol(process, tid), m_reg_context(*this) {
-  m_stop_info.reason = lldb::eStopReasonTrace; // lldb::eStopReasonDynamicLoader;
+  m_state = lldb::eStateStopped;
+  m_stop_info.reason = lldb::eStopReasonTrace;
 }
 
 // NativeThreadProtocol Interface
 std::string ThreadMockGPU::GetName() { return "Mock GPU Thread Name"; }
 
-lldb::StateType ThreadMockGPU::GetState() { return lldb::eStateStopped; }
+lldb::StateType ThreadMockGPU::GetState() { return m_state; }
 
 bool ThreadMockGPU::GetStopReason(ThreadStopInfo &stop_info,
                                   std::string &description) {
@@ -51,4 +54,24 @@ ProcessMockGPU &ThreadMockGPU::GetProcess() {
 
 const ProcessMockGPU &ThreadMockGPU::GetProcess() const {
   return static_cast<const ProcessMockGPU &>(m_process);
+}
+
+void ThreadMockGPU::SetStoppedByBreakpoint(lldb::addr_t bp_addr) {
+  m_state = lldb::eStateStopped;
+  m_stop_info.reason = lldb::eStopReasonBreakpoint;
+  m_stop_info.signo = SIGTRAP;
+  // Update PC register to the breakpoint address.
+  // PC is register index 10 (LLDB_PC in RegisterContextMockGPU.cpp).
+  const RegisterInfo *pc_info = m_reg_context.GetRegisterInfoAtIndex(10);
+  if (pc_info) {
+    RegisterValue pc_val;
+    pc_val.SetUInt64(bp_addr);
+    m_reg_context.WriteRegister(pc_info, pc_val);
+  }
+}
+
+void ThreadMockGPU::SetStoppedByTrace() {
+  m_state = lldb::eStateStopped;
+  m_stop_info.reason = lldb::eStopReasonTrace;
+  m_stop_info.signo = SIGTRAP;
 }
