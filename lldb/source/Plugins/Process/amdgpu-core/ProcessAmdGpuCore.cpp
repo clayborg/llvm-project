@@ -335,11 +335,24 @@ bool ProcessAmdGpuCore::initRocm() {
   }
 
   amd_dbgapi_architecture_id_t architecture_id;
-  // TODO: do not hardcode the device id
-  status = amd_dbgapi_get_architecture(0x04C, &architecture_id);
+  size_t agent_count = 0;
+  amd_dbgapi_agent_id_t *agents = nullptr;
+  status = amd_dbgapi_process_agent_list(m_gpu_pid, &agent_count, &agents,
+                                         nullptr);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS || agent_count == 0) {
+    if (agents)
+      free(agents);
+    LLDB_LOGF(GetLog(LLDBLog::Process),
+              agent_count == 0 ? "No GPU agents found"
+                               : "Failed to enumerate GPU agents");
+    return false;
+  }
+  status = amd_dbgapi_agent_get_info(agents[0],
+                                     AMD_DBGAPI_AGENT_INFO_ARCHITECTURE,
+                                     sizeof(architecture_id), &architecture_id);
+  free(agents);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    // Handle error
-    LLDB_LOGF(GetLog(LLDBLog::Process), "amd_dbgapi_get_architecture failed");
+    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to get agent architecture");
     return false;
   }
   m_architecture_id = architecture_id;
