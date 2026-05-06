@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "GpuModuleManager.h"
+#include "lldb/Utility/AmdGpuStopReason.h"
 #include "gtest/gtest.h"
 
 using namespace lldb_private;
@@ -249,4 +250,64 @@ TEST_F(GpuModuleManagerTest, TestChangedListLoadUnloadSameObject) {
       WithState(obj, CodeObject::State::Loaded),
   };
   ASSERT_EQ(changed, GetChangedCodeObjects());
+}
+
+TEST(AmdGpuStopReasonTest, ExceptionStopReasonsHaveDescriptions) {
+  struct TestCase {
+    amd_dbgapi_wave_stop_reasons_t stop_reason;
+    const char *description;
+  };
+
+  constexpr TestCase TestCases[] = {
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_INPUT_DENORMAL,
+       "Floating-point input denormal"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_DIVIDE_BY_0,
+       "Floating-point divide by zero"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_OVERFLOW, "Floating-point overflow"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_UNDERFLOW, "Floating-point underflow"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_INEXACT, "Floating-point inexact result"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FP_INVALID_OPERATION,
+       "Floating-point invalid operation"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_INT_DIVIDE_BY_0, "Integer divide by zero"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_MEMORY_VIOLATION, "Memory access violation"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_ADDRESS_ERROR,
+       "Address error (address out of range)"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_ILLEGAL_INSTRUCTION, "Illegal instruction"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_ECC_ERROR, "Unrecoverable ECC error"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_FATAL_HALT, "Hardware fatal halt"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_ASSERT_TRAP, "Assert trap"},
+      {AMD_DBGAPI_WAVE_STOP_REASON_TRAP, "Trap instruction"},
+  };
+
+  for (const TestCase &test_case : TestCases) {
+    SCOPED_TRACE(test_case.description);
+
+    std::string description = "stale description";
+    EXPECT_EQ(GetLldbStopReasonForDbgApiStopReason(test_case.stop_reason,
+                                                   &description),
+              lldb::eStopReasonException);
+    EXPECT_EQ(description, test_case.description);
+  }
+}
+
+TEST(AmdGpuStopReasonTest, ExceptionTakesPriorityOverBreakpointAndStep) {
+  std::string description;
+  auto stop_reason = static_cast<amd_dbgapi_wave_stop_reasons_t>(
+      AMD_DBGAPI_WAVE_STOP_REASON_MEMORY_VIOLATION |
+      AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT |
+      AMD_DBGAPI_WAVE_STOP_REASON_SINGLE_STEP |
+      AMD_DBGAPI_WAVE_STOP_REASON_DEBUG_TRAP);
+
+  EXPECT_EQ(GetLldbStopReasonForDbgApiStopReason(stop_reason, &description),
+            lldb::eStopReasonException);
+  EXPECT_EQ(description, "Memory access violation");
+}
+
+TEST(AmdGpuStopReasonTest, NonExceptionStopReasonsClearDescriptions) {
+  std::string description = "stale description";
+
+  EXPECT_EQ(GetLldbStopReasonForDbgApiStopReason(
+                AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT, &description),
+            lldb::eStopReasonBreakpoint);
+  EXPECT_TRUE(description.empty());
 }
