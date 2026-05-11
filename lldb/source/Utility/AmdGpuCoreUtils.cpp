@@ -77,3 +77,33 @@ lldb_private::ParseLibraryInfo(const AmdGpuCodeObject &code_object) {
 
   return lib_info;
 }
+
+llvm::Expected<amd_dbgapi_architecture_id_t>
+lldb_private::QueryAmdGpuArchitectureFromFirstAgent(
+    amd_dbgapi_process_id_t gpu_pid) {
+  size_t agent_count = 0;
+  amd_dbgapi_agent_id_t *agents = nullptr;
+  amd_dbgapi_status_t status =
+      amd_dbgapi_process_agent_list(gpu_pid, &agent_count, &agents, nullptr);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS || agent_count == 0) {
+    if (agents)
+      free(agents);
+    if (agent_count == 0)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "No GPU agents found");
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "Failed to enumerate GPU agents (status=%d)",
+                                   status);
+  }
+
+  amd_dbgapi_architecture_id_t architecture_id;
+  status = amd_dbgapi_agent_get_info(agents[0],
+                                     AMD_DBGAPI_AGENT_INFO_ARCHITECTURE,
+                                     sizeof(architecture_id), &architecture_id);
+  free(agents);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "Failed to get agent architecture (status=%d)", status);
+  return architecture_id;
+}

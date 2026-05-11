@@ -334,28 +334,13 @@ bool ProcessAmdGpuCore::initRocm() {
     return false;
   }
 
-  amd_dbgapi_architecture_id_t architecture_id;
-  size_t agent_count = 0;
-  amd_dbgapi_agent_id_t *agents = nullptr;
-  status = amd_dbgapi_process_agent_list(m_gpu_pid, &agent_count, &agents,
-                                         nullptr);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS || agent_count == 0) {
-    if (agents)
-      free(agents);
-    LLDB_LOGF(GetLog(LLDBLog::Process),
-              agent_count == 0 ? "No GPU agents found"
-                               : "Failed to enumerate GPU agents");
+  llvm::Expected<amd_dbgapi_architecture_id_t> arch_or_err =
+      QueryAmdGpuArchitectureFromFirstAgent(m_gpu_pid);
+  if (!arch_or_err) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Process), arch_or_err.takeError(), "{0}");
     return false;
   }
-  status = amd_dbgapi_agent_get_info(agents[0],
-                                     AMD_DBGAPI_AGENT_INFO_ARCHITECTURE,
-                                     sizeof(architecture_id), &architecture_id);
-  free(agents);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    LLDB_LOGF(GetLog(LLDBLog::Process), "Failed to get agent architecture");
-    return false;
-  }
-  m_architecture_id = architecture_id;
+  m_architecture_id = *arch_or_err;
 
   m_address_spaces.push_back({"generic", (uint64_t)DW_ASPACE_AMDGPU::generic,
                               /*is_thread_specific=*/true});

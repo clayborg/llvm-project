@@ -23,6 +23,13 @@ if (NOT HAVE_CXX_ATOMICS64_WITHOUT_LIB )
     list(APPEND LLDB_SYSTEM_LIBS atomic)
 endif()
 
+if(LLDB_ENABLE_AMDGPU_PLUGIN)
+  set(amd-dbgapi_DIR "${ROCM_PATH}/lib/cmake/amd-dbgapi"
+      CACHE PATH "Path to amd-dbgapi cmake config" FORCE)
+  find_package(amd-dbgapi REQUIRED CONFIG)
+  list(APPEND LLDB_SYSTEM_LIBS amd-dbgapi)
+endif()
+
 add_lldb_library(lldbUtility NO_INTERNAL_DEPENDENCIES
   AddressableBits.cpp
   AddressSpace.cpp

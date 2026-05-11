@@ -11,6 +11,8 @@
 
 #include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+#include <amd-dbgapi/amd-dbgapi.h>
 #include <optional>
 #include <string>
 
@@ -55,6 +57,16 @@ struct AmdGpuCodeObject {
 ///     parsed, or std::nullopt if parsing failed.
 std::optional<GPUDynamicLoaderLibraryInfo>
 ParseLibraryInfo(const AmdGpuCodeObject &code_object);
+
+/// Query the GPU architecture id from the first attached agent of an AMD
+/// dbgapi process. On success returns the architecture id; on failure returns
+/// an llvm::Error whose message describes the failure (and includes the
+/// underlying amd_dbgapi status code where applicable).
+///
+/// \param[in] gpu_pid
+///     The AMD dbgapi process id obtained from amd_dbgapi_process_attach.
+llvm::Expected<amd_dbgapi_architecture_id_t>
+QueryAmdGpuArchitectureFromFirstAgent(amd_dbgapi_process_id_t gpu_pid);
 
 } // namespace lldb_private
 
