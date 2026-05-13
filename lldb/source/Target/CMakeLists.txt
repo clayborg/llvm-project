@@ -9,6 +9,7 @@ lldb_tablegen(TargetPropertiesEnum.inc -gen-lldb-property-enum-defs
 # TODO: Add property `NO_PLUGIN_DEPENDENCIES` to lldbTarget
 add_lldb_library(lldbTarget
   ABI.cpp
+  AmdGpuSymbolLoader.cpp
   AssertFrameRecognizer.cpp
   DynamicRegisterInfo.cpp
   CoreFileMemoryRanges.cpp

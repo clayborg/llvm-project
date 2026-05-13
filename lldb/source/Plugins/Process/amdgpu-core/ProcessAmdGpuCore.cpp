@@ -14,6 +14,7 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Target/AmdGpuSymbolLoader.h"
 #include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "lldb/Utility/DataBufferHeap.h"
@@ -625,6 +626,7 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
           loaded_modules.AppendIfNeeded(module_sp);
         }
       }
+      LoadAmdGpuCodeObjectSymbols(target, module_sp);
     }
 
     s_dbgapi_callbacks.deallocate_memory(uri_bytes);
