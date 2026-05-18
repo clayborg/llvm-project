@@ -1,4 +1,4 @@
-//===-- ProcessNVGPUCore.h --------------------------------------*- C++ -*-===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -9,17 +9,19 @@
 /// \file
 /// Process plugin for NVIDIA GPU core files.
 ///
-/// This plugin handles standalone CUDA core files (ET_CORE + EM_CUDA) that
-/// contain GPU execution state. It indexes ELF sections via a SectionTree
-/// and lazily parses table entries and register data on demand.
+/// This plugin handles standalone NVGPU corefiles (ET_CORE + EM_CUDA) that
+/// contain GPU execution state. It walks the synthetic GPU hierarchy that
+/// `ObjectFileELF::CreateSections` builds for NVGPU corefiles
+/// (`nvgpucore` root -> `dev0` -> `sm0` -> `cta0` -> `warp0` -> `lane0` ->
+/// per-lane leaves) and creates one `ThreadNVGPUCore` per active GPU lane.
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
 
-#include "NVGPUCoreData.h"
 #include "lldb/Target/PostMortemProcess.h"
+#include "lldb/lldb-forward.h"
 
 class ObjectFileELF;
 
@@ -33,7 +35,7 @@ public:
 
   static lldb::ProcessSP
   CreateInstance(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
-                const lldb_private::FileSpec *crash_file, bool can_connect);
+                 const lldb_private::FileSpec *crash_file, bool can_connect);
 
   ProcessNVGPUCore(lldb::TargetSP target_sp, lldb::ListenerSP listener_sp,
                    const lldb_private::FileSpec &core_file);
@@ -76,11 +78,6 @@ public:
                       const lldb_private::AddressSpaceInfo &info, void *buf,
                       size_t size, lldb_private::Status &error) override;
 
-  lldb_private::NVGPUCoreData &GetCoreData() { return m_core_data; }
-  const lldb_private::NVGPUCoreData &GetCoreData() const {
-    return m_core_data;
-  }
-
   ObjectFileELF *GetCoreObjectFile() const;
 
 protected:
@@ -91,8 +88,19 @@ protected:
 private:
   llvm::Error LoadCubinModules();
 
+  /// Find the nvgpu-global-memory or nvgpu-managed-memory leaf section
+  /// under the nvgpucore root that contains the given GPU virtual address.
+  ///
+  /// \param[in] addr
+  ///     The GPU virtual address to locate.
+  ///
+  /// \return
+  ///     The containing memory leaf section, or null if no such section
+  ///     exists.
+  lldb::SectionSP FindGlobalMemorySection(lldb::addr_t addr) const;
+
   lldb::ModuleSP m_core_module_sp;
-  lldb_private::NVGPUCoreData m_core_data;
+  lldb::SectionSP m_root_sp;
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
 };
 

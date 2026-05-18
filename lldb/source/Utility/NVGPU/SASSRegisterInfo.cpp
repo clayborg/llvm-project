@@ -1,4 +1,4 @@
-//===-- SASSRegisterInfo.cpp -----------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -15,41 +15,27 @@
 using namespace lldb;
 using namespace lldb_private;
 
-namespace {
+// All `byte_offset` values below are computed against `sass::RegisterLayout`
+// (declared in SASSRegisterInfo.h); consumers index a buffer of that type
+// using each `RegisterInfo`'s `byte_offset` / `byte_size`.
 
-// Canonical storage layout for computing byte_offset values in RegisterInfo.
-// This layout matches the server-side ThreadRegistersValues struct so that
-// byte offsets are consistent between live debugging and post-mortem analysis.
-struct SASSRegisterLayout {
-  uint64_t PC;
-  uint64_t errorPC;
-  uint32_t regular[sass::kNumRRegs];
-  uint32_t regular_zero;
-  uint32_t predicate[sass::kNumPRegs];
-  uint32_t uniform[sass::kNumURRegs];
-  uint32_t uniform_zero;
-  uint32_t uniform_predicate[sass::kNumUPRegs];
-};
-
-} // anonymous namespace
-
-#define REG_OFFSET(Reg) offsetof(SASSRegisterLayout, Reg)
+#define REG_OFFSET(Reg) offsetof(sass::RegisterLayout, Reg)
 
 #define R_REG_OFFSET(Index)                                                    \
-  offsetof(SASSRegisterLayout, regular) +                                      \
-      (Index) * sizeof(SASSRegisterLayout::regular[0])
+  offsetof(sass::RegisterLayout, regular) +                                    \
+      (Index) * sizeof(sass::RegisterLayout::regular[0])
 
 #define P_REG_OFFSET(Index)                                                    \
-  offsetof(SASSRegisterLayout, predicate) +                                    \
-      (Index) * sizeof(SASSRegisterLayout::predicate[0])
+  offsetof(sass::RegisterLayout, predicate) +                                  \
+      (Index) * sizeof(sass::RegisterLayout::predicate[0])
 
 #define UR_REG_OFFSET(Index)                                                   \
-  offsetof(SASSRegisterLayout, uniform) +                                      \
-      (Index) * sizeof(SASSRegisterLayout::uniform[0])
+  offsetof(sass::RegisterLayout, uniform) +                                    \
+      (Index) * sizeof(sass::RegisterLayout::uniform[0])
 
 #define UP_REG_OFFSET(Index)                                                   \
-  offsetof(SASSRegisterLayout, uniform_predicate) +                            \
-      (Index) * sizeof(SASSRegisterLayout::uniform_predicate[0])
+  offsetof(sass::RegisterLayout, uniform_predicate) +                          \
+      (Index) * sizeof(sass::RegisterLayout::uniform_predicate[0])
 
 #include "RegisterDefinitionsSASS.inc"
 
