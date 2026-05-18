@@ -1,4 +1,4 @@
-//===-- ThreadNVGPUCore.cpp ------------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,10 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "ThreadNVGPUCore.h"
+#include "CudbgEntryParser.h"
 #include "ProcessNVGPUCore.h"
 #include "RegisterContextNVGPUCore.h"
 
-#include "cudadebugger.h"
+#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
+#include "lldb/Core/Section.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
@@ -23,41 +25,64 @@ using namespace lldb;
 using namespace lldb_private;
 
 ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
-                                 const NVGPULaneCoords &coords)
-    : Thread(process, tid), m_coords(coords) {
-  // Walk device -> SM -> CTA -> warp -> lane. Bail on any out-of-range
-  // coord; later pointers stay null. This establishes the invariant that
-  // a non-null later pointer implies all earlier ones are non-null.
+                                 SectionSP lane_section_sp,
+                                 uint32_t lane_idx)
+    : Thread(process, tid),
+      m_lane_section_sp(std::move(lane_section_sp)),
+      m_lane_idx(lane_idx) {
+  // Eagerly decode the CTA and lane rows once at construction time so:
+  //   * `m_name` (used by `GetName()`) is a cached string, not a re-decode
+  //     of CTA+lane on every call to LLDB's stop-reason printers.
+  //   * `m_attributed_exception` (used by `GetAttributedException()` and
+  //     `CalculateStopInfo`) is a cached field. `ComputeAttributedException`
+  //     decodes the warp (and on cascade, the SM) row internally.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
-  NVGPUCoreData &core_data = nvgpu_process.GetCoreData();
   ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
+  auto cta_or = nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(
+      GetCTASection(), core);
+  auto lane_or = nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(
+      m_lane_section_sp, core);
 
-  if (!core || m_coords.dev_idx >= core_data.GetNumDevices())
-    return;
-  m_dev = &core_data.GetDevice(m_coords.dev_idx);
+  if (cta_or && lane_or)
+    m_name = nvgpu_core::FormatThreadName(*cta_or, *lane_or);
+  if (m_name.empty())
+    m_name = "NVIDIA GPU Thread";
 
-  llvm::ArrayRef<SMData> sms = m_dev->GetSMs(core);
-  if (m_coords.sm_idx >= sms.size())
-    return;
-  m_sm = &sms[m_coords.sm_idx];
+  if (lane_or)
+    m_attributed_exception = nvgpu_core::ComputeAttributedException(
+        *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
 
-  llvm::ArrayRef<CTAData> ctas = m_sm->GetCTAs(core);
-  if (m_coords.cta_idx >= ctas.size())
-    return;
-  m_cta = &ctas[m_coords.cta_idx];
-
-  llvm::ArrayRef<WarpData> warps = m_cta->GetWarps(core);
-  if (m_coords.warp_idx >= warps.size())
-    return;
-  m_warp = &warps[m_coords.warp_idx];
-
-  llvm::ArrayRef<LaneData> lanes = m_warp->GetLanes(core);
-  if (m_coords.lane_idx >= lanes.size())
-    return;
-  m_lane = &lanes[m_coords.lane_idx];
+  Log *log = GetLog(LLDBLog::Process);
+  if (!cta_or)
+    LLDB_LOG_ERROR(log, cta_or.takeError(),
+                   "Failed to decode GPU CTA data for thread {1}: {0}", tid);
+  if (!lane_or)
+    LLDB_LOG_ERROR(log, lane_or.takeError(),
+                   "Failed to decode GPU lane data for thread {1}: {0}", tid);
 }
 
 ThreadNVGPUCore::~ThreadNVGPUCore() { DestroyThread(); }
+
+// The 5-deep parent chain (lane -> warp -> cta -> sm -> device -> nvgpucore
+// root) is guaranteed intact by `ObjectFileELF::BuildNVGPUSectionList`: a
+// ThreadNVGPUCore can only be constructed from a lane container that the
+// builder produced, and every container the builder produces has all of its
+// ancestors.
+SectionSP ThreadNVGPUCore::GetWarpSection() const {
+  return m_lane_section_sp->GetParent();
+}
+
+SectionSP ThreadNVGPUCore::GetCTASection() const {
+  return GetWarpSection()->GetParent();
+}
+
+SectionSP ThreadNVGPUCore::GetSMSection() const {
+  return GetCTASection()->GetParent();
+}
+
+SectionSP ThreadNVGPUCore::GetDeviceSection() const {
+  return GetSMSection()->GetParent();
+}
 
 RegisterContextSP ThreadNVGPUCore::GetRegisterContext() {
   if (!m_reg_context_sp)
@@ -78,28 +103,7 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
       *this, nvgpu_process->GetCoreObjectFile());
 }
 
-const char *ThreadNVGPUCore::GetName() {
-  if (m_name.empty()) {
-    if (m_lane) // m_lane non-null implies m_cta non-null
-      m_name = nvgpu::FormatThreadName(
-          m_cta->GetEntry().blockIdxX, m_cta->GetEntry().blockIdxY,
-          m_cta->GetEntry().blockIdxZ, m_lane->GetEntry().threadIdxX,
-          m_lane->GetEntry().threadIdxY, m_lane->GetEntry().threadIdxZ);
-    if (m_name.empty())
-      m_name = "NVIDIA GPU Thread";
-  }
-  return m_name.c_str();
-}
-
-uint32_t ThreadNVGPUCore::GetAttributedException() const {
-  // Policy documented on the declaration in ThreadNVGPUCore.h.
-  if (m_lane && m_lane->GetEntry().exception != 0)
-    return m_lane->GetEntry().exception;
-  if (m_warp && m_warp->GetEntry().errorPCValid &&
-      (m_warp->GetEntry().activeLanesMask & (1u << m_coords.lane_idx)))
-    return m_sm->GetEntry().exception; // m_warp non-null implies m_sm
-  return 0;
-}
+const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }
 
 bool ThreadNVGPUCore::CalculateStopInfo() {
   CUDBGException_t exc =
