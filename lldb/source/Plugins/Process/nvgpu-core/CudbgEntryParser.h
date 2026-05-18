@@ -48,25 +48,29 @@ namespace lldb_private::nvgpu_core {
 
 /// One row of a nvgpu-device-table.
 struct DeviceEntry : CudbgDeviceTableEntry {
-  static llvm::Expected<DeviceEntry> Decode(const DataExtractor &data,
-                                            uint64_t entry_size);
+  static llvm::Expected<DeviceEntry>
+  Decode(const DataExtractor &data, lldb::offset_t *offset_ptr,
+         uint64_t entry_size);
 };
 
 /// One row of a nvgpu-sm-table.
 struct SMEntry : CudbgSmTableEntry {
   static llvm::Expected<SMEntry> Decode(const DataExtractor &data,
+                                        lldb::offset_t *offset_ptr,
                                         uint64_t entry_size);
 };
 
 /// One row of a nvgpu-cta-table.
 struct CTAEntry : CudbgCTATableEntry {
   static llvm::Expected<CTAEntry> Decode(const DataExtractor &data,
+                                         lldb::offset_t *offset_ptr,
                                          uint64_t entry_size);
 };
 
 /// One row of a nvgpu-warp-table.
 struct WarpEntry : CudbgWarpTableEntry {
   static llvm::Expected<WarpEntry> Decode(const DataExtractor &data,
+                                          lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
 
   /// True if `lane_idx` was a valid lane at dump time (i.e. had real
@@ -88,6 +92,7 @@ struct WarpEntry : CudbgWarpTableEntry {
 /// One row of a nvgpu-lane (thread) table.
 struct LaneEntry : CudbgThreadTableEntry {
   static llvm::Expected<LaneEntry> Decode(const DataExtractor &data,
+                                          lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
 };
 
@@ -101,7 +106,8 @@ llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
     return llvm::createStringError("missing section or core object file");
   DataExtractor data;
   core->ReadSectionData(section_sp.get(), data);
-  return EntryT::Decode(data, section_sp->GetFileSize());
+  lldb::offset_t off = 0;
+  return EntryT::Decode(data, &off, section_sp->GetFileSize());
 }
 
 /// Compose a human-readable thread name from a CTA + lane row pair, of
