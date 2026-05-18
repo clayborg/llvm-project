@@ -1212,30 +1212,36 @@ AddressClass ObjectFileMachO::GetAddressClass(lldb::addr_t file_addr) {
         case eSectionTypeELFDynamicSymbols:
         case eSectionTypeELFRelocationEntries:
         case eSectionTypeELFDynamicLinkInfo:
-        // [NVIDIA] CUDA section types for GetAddressClass.
-        case eSectionTypeCUDAGlobalMemory:
-        case eSectionTypeCUDAManagedMemory:
-        case eSectionTypeCUDALocalMemory:
-        case eSectionTypeCUDASharedMemory:
-        case eSectionTypeCUDAParamMemory:
-        case eSectionTypeCUDARegisters:
-        case eSectionTypeCUDAPredicates:
-        case eSectionTypeCUDAUniformRegisters:
-        case eSectionTypeCUDAUniformPredicates:
-        case eSectionTypeCUDARelocatedImage:
-        case eSectionTypeCUDAUnrelocatedImage:
-        case eSectionTypeCUDABacktrace:
-        case eSectionTypeCUDADeviceTable:
-        case eSectionTypeCUDAContextTable:
-        case eSectionTypeCUDASmTable:
-        case eSectionTypeCUDAGridTable:
-        case eSectionTypeCUDACtaTable:
-        case eSectionTypeCUDAWarpTable:
-        case eSectionTypeCUDALaneTable:
-        case eSectionTypeCUDAModuleTable:
-        case eSectionTypeCUDAConstBankTable:
-        case eSectionTypeCUDAMetadata:
-        case eSectionTypeCUDAConvergenceBarrier:
+        // [NVIDIA] NVGPU section types
+        case eSectionTypeNVGPUGlobalMemory:
+        case eSectionTypeNVGPUManagedMemory:
+        case eSectionTypeNVGPULocalMemory:
+        case eSectionTypeNVGPUSharedMemory:
+        case eSectionTypeNVGPUParamMemory:
+        case eSectionTypeNVGPURegisters:
+        case eSectionTypeNVGPUPredicates:
+        case eSectionTypeNVGPUUniformRegisters:
+        case eSectionTypeNVGPUUniformPredicates:
+        case eSectionTypeNVGPURelocatedImage:
+        case eSectionTypeNVGPUUnrelocatedImage:
+        case eSectionTypeNVGPUBacktrace:
+        case eSectionTypeNVGPUDeviceTable:
+        case eSectionTypeNVGPUContextTable:
+        case eSectionTypeNVGPUSmTable:
+        case eSectionTypeNVGPUGridTable:
+        case eSectionTypeNVGPUCtaTable:
+        case eSectionTypeNVGPUWarpTable:
+        case eSectionTypeNVGPULaneTable:
+        case eSectionTypeNVGPUModuleTable:
+        case eSectionTypeNVGPUConstBankTable:
+        case eSectionTypeNVGPUMetadata:
+        case eSectionTypeNVGPUConvergenceBarrier:
+        case eSectionTypeNVGPURoot:
+        case eSectionTypeNVGPUDevice:
+        case eSectionTypeNVGPUSm:
+        case eSectionTypeNVGPUCta:
+        case eSectionTypeNVGPUWarp:
+        case eSectionTypeNVGPULane:
         case eSectionTypeOther:
           return AddressClass::eUnknown;
         }
