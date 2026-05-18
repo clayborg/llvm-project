@@ -111,6 +111,11 @@ ObjectFileELF *ProcessNVGPUCore::GetCoreObjectFile() const {
 
 Status ProcessNVGPUCore::DoLoadCore() {
   Target &target = GetTarget();
+  // Hardcoded because `ObjectFileELF::GetArchitecture()` currently returns
+  // the wrong arch for EM_CUDA: the ArchSpec table rows have no
+  // distinguishing `sub`, so the lookup silently picks the first row
+  // (32-bit `nvptx`), and `SetArchitecture`'s OS switch has no CUDA case,
+  // so vendor/OS stay unset.
   ArchSpec arch("nvptx64-nvidia-cuda");
   target.SetArchitecture(arch);
 
@@ -149,6 +154,8 @@ Status ProcessNVGPUCore::DoLoadCore() {
   // address-space-qualified reads through DoReadMemory(AddressSpec).
   m_address_spaces = nvgpu::GetAddressSpaceInfos();
 
+  // NVGPU corefiles don't carry a host process ID -- the file is GPU
+  // state, not Unix process state. Use 1 to match the live NVGPU debugger.
   SetID(1);
   return Status();
 }
@@ -180,19 +187,28 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
     module_spec.SetObjectOffset(cubin_offset);
     module_spec.SetObjectSize(cubin_size);
 
-    ModuleSP module_sp = target.GetOrCreateModule(module_spec, /*notify=*/true);
-    if (module_sp) {
-      bool changed = false;
-      module_sp->SetLoadAddress(target, 0, /*value_is_offset=*/true, changed);
-      if (changed)
-        loaded_modules.AppendIfNeeded(module_sp);
-
-      if (PlatformSP platform_sp = target.GetPlatform())
-        platform_sp->RecordLoadedModule(module_sp, target);
-
-      LLDB_LOG(log, "  loaded cubin module {0} at offset {1:x} ({2} bytes)",
-               cubin_count, cubin_offset, cubin_size);
+    Status error;
+    ModuleSP module_sp =
+        target.GetOrCreateModule(module_spec, /*notify=*/true, &error);
+    if (!module_sp) {
+      LLDB_LOG(log,
+               "  failed to load cubin module {0} ({1}) at offset {2:x} "
+               "({3} bytes): {4}; core file may be truncated",
+               cubin_count, cubin->GetName(), cubin_offset, cubin_size, error);
+      ++cubin_count;
+      continue;
     }
+
+    bool changed = false;
+    module_sp->SetLoadAddress(target, 0, /*value_is_offset=*/true, changed);
+    if (changed)
+      loaded_modules.AppendIfNeeded(module_sp);
+
+    if (PlatformSP platform_sp = target.GetPlatform())
+      platform_sp->RecordLoadedModule(module_sp, target);
+
+    LLDB_LOG(log, "  loaded cubin module {0} ({1}) at offset {2:x} ({3} bytes)",
+             cubin_count, cubin->GetName(), cubin_offset, cubin_size);
     ++cubin_count;
   }
 
@@ -260,8 +276,6 @@ SectionSP ProcessNVGPUCore::FindGlobalMemorySection(addr_t addr) const {
 size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
                                       Status &error) {
   ObjectFile *core_objfile = GetCoreObjectFile();
-  if (!core_objfile)
-    return 0;
 
   SectionSP region = FindGlobalMemorySection(addr);
   if (!region) {
@@ -309,8 +323,6 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
            addr, info.name, size);
 
   ObjectFileELF *core = GetCoreObjectFile();
-  if (!core)
-    return 0;
 
   // Get the thread from the AddressSpec. An absent thread is the API's
   // expected signal (not all callers attach one), so we don't surface it
