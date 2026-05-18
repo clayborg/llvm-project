@@ -74,7 +74,7 @@ lldb::ProcessSP ProcessElfCore::CreateInstance(lldb::TargetSP target_sp,
         // ELF vmcore that needs to be handled via FreeBSDKernel plugin instead.
         if (elf_header.e_ident[7] == 0xFF && elf_header.e_version == 0)
           return process_sp;
-        // [NVIDIA] Skip CUDA GPU cores. Handled by ProcessNVGPUCore plugin.
+        // [NVIDIA] Skip NVGPU corefiles. Handled by ProcessNVGPUCore plugin.
         if (elf_header.e_type == llvm::ELF::ET_CORE &&
             elf_header.e_machine != llvm::ELF::EM_CUDA)
           process_sp = std::make_shared<ProcessElfCore>(target_sp, listener_sp,

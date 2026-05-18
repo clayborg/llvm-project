@@ -1,4 +1,4 @@
-//===-- RegisterContextNVGPUCore.cpp ---------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,8 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegisterContextNVGPUCore.h"
+#include "CudbgEntryParser.h"
+#include "SectionUtils.h"
 #include "ThreadNVGPUCore.h"
+
+#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
+#include "lldb/Core/Section.h"
 #include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
@@ -22,40 +28,73 @@ using namespace lldb_private;
 
 RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
                                                    ObjectFileELF *core)
-    : RegisterContext(thread, 0), m_core(core) {
-  // Borrow the pre-resolved hierarchy pointers from the owning thread.
-  // They outlive this RegisterContext: they point into NVGPUCoreData's
-  // lazy vectors, which are owned by the Process and never repopulated.
-  auto &nvgpu_thread = static_cast<ThreadNVGPUCore &>(thread);
-  m_warp = nvgpu_thread.GetWarp();
-  m_lane = nvgpu_thread.GetLane();
-
-  // If the thread didn't fully resolve a lane, leave m_num_* at zero; all
-  // ReadRegister bounds checks will then fail and reads return 0.
-  if (!m_core || !m_lane)
+    : RegisterContext(thread, 0) {
+  if (!core)
     return;
 
-  // m_warp and GetDevice() are guaranteed non-null here via the thread's
-  // nested-null invariant (m_lane => m_warp => ... => m_dev). Compute the
-  // register counts as the minimum of device-advertised and what the sections
-  // actually hold. After this, `idx < m_num_*` at every ReadRegister call
-  // site is the single authoritative bound: it implies both that the pointer
-  // is non-null and that the section has at least `(idx + 1) * 4` bytes.
-  const CudbgDeviceTableEntry &dev_entry = nvgpu_thread.GetDevice()->GetEntry();
-  auto clamp = [](uint32_t cap, const DataExtractor &data) {
-    return std::min<uint32_t>(cap, data.GetByteSize() / sizeof(uint32_t));
+  auto &gpu_thread = static_cast<ThreadNVGPUCore &>(thread);
+  SectionSP lane_sp = gpu_thread.GetLaneSection();
+  SectionSP warp_sp = gpu_thread.GetWarpSection();
+
+  Log *log = GetLog(LLDBLog::Process);
+
+  // Read lane / warp / device rows.
+  llvm::Expected<nvgpu_core::LaneEntry> lane_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(lane_sp, core);
+  llvm::Expected<nvgpu_core::WarpEntry> warp_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp_sp, core);
+  llvm::Expected<nvgpu_core::DeviceEntry> dev_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::DeviceEntry>(
+          gpu_thread.GetDeviceSection(), core);
+  if (!lane_or || !warp_or || !dev_or) {
+    if (!lane_or)
+      LLDB_LOG(log, "RegisterContextNVGPUCore: lane decode failed: {0}",
+               llvm::toString(lane_or.takeError()));
+    if (!warp_or)
+      LLDB_LOG(log, "RegisterContextNVGPUCore: warp decode failed: {0}",
+               llvm::toString(warp_or.takeError()));
+    if (!dev_or)
+      LLDB_LOG(log, "RegisterContextNVGPUCore: device decode failed: {0}",
+               llvm::toString(dev_or.takeError()));
+    return;
+  }
+
+  m_register_data.PC = lane_or->virtualPC;
+  m_register_data.errorPC = warp_or->errorPCValid ? warp_or->errorPC : 0;
+
+  // Fill each per-class slice of the canonical layout from its corresponding
+  // section, clamped to the device-advertised register count. The device row
+  // is the single authoritative bound; any extra section bytes (alignment
+  // slop, format-version-skew tail) are ignored, and any unfilled tail of
+  // the slice stays zero from value-init.
+  auto copy_class = [core](uint32_t *dst, size_t dst_capacity_words,
+                           uint32_t device_count, SectionSP section) {
+    if (!section)
+      return;
+    DataExtractor data;
+    core->ReadSectionData(section.get(), data);
+    const size_t section_words = data.GetByteSize() / sizeof(uint32_t);
+    const size_t n = std::min({static_cast<size_t>(device_count),
+                               section_words, dst_capacity_words});
+    if (n > 0)
+      data.CopyData(0, n * sizeof(uint32_t), dst);
   };
-  m_num_gp_regs = clamp(std::min(dev_entry.numRegsPerLane, sass::kNumRRegs),
-                        m_lane->GetRegisters(m_core));
-  m_num_pred_regs =
-      clamp(std::min(dev_entry.numPredicatesPrLane, sass::kNumPRegs),
-            m_lane->GetPredicates(m_core));
-  m_num_uniform_regs =
-      clamp(std::min(dev_entry.numUniformRegsPrWarp, sass::kNumURRegs),
-            m_warp->GetUniformRegisters(m_core));
-  m_num_uniform_pred_regs =
-      clamp(std::min(dev_entry.numUniformPredicatesPrWarp, sass::kNumUPRegs),
-            m_warp->GetUniformPredicates(m_core));
+
+  copy_class(m_register_data.regular, sass::kNumRRegs,
+             dev_or->numRegsPerLane,
+             nvgpu_core::FindChildByType(*lane_sp, eSectionTypeNVGPURegisters));
+  copy_class(m_register_data.predicate, sass::kNumPRegs,
+             dev_or->numPredicatesPrLane,
+             nvgpu_core::FindChildByType(*lane_sp,
+                                         eSectionTypeNVGPUPredicates));
+  copy_class(m_register_data.uniform, sass::kNumURRegs,
+             dev_or->numUniformRegsPrWarp,
+             nvgpu_core::FindChildByType(*warp_sp,
+                                         eSectionTypeNVGPUUniformRegisters));
+  copy_class(m_register_data.uniform_predicate, sass::kNumUPRegs,
+             dev_or->numUniformPredicatesPrWarp,
+             nvgpu_core::FindChildByType(*warp_sp,
+                                         eSectionTypeNVGPUUniformPredicates));
 }
 
 RegisterContextNVGPUCore::~RegisterContextNVGPUCore() = default;
@@ -93,108 +132,19 @@ bool RegisterContextNVGPUCore::ReadRegister(const RegisterInfo *reg_info,
     return false;
   }
 
-  uint32_t reg = reg_info->kinds[eRegisterKindLLDB];
+  // Every RegisterInfo from `sass::GetRegisterInfos()` has its `byte_offset`
+  // computed against `sass::RegisterLayout` -- which is exactly the layout
+  // of `m_register_data`. So a register read is a `byte_offset + byte_size`
+  // slice of that buffer, with no per-class dispatch.
+  const uint32_t offset = reg_info->byte_offset;
+  if (offset + reg_info->byte_size > sizeof(m_register_data))
+    return false;
 
-  if (reg == sass::LLDB_PC) {
-    reg_value.SetUInt64(m_lane ? m_lane->GetEntry().virtualPC : 0);
-    return true;
-  }
-  if (reg == sass::LLDB_ERROR_PC) {
-    uint64_t err_pc = 0;
-    if (m_warp && m_warp->GetEntry().errorPCValid)
-      err_pc = m_warp->GetEntry().errorPC;
-    reg_value.SetUInt64(err_pc);
-    return true;
-  }
-  // Ctor-side clamping makes `idx < m_num_*` imply the section has at least
-  // `(idx + 1) * 4` bytes, so GetU32_unchecked is safe at every call site.
-  if (reg == sass::LLDB_SP) {
-    uint32_t idx = sass::SASS_SP_REG;
-    uint32_t val = 0;
-    if (idx < m_num_gp_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_lane->GetRegisters(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-  if (reg == sass::LLDB_FP) {
-    uint32_t idx = sass::SASS_FP_REG;
-    uint32_t val = 0;
-    if (idx < m_num_gp_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_lane->GetRegisters(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-  if (reg == sass::LLDB_RA) {
-    uint32_t lo = sass::SASS_RA_REG_LO;
-    uint32_t hi = sass::SASS_RA_REG_HI;
-    uint64_t ra = 0;
-    if (lo < m_num_gp_regs && hi < m_num_gp_regs) {
-      const DataExtractor &regs = m_lane->GetRegisters(m_core);
-      offset_t off_hi = hi * sizeof(uint32_t);
-      offset_t off_lo = lo * sizeof(uint32_t);
-      ra = static_cast<uint64_t>(regs.GetU32_unchecked(&off_hi)) << 32 |
-           regs.GetU32_unchecked(&off_lo);
-    }
-    reg_value.SetUInt64(ra);
-    return true;
-  }
-  if (reg >= sass::LLDB_R0 && reg < sass::LLDB_R0 + sass::kNumRRegs) {
-    uint32_t idx = reg - sass::LLDB_R0;
-    uint32_t val = 0;
-    if (idx < m_num_gp_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_lane->GetRegisters(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-  if (reg == sass::LLDB_RZ) {
-    reg_value.SetUInt32(0);
-    return true;
-  }
-  if (reg >= sass::LLDB_P0 && reg < sass::LLDB_P0 + sass::kNumPRegs) {
-    uint32_t idx = reg - sass::LLDB_P0;
-    uint32_t val = 0;
-    if (idx < m_num_pred_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_lane->GetPredicates(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-  if (reg >= sass::LLDB_UR0 && reg < sass::LLDB_UR0 + sass::kNumURRegs) {
-    uint32_t idx = reg - sass::LLDB_UR0;
-    uint32_t val = 0;
-    if (idx < m_num_uniform_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_warp->GetUniformRegisters(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-  if (reg == sass::LLDB_URZ) {
-    reg_value.SetUInt32(0);
-    return true;
-  }
-  if (reg >= sass::LLDB_UP0 && reg < sass::LLDB_UP0 + sass::kNumUPRegs) {
-    uint32_t idx = reg - sass::LLDB_UP0;
-    uint32_t val = 0;
-    if (idx < m_num_uniform_pred_regs) {
-      offset_t off = idx * sizeof(uint32_t);
-      val = m_warp->GetUniformPredicates(m_core).GetU32_unchecked(&off);
-    }
-    reg_value.SetUInt32(val);
-    return true;
-  }
-
-  LLDB_LOG(GetLog(LLDBLog::Process),
-           "RegisterContextNVGPUCore::ReadRegister unhandled register {0}",
-           reg);
-  return false;
+  Status error;
+  reg_value.SetFromMemoryData(
+      *reg_info, reinterpret_cast<const uint8_t *>(&m_register_data) + offset,
+      reg_info->byte_size, eByteOrderLittle, error);
+  return error.Success();
 }
 
 bool RegisterContextNVGPUCore::WriteRegister(const RegisterInfo *reg_info,
@@ -204,26 +154,10 @@ bool RegisterContextNVGPUCore::WriteRegister(const RegisterInfo *reg_info,
 
 bool RegisterContextNVGPUCore::ReadAllRegisterValues(
     WritableDataBufferSP &data_sp) {
-  const size_t reg_count = GetRegisterCount();
-  const size_t bytes_per_reg = 8;
-  const size_t buf_size = reg_count * bytes_per_reg;
-  data_sp = std::make_shared<DataBufferHeap>(buf_size, 0);
-  uint8_t *dst = data_sp->GetBytes();
-
-  for (size_t i = 0; i < reg_count; ++i) {
-    const RegisterInfo *reg_info = GetRegisterInfoAtIndex(i);
-    if (!reg_info)
-      continue;
-    RegisterValue reg_value;
-    if (!ReadRegister(reg_info, reg_value))
-      continue;
-    Status error;
-    if (reg_value.GetAsMemoryData(*reg_info, dst + i * bytes_per_reg,
-                                  bytes_per_reg, eByteOrderLittle, error) == 0)
-      LLDB_LOG(GetLog(LLDBLog::Process),
-               "ReadAllRegisterValues: failed to serialize register {0}: {1}",
-               reg_info->name, error);
-  }
+  // The canonical layout IS our internal representation, so the snapshot is
+  // a single copy of the whole buffer.
+  data_sp = std::make_shared<DataBufferHeap>(&m_register_data,
+                                             sizeof(m_register_data));
   return true;
 }
 
