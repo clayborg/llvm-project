@@ -10,9 +10,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 
+#include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/PluginManager.h"
@@ -30,6 +32,7 @@
 #include "lldb/Utility/FileSpecList.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/NVGPU/NVGPUSectionID.h"
 #include "lldb/Utility/RangeMap.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/Stream.h"
@@ -1699,13 +1702,6 @@ ObjectFileELF::GetSectionHeaderByIndex(lldb::user_id_t id) {
   return nullptr;
 }
 
-// [NVIDIA] Added for ProcessNVGPUCore SectionTree.
-size_t ObjectFileELF::GetNumSectionHeaders() {
-  if (!ParseSectionHeaders())
-    return 0;
-  return m_section_headers.size();
-}
-
 lldb::user_id_t ObjectFileELF::GetSectionIndexByName(const char *name) {
   if (!name || !name[0] || !ParseSectionHeaders())
     return 0;
@@ -1713,6 +1709,466 @@ lldb::user_id_t ObjectFileELF::GetSectionIndexByName(const char *name) {
     if (m_section_headers[i].section_name == ConstString(name))
       return i;
   return 0;
+}
+
+// [NVIDIA] True if `header`+`type` identifies a synthetic NVGPU corefile
+// (`EM_CUDA` machine type + `ET_CORE` file type). Free file-static helper
+// shared by `BuildNVGPUSectionList` and `CreateSections`.
+static bool IsNVGPUCoreFile(const elf::ELFHeader &header,
+                            ObjectFile::Type type) {
+  return header.e_machine == llvm::ELF::EM_CUDA &&
+         type == ObjectFile::eTypeCoreFile;
+}
+
+// [NVIDIA] Synthesize the NVGPU GPU hierarchy from `m_section_headers`.
+// Called from `CreateSections` instead of (not in addition to) the flat
+// section-create loop for `EM_CUDA + ET_CORE` files.
+//
+// Tree shape:
+//
+//   nvgpucore
+//     devN
+//       smN
+//         ctaN
+//           shared (per-cta memory)
+//           warpN
+//             uregs / upreds / cbarrier (per-warp register state)
+//             laneN
+//               regs / preds (per-lane register state)
+//               local (per-lane memory)
+//     global / managed (root VA memory)
+//     cubin / ucubin (root module images)
+//
+// The build is **single-pass and section-driven**: we iterate the ELF
+// section headers once and dispatch on each section's type. The
+// rule for whether to materialize a container is "the producer wrote a
+// section in the flat ELF representation for it":
+//
+//   * Devices, SMs, CTAs, warps -- one container per row in the parent
+//     table (`nvgpu-{device,sm,cta,warp}-table`). The row itself *is* the
+//     section data for that hardware unit, so a faulted-but-otherwise-idle
+//     SM (a row with non-zero `exception` but no child CTAs) still shows
+//     up as a bare container and downstream code can decode its row.
+//
+//   * Lanes -- driven by per-lane leaf sections (`nvgpu-registers`,
+//     `nvgpu-predicates`, `nvgpu-local-memory`). Invalid lanes (cleared
+//     bits in `validLanesMask`) get no per-lane section from the producer,
+//     so they get no container here either: we don't synthesize empty
+//     lanes just to keep position-based row-index recovery working.
+//
+// The `nvgpu-lane-table` is therefore *not* iterated to fan out its rows;
+// it's consulted lazily by `GetOrCreateAncestor` for the data window of
+// each lane container that a per-lane leaf decided to materialize.
+//
+// Containers are added under their parent in row-index order at every
+// level *except* lanes, where the order matches whatever order the per-
+// lane leaves appear in for that warp (typically row-major because the
+// producer writes them that way, but consumers must not assume position
+// equals hardware index for lanes). The hardware row index is always
+// recoverable from `Section::user_id` via `nvgpu::DecodeHwIdx`, which is
+// what `ProcessNVGPUCore::DoUpdateThreadList` uses to look up
+// `validLanesMask` bits regardless of sparseness.
+void ObjectFileELF::BuildNVGPUSectionList() {
+  Log *log = GetLog(LLDBLog::Modules);
+  if (!IsNVGPUCoreFile(m_header, GetType()))
+    return;
+  if (!ParseSectionHeaders() || m_section_headers.empty())
+    return;
+
+  ModuleSP module_sp = GetModule();
+  const uint64_t file_size = GetByteSize();
+
+  // The CUDA driver writes corefile data segments roughly in this order:
+  //   ELF header -> ELF section headers -> Metadata -> DeviceTable ->
+  //   {SM/CTA/warp/lane tables, regs, preds, local, shared} ->
+  //   {cubin, ucubin} -> GlobalMemory (last; potentially huge)
+  // If the dump gets cut off mid-write, the truncation point can fall
+  // anywhere in that tail -- so any leaf that lives near the end of the
+  // file (cubins and global/managed memory in particular, but in principle
+  // any per-lane/warp/CTA leaf if the cut is earlier) might point past the
+  // file size. If the truncation cuts before the device table is written,
+  // the file is unrecoverable and we fail loudly via the normal decode-
+  // error path; everything else we treat as a recoverable truncation:
+  // skip the affected leaf, record its name, and warn at the end of the
+  // build so the user knows their corefile is incomplete.
+  auto IsTruncated = [file_size](const ELFSectionHeaderInfo &h) {
+    if (h.sh_size == 0)
+      return false;
+    return h.sh_size > file_size || h.sh_offset > file_size - h.sh_size;
+  };
+
+  llvm::SmallVector<std::string> truncated_sections;
+
+  // Sequence counters: each kind gets its own monotonically-increasing
+  // sequence packed into `Section::user_id` by `nvgpu::MakeID`. They never
+  // restart, so user_ids stay globally unique even if the same row index
+  // (e.g. lane 0) recurs across many parents.
+  uint32_t leaf_seq = 0;
+  uint32_t dev_seq = 0;
+  uint32_t sm_seq = 0;
+  uint32_t cta_seq = 0;
+  uint32_t warp_seq = 0;
+  uint32_t lane_seq = 0;
+
+  SectionSP root_sp = std::make_shared<Section>(
+      module_sp, this, nvgpu::MakeID(nvgpu::SectionKind::Root, 0),
+      ConstString("nvgpucore"), eSectionTypeNVGPURoot,
+      /*file_addr*/ 0, /*byte_size*/ 0,
+      /*file_offset*/ 0, /*file_size*/ 0,
+      /*log2align*/ 0, /*flags*/ 0);
+
+  // Set by `GetOrCreateAncestor` and the leaf-attach lambdas when they detect
+  // a malformed `sh_link` / `sh_info` they can't bail from directly. Checked
+  // after each dispatch step so we abort the whole build if anything fails.
+  bool malformed = false;
+
+  // Get-or-create cache for materialized container Sections, keyed on the
+  // `(parent_table_section_idx, row_idx_in_that_table)` pair that uniquely
+  // identifies a row in the corefile. Acts as an *identity map*: each
+  // `(table, row)` resolves to exactly one `SectionSP` for the lifetime of
+  // the build. The first reference materializes the container via
+  // `GetOrCreateAncestor` (which recursively materializes its ancestors);
+  // every subsequent reference -- from a child table's fan-out, a sibling
+  // leaf, or a deeper ancestor walk -- hits this map and reuses the same
+  // `SectionSP`.
+  llvm::DenseMap<std::pair<size_t, size_t>, SectionSP> containers_by_pos;
+
+  // Recursive on-demand parent creation: returns the container for row
+  // `row_idx` of the parent table at section index `table_idx`, creating
+  // it (and any missing ancestors above it, transitively) if it doesn't
+  // already exist. Sets `malformed` and returns null on any structural
+  // problem -- table type isn't a known container kind, `sh_entsize == 0`,
+  // `row_idx` out of range, etc.
+  std::function<SectionSP(size_t, size_t)> GetOrCreateAncestor =
+      [&](size_t table_idx, size_t row_idx) -> SectionSP {
+    auto key = std::make_pair(table_idx, row_idx);
+    auto it = containers_by_pos.find(key);
+    if (it != containers_by_pos.end())
+      return it->second;
+
+    if (table_idx == 0 || table_idx >= m_section_headers.size()) {
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: invalid sh_link={0} (out of range), "
+               "rejecting corefile",
+               table_idx);
+      malformed = true;
+      return nullptr;
+    }
+    const ELFSectionHeaderInfo &h = m_section_headers[table_idx];
+    if (h.sh_entsize == 0) {
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: table {0} has zero sh_entsize, "
+               "rejecting corefile",
+               table_idx);
+      malformed = true;
+      return nullptr;
+    }
+    const uint64_t num_rows = h.sh_size / h.sh_entsize;
+    if (row_idx >= num_rows) {
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: row_idx={0} out of range for table {1} "
+               "(num_rows={2}), rejecting corefile",
+               row_idx, table_idx, num_rows);
+      malformed = true;
+      return nullptr;
+    }
+
+    nvgpu::SectionKind kind;
+    SectionType child_type;
+    SectionType expected_parent_type;
+    std::string name;
+    uint32_t *seq;
+    SectionSP parent_sp;
+
+    switch (GetSectionType(h)) {
+    case eSectionTypeNVGPUDeviceTable:
+      kind = nvgpu::SectionKind::Device;
+      child_type = eSectionTypeNVGPUDevice;
+      expected_parent_type = eSectionTypeNVGPURoot;
+      name = "dev" + std::to_string(row_idx);
+      seq = &dev_seq;
+      parent_sp = root_sp;
+      break;
+    case eSectionTypeNVGPUSmTable:
+      kind = nvgpu::SectionKind::Sm;
+      child_type = eSectionTypeNVGPUSm;
+      expected_parent_type = eSectionTypeNVGPUDevice;
+      name = "sm" + std::to_string(row_idx);
+      seq = &sm_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
+    case eSectionTypeNVGPUCtaTable:
+      kind = nvgpu::SectionKind::Cta;
+      child_type = eSectionTypeNVGPUCta;
+      expected_parent_type = eSectionTypeNVGPUSm;
+      name = "cta" + std::to_string(row_idx);
+      seq = &cta_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
+    case eSectionTypeNVGPUWarpTable:
+      kind = nvgpu::SectionKind::Warp;
+      child_type = eSectionTypeNVGPUWarp;
+      expected_parent_type = eSectionTypeNVGPUCta;
+      name = "warp" + std::to_string(row_idx);
+      seq = &warp_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
+    case eSectionTypeNVGPULaneTable:
+      kind = nvgpu::SectionKind::Lane;
+      child_type = eSectionTypeNVGPULane;
+      expected_parent_type = eSectionTypeNVGPUWarp;
+      name = "lane" + std::to_string(row_idx);
+      seq = &lane_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
+    default:
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: section {0} referenced as a parent "
+               "table is not a recognized container kind (type={1}), "
+               "rejecting corefile",
+               table_idx, static_cast<int>(GetSectionType(h)));
+      malformed = true;
+      return nullptr;
+    }
+
+    // The recursive call already logged and set `malformed`; just unwind.
+    if (!parent_sp)
+      return nullptr;
+
+    // Cross-validate the kind chain: an SM-table's parent must be a Device,
+    // a CTA-table's parent must be an SM, etc. A mismatch here means a
+    // malformed `sh_link` skipped a level in the hierarchy. Without this
+    // check we'd happily build (e.g.) an SM directly under a CTA.
+    if (parent_sp->GetType() != expected_parent_type) {
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: table {0} resolves to a parent of "
+               "type {1}, expected type {2}; rejecting corefile",
+               table_idx, static_cast<int>(parent_sp->GetType()),
+               static_cast<int>(expected_parent_type));
+      malformed = true;
+      return nullptr;
+    }
+
+    // Container `byte_size` is 0 because these sections aren't memory regions
+    // -- their data is the row bytes (carried via file_offset/file_size) but
+    // nothing in lldb should try to address-resolve into them. Setting
+    // byte_size = 0 keeps `image dump sections` from showing fake VM ranges.
+    SectionSP container = std::make_shared<Section>(
+        parent_sp, module_sp, this, nvgpu::MakeID(kind, (*seq)++, row_idx),
+        ConstString(name.c_str()), child_type,
+        /*file_addr*/ 0, /*byte_size*/ 0, h.sh_offset + row_idx * h.sh_entsize,
+        h.sh_entsize,
+        /*log2align*/ 0, /*flags*/ 0);
+    parent_sp->GetChildren().AddSection(container);
+    containers_by_pos[key] = container;
+    return container;
+  };
+
+  // Generic leaf-attach: looks up the parent on-demand via
+  // `GetOrCreateAncestor` and hangs the leaf off of it. `sh_link == 0` per
+  // the corefile spec means the leaf has no parent table and attaches
+  // directly to the nvgpu-root (this is how global / managed memory and
+  // cubin / ucubin images are encoded). `is_memory == true` flips the leaf
+  // into "real memory" mode (file_addr / byte_size mapped to GPU VA,
+  // readable permissions); otherwise the leaf stays metadata-only
+  // (byte_size = 0).
+  //
+  // A leaf whose data window falls past the end of the file (`IsTruncated`)
+  // is skipped here rather than attached as a broken Section -- without
+  // this, downstream readers of the section bytes would silently fail or
+  // read garbage. The skip happens before `GetOrCreateAncestor`, so
+  // truncated leaves don't materialize their parent chain; if every leaf
+  // belonging to a particular lane/warp/CTA is truncated, that container
+  // simply doesn't appear (consistent with the leaf-driven sparseness
+  // rule). The skipped section's name is recorded in `truncated_sections`
+  // so the build emits a single end-of-build warning listing what was
+  // dropped.
+  auto AttachLeaf = [&](size_t i, llvm::StringRef name, SectionType type,
+                        bool is_memory) {
+    const ELFSectionHeaderInfo &h = m_section_headers[i];
+    if (IsTruncated(h)) {
+      truncated_sections.push_back(h.section_name.GetStringRef().str());
+      LLDB_LOG(log,
+               "BuildNVGPUSectionList: section {0} at offset {1:x} is "
+               "truncated (extends beyond file size {2:x}), skipping",
+               h.section_name, h.sh_offset, file_size);
+      return;
+    }
+    SectionSP parent =
+        h.sh_link == 0 ? root_sp : GetOrCreateAncestor(h.sh_link, h.sh_info);
+    if (!parent)
+      return; // GetOrCreateAncestor logged and set malformed.
+    SectionSP leaf = std::make_shared<Section>(
+        parent, module_sp, this,
+        nvgpu::MakeID(nvgpu::SectionKind::Leaf, leaf_seq++), ConstString(name),
+        type, is_memory ? h.sh_addr : 0, is_memory ? h.sh_size : 0, h.sh_offset,
+        h.sh_size,
+        /*log2align*/ 0, /*flags*/ 0);
+    if (is_memory)
+      leaf->SetPermissions(ePermissionsReadable);
+    parent->GetChildren().AddSection(leaf);
+  };
+
+  // Single forward pass over the ELF section headers.
+  //
+  //   * SM / CTA / warp tables: fan out every row into a container under
+  //     the parent that `sh_link`/`sh_info` resolves to (parent and any
+  //     missing ancestors created on-demand by `GetOrCreateAncestor`).
+  //
+  //   * Lane table: skipped here. Lanes are materialized below by per-lane
+  //     leaves (regs/preds/local) so invalid lanes -- which the producer
+  //     intentionally omits per-lane sections for -- never appear.
+  //
+  //   * Per-lane / per-warp / per-CTA leaves: attach to their parent on-
+  //     demand. The lane case is the only one that may *create* its parent
+  //     container; warp/CTA parents are guaranteed to already exist from
+  //     the table fan-outs above (or get cascaded into existence anyway
+  //     if section order is unusual).
+  //
+  //   * Root-level leaves (global / managed memory, cubin / ucubin
+  //     images): attach directly to the nvgpu-root.
+  //
+  //   * Device-table, lane-table, and unrelated metadata sections
+  //     (context table, grid table, module table, ...) are not surfaced;
+  //     the device table is consulted lazily by `GetOrCreateAncestor` when
+  //     SM-table fan-out walks up the parent chain.
+  for (size_t i = 1; i < m_section_headers.size(); ++i) {
+    if (malformed)
+      return;
+    const ELFSectionHeaderInfo &h = m_section_headers[i];
+    switch (GetSectionType(h)) {
+    case eSectionTypeNVGPUSmTable:
+    case eSectionTypeNVGPUCtaTable:
+    case eSectionTypeNVGPUWarpTable: {
+      if (h.sh_entsize == 0) {
+        LLDB_LOG(log,
+                 "BuildNVGPUSectionList: container table {0} has zero "
+                 "sh_entsize, rejecting corefile",
+                 i);
+        malformed = true;
+        break;
+      }
+      const uint64_t num_rows = h.sh_size / h.sh_entsize;
+      for (uint64_t row_idx = 0; row_idx < num_rows; ++row_idx) {
+        if (malformed)
+          break;
+        GetOrCreateAncestor(i, row_idx);
+      }
+      break;
+    }
+    case eSectionTypeNVGPURegisters:
+      AttachLeaf(i, "regs", eSectionTypeNVGPURegisters, /*is_memory=*/false);
+      break;
+    case eSectionTypeNVGPUPredicates:
+      AttachLeaf(i, "preds", eSectionTypeNVGPUPredicates, /*is_memory=*/false);
+      break;
+    case eSectionTypeNVGPULocalMemory:
+      AttachLeaf(i, "local", eSectionTypeNVGPULocalMemory, /*is_memory=*/true);
+      break;
+    case eSectionTypeNVGPUUniformRegisters:
+      AttachLeaf(i, "uregs", eSectionTypeNVGPUUniformRegisters,
+                 /*is_memory=*/false);
+      break;
+    case eSectionTypeNVGPUUniformPredicates:
+      AttachLeaf(i, "upreds", eSectionTypeNVGPUUniformPredicates,
+                 /*is_memory=*/false);
+      break;
+    case eSectionTypeNVGPUConvergenceBarrier:
+      AttachLeaf(i, "cbarrier", eSectionTypeNVGPUConvergenceBarrier,
+                 /*is_memory=*/false);
+      break;
+    case eSectionTypeNVGPUSharedMemory:
+      AttachLeaf(i, "shared", eSectionTypeNVGPUSharedMemory,
+                 /*is_memory=*/true);
+      break;
+    case eSectionTypeNVGPUGlobalMemory:
+    case eSectionTypeNVGPUManagedMemory: {
+      const SectionType t = GetSectionType(h);
+      AttachLeaf(i, t == eSectionTypeNVGPUGlobalMemory ? "global" : "managed",
+                 t, /*is_memory=*/true);
+      break;
+    }
+    case eSectionTypeNVGPURelocatedImage:
+    case eSectionTypeNVGPUUnrelocatedImage: {
+      // Cubin file slices: per the spec, sh_link points to the parent
+      // ModuleTable (which itself parents under ContextTable/Device), but
+      // we deliberately don't surface ContextTable/ModuleTable in our
+      // tree -- the cubin bytes are loaded as separate Modules by
+      // `ProcessNVGPUCore::LoadCubinModules` and that's the only consumer
+      // that needs them. So we flatten under nvgpu-root regardless of
+      // sh_link, and can't reuse `AttachLeaf` (which would walk sh_link
+      // through the unmodeled ModuleTable). Keep `byte_size = 0` so
+      // cubins don't show a fake VM range in `image dump sections`.
+      if (IsTruncated(h)) {
+        truncated_sections.push_back(h.section_name.GetStringRef().str());
+        LLDB_LOG(log,
+                 "BuildNVGPUSectionList: section {0} at offset {1:x} is "
+                 "truncated (extends beyond file size {2:x}), skipping",
+                 h.section_name, h.sh_offset, file_size);
+        break;
+      }
+      const SectionType t = GetSectionType(h);
+      llvm::StringRef leaf_name =
+          t == eSectionTypeNVGPURelocatedImage ? "cubin" : "ucubin";
+      SectionSP leaf = std::make_shared<Section>(
+          root_sp, module_sp, this,
+          nvgpu::MakeID(nvgpu::SectionKind::Leaf, leaf_seq++),
+          ConstString(leaf_name), t,
+          /*file_addr*/ 0, /*byte_size*/ 0, h.sh_offset, h.sh_size,
+          /*log2align*/ 0, /*flags*/ 0);
+      root_sp->GetChildren().AddSection(leaf);
+      break;
+    }
+    default:
+      // Device table, lane table, and unrelated metadata / context /
+      // grid / module / param-memory sections fall through. The device
+      // and lane tables are consulted lazily via `GetOrCreateAncestor`
+      // for row data windows; everything else is intentionally not
+      // surfaced in the synthetic tree.
+      break;
+    }
+  }
+  if (malformed) {
+    Debugger::ReportWarning(
+        "GPU corefile appears malformed and cannot be loaded.");
+    return;
+  }
+
+  // Reject corefiles that produced no NVGPU hierarchy at all -- no device
+  // table, or a device table with no SMs underneath. Callers see an empty
+  // m_sections_up, equivalent to "not an NVGPU corefile". Catches both the
+  // missing-device-table case (no SM/CTA/warp tables can resolve their
+  // sh_link, GetOrCreateAncestor never gets called) and the well-formed-
+  // but-childless device table case (loop produces a bare root).
+  if (root_sp->GetChildren().GetSize() == 0) {
+    LLDB_LOG(log, "BuildNVGPUSectionList: no NVGPU device hierarchy found, "
+                  "rejecting corefile");
+    Debugger::ReportWarning(
+        "GPU corefile contains no device hierarchy and cannot be loaded.");
+    return;
+  }
+
+  // Replace the flat section list with the new hierarchy. The old SectionSPs
+  // in the previous m_sections_up are abandoned (and destroyed when their
+  // last reference is released).
+  m_sections_up = std::make_unique<SectionList>();
+  m_sections_up->AddSection(root_sp);
+
+  if (!truncated_sections.empty()) {
+    std::string names = llvm::join(truncated_sections, ", ");
+    Debugger::ReportWarning(
+        llvm::formatv("GPU corefile appears truncated: {0} section(s) extend "
+                      "beyond file size and were skipped ({1}). Some GPU "
+                      "state -- memory regions, cubin images, or per-thread "
+                      "data -- will be unavailable.",
+                      truncated_sections.size(), names)
+            .str());
+  }
+
+  LLDB_LOG(log,
+           "BuildNVGPUSectionList: built tree with {0} devices, {1} SMs, "
+           "{2} CTAs, {3} warps, {4} lanes",
+           dev_seq, sm_seq, cta_seq, warp_seq, lane_seq);
 }
 
 static SectionType GetSectionTypeFromName(llvm::StringRef Name) {
@@ -1753,32 +2209,32 @@ SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
     return eSectionTypeELFRelocationEntries;
   case SHT_DYNAMIC:
     return eSectionTypeELFDynamicLinkInfo;
-  // [NVIDIA] CUDA corefile section types from cudacoredump.h (SHT_LOUSER + offset).
-  // These values are stable, defined by the public CUDA corefile format spec.
+  // [NVIDIA] NVGPU corefile section types from cudacoredump.h (SHT_LOUSER + offset).
+  // These values are stable, defined by the public NVGPU corefile format spec.
   // Added for ProcessNVGPUCore plugin.
-  case SHT_LOUSER + 1:  return eSectionTypeCUDAManagedMemory;
-  case SHT_LOUSER + 2:  return eSectionTypeCUDAGlobalMemory;
-  case SHT_LOUSER + 3:  return eSectionTypeCUDALocalMemory;
-  case SHT_LOUSER + 4:  return eSectionTypeCUDASharedMemory;
-  case SHT_LOUSER + 5:  return eSectionTypeCUDARegisters;
-  case SHT_LOUSER + 6:  return eSectionTypeCUDAUnrelocatedImage;
-  case SHT_LOUSER + 7:  return eSectionTypeCUDARelocatedImage;
-  case SHT_LOUSER + 8:  return eSectionTypeCUDABacktrace;
-  case SHT_LOUSER + 9:  return eSectionTypeCUDADeviceTable;
-  case SHT_LOUSER + 10: return eSectionTypeCUDAContextTable;
-  case SHT_LOUSER + 11: return eSectionTypeCUDASmTable;
-  case SHT_LOUSER + 12: return eSectionTypeCUDAGridTable;
-  case SHT_LOUSER + 13: return eSectionTypeCUDACtaTable;
-  case SHT_LOUSER + 14: return eSectionTypeCUDAWarpTable;
-  case SHT_LOUSER + 15: return eSectionTypeCUDALaneTable;
-  case SHT_LOUSER + 16: return eSectionTypeCUDAModuleTable;
-  case SHT_LOUSER + 17: return eSectionTypeCUDAPredicates;
-  case SHT_LOUSER + 18: return eSectionTypeCUDAParamMemory;
-  case SHT_LOUSER + 19: return eSectionTypeCUDAUniformRegisters;
-  case SHT_LOUSER + 20: return eSectionTypeCUDAUniformPredicates;
-  case SHT_LOUSER + 21: return eSectionTypeCUDAConstBankTable;
-  case SHT_LOUSER + 22: return eSectionTypeCUDAMetadata;
-  case SHT_LOUSER + 23: return eSectionTypeCUDAConvergenceBarrier;
+  case SHT_LOUSER + 1:  return eSectionTypeNVGPUManagedMemory;
+  case SHT_LOUSER + 2:  return eSectionTypeNVGPUGlobalMemory;
+  case SHT_LOUSER + 3:  return eSectionTypeNVGPULocalMemory;
+  case SHT_LOUSER + 4:  return eSectionTypeNVGPUSharedMemory;
+  case SHT_LOUSER + 5:  return eSectionTypeNVGPURegisters;
+  case SHT_LOUSER + 6:  return eSectionTypeNVGPUUnrelocatedImage;
+  case SHT_LOUSER + 7:  return eSectionTypeNVGPURelocatedImage;
+  case SHT_LOUSER + 8:  return eSectionTypeNVGPUBacktrace;
+  case SHT_LOUSER + 9:  return eSectionTypeNVGPUDeviceTable;
+  case SHT_LOUSER + 10: return eSectionTypeNVGPUContextTable;
+  case SHT_LOUSER + 11: return eSectionTypeNVGPUSmTable;
+  case SHT_LOUSER + 12: return eSectionTypeNVGPUGridTable;
+  case SHT_LOUSER + 13: return eSectionTypeNVGPUCtaTable;
+  case SHT_LOUSER + 14: return eSectionTypeNVGPUWarpTable;
+  case SHT_LOUSER + 15: return eSectionTypeNVGPULaneTable;
+  case SHT_LOUSER + 16: return eSectionTypeNVGPUModuleTable;
+  case SHT_LOUSER + 17: return eSectionTypeNVGPUPredicates;
+  case SHT_LOUSER + 18: return eSectionTypeNVGPUParamMemory;
+  case SHT_LOUSER + 19: return eSectionTypeNVGPUUniformRegisters;
+  case SHT_LOUSER + 20: return eSectionTypeNVGPUUniformPredicates;
+  case SHT_LOUSER + 21: return eSectionTypeNVGPUConstBankTable;
+  case SHT_LOUSER + 22: return eSectionTypeNVGPUMetadata;
+  case SHT_LOUSER + 23: return eSectionTypeNVGPUConvergenceBarrier;
   }
   return GetSectionTypeFromName(H.section_name.GetStringRef());
 }
@@ -1963,9 +2419,6 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
     return;
 
   m_sections_up = std::make_unique<SectionList>();
-  // [NVIDIA] CUDA corefiles need special section handling.
-  bool is_cuda_corefile = m_header.e_machine == llvm::ELF::EM_CUDA &&
-                          GetType() == ObjectFile::eTypeCoreFile;
   VMAddressProvider regular_provider(GetType(), "PT_LOAD");
   VMAddressProvider tls_provider(GetType(), "PT_TLS");
 
@@ -1997,68 +2450,60 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
   if (m_section_headers.empty())
     return;
 
-  for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
-       I != m_section_headers.end(); ++I) {
-    ELFSectionHeaderInfo header = *I;
-    SectionType sect_type = GetSectionType(header);
+  // [NVIDIA] For NVGPU corefiles, synthesize the GPU hardware hierarchy
+  // directly from m_section_headers and skip the generic flat ELF section
+  // creation entirely. The flat path doesn't apply here: NVGPU section
+  // sh_addr layouts (window-relative bases shared across lanes/CTAs for
+  // local/shared memory, zeros for metadata) would all be rejected by
+  // VMAddressProvider's overlap detection, and BuildNVGPUSectionList
+  // replaces m_sections_up wholesale anyway -- so any flat sections built
+  // here would just be thrown away.
+  if (IsNVGPUCoreFile(m_header, GetType())) {
+    BuildNVGPUSectionList();
+  } else {
+    for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
+         I != m_section_headers.end(); ++I) {
+      const ELFSectionHeaderInfo &header = *I;
+      SectionType sect_type = GetSectionType(header);
 
-    // CUDA corefile sections fall into three categories:
-    //   * Global / managed memory: sh_addr is the real GPU virtual
-    //     address and is unique across sections. These should participate
-    //     in normal VM mapping and overlap detection.
-    //   * Local / shared memory: sh_addr is a window-relative base that's
-    //     intentionally shared across lanes (local) or CTAs (shared).
-    //     Letting LLDB see these as SHF_ALLOC would trigger overlap
-    //     detection and drop all but the first.
-    //   * Tables, register/predicate dumps, metadata, cubin blobs: not
-    //     memory -- sh_addr is 0 (or a placeholder). No VM footprint.
-    // Clear SHF_ALLOC for the last two groups so they bypass overlap
-    // detection; keep it for global/managed memory so consumers can use
-    // Section::GetByteSize() and benefit from overlap diagnostics. This
-    // workaround will be removed once the CUDA corefile generator sets
-    // SHF_ALLOC only on CUDBG_SHT_GLOBAL_MEM / CUDBG_SHT_MANAGED_MEM.
-    if (is_cuda_corefile &&
-        (sect_type == eSectionTypeCUDALocalMemory ||
-         sect_type == eSectionTypeCUDASharedMemory ||
-         header.sh_addr == 0))
-      header.sh_flags &= ~SHF_ALLOC;
+      ConstString &name = I->section_name;
+      const uint64_t file_size =
+          header.sh_type == SHT_NOBITS ? 0 : header.sh_size;
 
-    ConstString &name = I->section_name;
-    const uint64_t file_size =
-        header.sh_type == SHT_NOBITS ? 0 : header.sh_size;
+      VMAddressProvider &provider =
+          header.sh_flags & SHF_TLS ? tls_provider : regular_provider;
+      auto InfoOr = provider.GetAddressInfo(header);
+      if (!InfoOr)
+        continue;
 
-    VMAddressProvider &provider =
-        header.sh_flags & SHF_TLS ? tls_provider : regular_provider;
-    auto InfoOr = provider.GetAddressInfo(header);
-    if (!InfoOr)
-      continue;
+      const uint32_t target_bytes_size =
+          GetTargetByteSize(sect_type, m_arch_spec);
 
-    const uint32_t target_bytes_size =
-        GetTargetByteSize(sect_type, m_arch_spec);
+      elf::elf_xword log2align =
+          (header.sh_addralign == 0) ? 0
+                                     : llvm::Log2_64(header.sh_addralign);
 
-    elf::elf_xword log2align =
-        (header.sh_addralign == 0) ? 0 : llvm::Log2_64(header.sh_addralign);
+      SectionSP section_sp(new Section(
+          InfoOr->Segment, GetModule(), // Module to which this section belongs.
+          this,            // ObjectFile to which this section belongs and should
+                           // read section data from.
+          SectionIndex(I), // Section ID.
+          name,            // Section name.
+          sect_type,       // Section type.
+          InfoOr->Range.GetRangeBase(), // VM address.
+          InfoOr->Range.GetByteSize(),  // VM size in bytes of this section.
+          header.sh_offset,             // Offset of this section in the file.
+          file_size,           // Size of the section as found in the file.
+          log2align,           // Alignment of the section
+          header.sh_flags,     // Flags for this section.
+          target_bytes_size)); // Number of host bytes per target byte
 
-    SectionSP section_sp(new Section(
-        InfoOr->Segment, GetModule(), // Module to which this section belongs.
-        this,            // ObjectFile to which this section belongs and should
-                         // read section data from.
-        SectionIndex(I), // Section ID.
-        name,            // Section name.
-        sect_type,       // Section type.
-        InfoOr->Range.GetRangeBase(), // VM address.
-        InfoOr->Range.GetByteSize(),  // VM size in bytes of this section.
-        header.sh_offset,             // Offset of this section in the file.
-        file_size,           // Size of the section as found in the file.
-        log2align,           // Alignment of the section
-        header.sh_flags,     // Flags for this section.
-        target_bytes_size)); // Number of host bytes per target byte
-
-    section_sp->SetPermissions(GetPermissions(header));
-    section_sp->SetIsThreadSpecific(header.sh_flags & SHF_TLS);
-    (InfoOr->Segment ? InfoOr->Segment->GetChildren() : *m_sections_up)
-        .AddSection(section_sp);
-    provider.AddSection(std::move(*InfoOr), std::move(section_sp));
+      section_sp->SetPermissions(GetPermissions(header));
+      section_sp->SetIsThreadSpecific(header.sh_flags & SHF_TLS);
+      (InfoOr->Segment ? InfoOr->Segment->GetChildren() : *m_sections_up)
+          .AddSection(section_sp);
+      provider.AddSection(std::move(*InfoOr), std::move(section_sp));
+    }
   }
 
   // Merge the two adding any new sections, and overwriting any existing
