@@ -1,10 +1,11 @@
 include(SetupCUDA)
 
 add_lldb_library(lldbPluginProcessNVGPUCore PLUGIN
-  NVGPUCoreData.cpp
+  CudbgEntryParser.cpp
   ProcessNVGPUCore.cpp
-  ThreadNVGPUCore.cpp
   RegisterContextNVGPUCore.cpp
+  SectionUtils.cpp
+  ThreadNVGPUCore.cpp
 
   LINK_COMPONENTS
     BinaryFormat

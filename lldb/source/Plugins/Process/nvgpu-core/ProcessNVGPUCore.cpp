@@ -1,4 +1,4 @@
-//===-- ProcessNVGPUCore.cpp -----------------------------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProcessNVGPUCore.h"
+#include "CudbgEntryParser.h"
+#include "SectionUtils.h"
 #include "ThreadNVGPUCore.h"
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
@@ -14,6 +16,7 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/Section.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/MemoryRegionInfo.h"
@@ -23,6 +26,7 @@
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/CUDAAddressSpaces.h"
+#include "lldb/Utility/NVGPU/NVGPUSectionID.h"
 #include "llvm/Support/Threading.h"
 
 using namespace lldb;
@@ -120,22 +124,23 @@ Status ProcessNVGPUCore::DoLoadCore() {
   if (!core)
     return Status::FromErrorString("core module is not an ELF object file");
 
-  // Build section tree and parse top-level data (device table + global
-  // memory regions). SM/CTA/warp/thread tables are deferred until
-  // DoUpdateThreadList.
-  if (llvm::Error err = m_core_data.Parse(core))
-    return Status::FromError(std::move(err));
+  // Find the synthetic nvgpucore root container that ObjectFileELF built.
+  SectionList *section_list = core->GetSectionList();
+  if (!section_list)
+    return Status::FromErrorString("core file has no section list");
+  m_root_sp = section_list->FindSectionByType(eSectionTypeNVGPURoot,
+                                              /*check_children=*/false);
+  if (!m_root_sp)
+    return Status::FromErrorString(
+        "NVGPU corefile did not produce a nvgpucore root section "
+        "(likely missing or malformed nvgpu-device-table)");
 
-  llvm::ArrayRef<std::string> truncated = m_core_data.GetTruncatedSections();
-  if (!truncated.empty()) {
-    std::string sections = llvm::join(truncated, ", ");
-    Debugger::ReportWarning(
-        llvm::formatv("GPU corefile appears truncated: {0} section(s) extend "
-                      "beyond file size and were skipped ({1}). Some data "
-                      "(memory, registers) may be unavailable.",
-                      truncated.size(), sections)
-            .str());
-  }
+  // Register the corefile module itself in the target's module list so it
+  // shows up in `image list` and is reachable from the SBModule API. Without
+  // this, target.modules only contains the cubin sub-modules added by
+  // LoadCubinModules below, and Python tooling that walks target.modules
+  // can't find the synthetic nvgpucore section tree.
+  target.GetImages().AppendIfNeeded(m_core_module_sp);
 
   if (llvm::Error err = LoadCubinModules())
     return Status::FromError(std::move(err));
@@ -153,22 +158,27 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
   LLDB_LOG(log, "ProcessNVGPUCore::LoadCubinModules()");
 
   ObjectFileELF *core = GetCoreObjectFile();
-  if (!core)
-    return llvm::createStringError("no core object file");
-
   Target &target = GetTarget();
   ModuleList loaded_modules;
   const FileSpec &core_file = core->GetFileSpec();
 
-  llvm::ArrayRef<CubinLocation> cubins = m_core_data.GetCubinLocations();
-  for (size_t i = 0; i < cubins.size(); ++i) {
-    const CubinLocation &cubin = cubins[i];
+  size_t cubin_count = 0;
+  // Only relocated cubins become Modules. They have absolute, resolvable
+  // code addresses LLDB can use for symbolication. Unrelocated (`ucubin`)
+  // images are still attached to the synthetic tree for inspection via
+  // `image dump sections` but aren't loaded as code Modules.
+  for (const SectionSP &cubin : nvgpu_core::FindChildrenByType(
+           *m_root_sp, eSectionTypeNVGPURelocatedImage)) {
+    const offset_t cubin_offset = cubin->GetFileOffset();
+    const offset_t cubin_size = cubin->GetFileSize();
+    if (cubin_size == 0)
+      continue;
 
     // Point the module at the cubin's range within the core file so the
-    // module system mmaps the same file -- no bulk copy of the cubin data.
+    // module system mmaps the same file.
     ModuleSpec module_spec(core_file);
-    module_spec.SetObjectOffset(cubin.file_offset);
-    module_spec.SetObjectSize(cubin.file_size);
+    module_spec.SetObjectOffset(cubin_offset);
+    module_spec.SetObjectSize(cubin_size);
 
     ModuleSP module_sp = target.GetOrCreateModule(module_spec, /*notify=*/true);
     if (module_sp) {
@@ -181,8 +191,9 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
         platform_sp->RecordLoadedModule(module_sp, target);
 
       LLDB_LOG(log, "  loaded cubin module {0} at offset {1:x} ({2} bytes)",
-               i, cubin.file_offset, cubin.file_size);
+               cubin_count, cubin_offset, cubin_size);
     }
+    ++cubin_count;
   }
 
   target.ModulesDidLoad(loaded_modules);
@@ -192,49 +203,37 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
 bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
                                           ThreadList &new_thread_list) {
   Log *log = GetLog(LLDBLog::Process);
+
   ObjectFileELF *core = GetCoreObjectFile();
-  if (!core)
-    return false;
 
   uint32_t tid = 0;
-  for (size_t dev_idx = 0; dev_idx < m_core_data.GetNumDevices(); ++dev_idx) {
-    const DeviceData &dev = m_core_data.GetDevice(dev_idx);
-    llvm::ArrayRef<SMData> sms = dev.GetSMs(core);
-    for (size_t sm_idx = 0; sm_idx < sms.size(); ++sm_idx) {
-      const SMData &sm = sms[sm_idx];
-      llvm::ArrayRef<CTAData> ctas = sm.GetCTAs(core);
-      for (size_t cta_idx = 0; cta_idx < ctas.size(); ++cta_idx) {
-        const CTAData &cta = ctas[cta_idx];
-        llvm::ArrayRef<WarpData> warps = cta.GetWarps(core);
-        for (size_t warp_idx = 0; warp_idx < warps.size(); ++warp_idx) {
-          const WarpData &warp = warps[warp_idx];
-          uint32_t valid_mask = warp.GetEntry().validLanesMask;
-          llvm::ArrayRef<LaneData> lanes = warp.GetLanes(core);
-          for (size_t lane_idx = 0; lane_idx < lanes.size(); ++lane_idx) {
-            if (!(valid_mask & (1u << lane_idx)))
-              continue;
 
-            NVGPULaneCoords coords;
-            coords.dev_idx = dev_idx;
-            coords.sm_idx = sm_idx;
-            coords.cta_idx = cta_idx;
-            coords.warp_idx = warp_idx;
-            coords.lane_idx = lane_idx;
+  for (const SectionSP &warp :
+       nvgpu_core::FindDescendantsByType(*m_root_sp, eSectionTypeNVGPUWarp)) {
+    llvm::Expected<nvgpu_core::WarpEntry> warp_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp, core);
+    if (!warp_or) {
+      LLDB_LOG(log, "ProcessNVGPUCore: skipping warp at {0}: {1}",
+               warp->GetName(), llvm::toString(warp_or.takeError()));
+      continue;
+    }
 
-            ++tid;
-            auto thread_sp =
-                std::make_shared<ThreadNVGPUCore>(*this, tid, coords);
-            new_thread_list.AddThread(thread_sp);
+    for (const SectionSP &lane :
+         nvgpu_core::FindChildrenByType(*warp, eSectionTypeNVGPULane)) {
+      const uint32_t lane_idx = nvgpu::DecodeHwIdx(lane->GetID());
+      if (!warp_or->IsLaneValid(lane_idx))
+        continue;
+      ++tid;
+      auto thread_sp =
+          std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
+      new_thread_list.AddThread(thread_sp);
 
-            // Select the first thread that any CUDA exception is attributed
-            // to (matches ThreadNVGPUCore::CalculateStopInfo's policy, so
-            // thread selection and stop reason stay consistent).
-            if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
-                thread_sp->GetAttributedException() != 0)
-              m_exception_tid = tid;
-          }
-        }
-      }
+      // Select the first thread that any CUDA exception is attributed to
+      // (matches ThreadNVGPUCore::CalculateStopInfo's policy, so thread
+      // selection and stop reason stay consistent).
+      if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
+          thread_sp->GetAttributedException() != 0)
+        m_exception_tid = tid;
     }
   }
 
@@ -249,19 +248,13 @@ size_t ProcessNVGPUCore::ReadMemory(addr_t addr, void *buf, size_t size,
   return DoReadMemory(addr, buf, size, error);
 }
 
-/// Try to read from a MemorySection (local or shared memory).
-/// Returns the number of bytes read, or 0 if the address is not in range.
-static size_t ReadFromMemorySection(const MemorySection &mem, addr_t addr,
-                                    void *buf, size_t size) {
-  if (mem.size == 0 || addr < mem.addr || addr >= mem.addr + mem.size)
-    return 0;
-
-  const uint64_t offset = addr - mem.addr;
-  const uint64_t bytes_left = mem.size - offset;
-  const size_t bytes_to_read =
-      std::min(static_cast<uint64_t>(size), bytes_left);
-
-  return mem.data.CopyData(offset, bytes_to_read, buf);
+SectionSP ProcessNVGPUCore::FindGlobalMemorySection(addr_t addr) const {
+  for (SectionType t :
+       {eSectionTypeNVGPUGlobalMemory, eSectionTypeNVGPUManagedMemory})
+    for (const SectionSP &mem : nvgpu_core::FindChildrenByType(*m_root_sp, t))
+      if (mem->ContainsFileAddress(addr))
+        return mem;
+  return nullptr;
 }
 
 size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
@@ -270,22 +263,38 @@ size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
   if (!core_objfile)
     return 0;
 
-  const MemoryRegion *region = m_core_data.FindGlobalMemoryRegion(addr);
+  SectionSP region = FindGlobalMemorySection(addr);
   if (!region) {
     error = Status::FromErrorStringWithFormat(
         "core file does not contain 0x%" PRIx64, addr);
     return 0;
   }
 
-  const uint64_t offset = addr - region->addr;
-  const uint64_t bytes_left =
-      (region->size > offset) ? region->size - offset : 0;
+  const offset_t offset = addr - region->GetFileAddress();
   const size_t bytes_to_read =
-      std::min(static_cast<uint64_t>(size), bytes_left);
+      std::min(static_cast<offset_t>(size), region->GetByteSize() - offset);
   if (bytes_to_read == 0)
     return 0;
-  return core_objfile->CopyData(region->file_offset + offset, bytes_to_read,
-                                buf);
+  return core_objfile->CopyData(region->GetFileOffset() + offset,
+                                bytes_to_read, buf);
+}
+
+/// Read `size` bytes from `addr` within `mem_section`'s data window. Returns
+/// 0 if the section is null/empty or `addr` is outside its file-address
+/// range.
+static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
+                                    void *buf, size_t size,
+                                    ObjectFileELF *core) {
+  if (!mem_section || !mem_section->ContainsFileAddress(addr))
+    return 0;
+  DataExtractor data;
+  core->ReadSectionData(mem_section.get(), data);
+  if (data.GetByteSize() == 0)
+    return 0;
+  const offset_t offset = addr - mem_section->GetFileAddress();
+  const size_t bytes_to_read = std::min<offset_t>(size,
+                                                  data.GetByteSize() - offset);
+  return data.CopyData(offset, bytes_to_read, buf);
 }
 
 size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
@@ -303,12 +312,17 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
   if (!core)
     return 0;
 
-  // Get the thread from the AddressSpec (set by the DWARF evaluator).
+  // Get the thread from the AddressSpec. An absent thread is the API's
+  // expected signal (not all callers attach one), so we don't surface it
+  // to the user; we just log it and fall back to the selected thread
+  // below.
   ThreadSP thread_sp;
   if (llvm::Expected<ThreadSP> t = addr_spec.GetThread())
     thread_sp = *t;
   else
-    llvm::consumeError(t.takeError());
+    LLDB_LOG_ERROR(log, t.takeError(),
+                   "AddressSpec has no attached thread, falling back to "
+                   "selected thread: {0}");
 
   if (!thread_sp)
     thread_sp = GetThreadList().GetSelectedThread();
@@ -318,25 +332,21 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
     return 0;
   }
 
-  // The thread has already resolved its device/SM/CTA/warp/lane chain in its
-  // constructor; borrow those pointers instead of re-walking from coords.
   auto *gpu_thread = static_cast<ThreadNVGPUCore *>(thread_sp.get());
+  SectionSP lane_sp = gpu_thread->GetLaneSection();
+  SectionSP cta_sp = gpu_thread->GetCTASection();
 
-  // Shared memory (per-CTA) -- address space "shared" (8).
-  if (const CTAData *cta = gpu_thread->GetCTA()) {
-    size_t bytes =
-        ReadFromMemorySection(cta->GetSharedMemory(core), addr, buf, size);
-    if (bytes > 0)
-      return bytes;
-  }
+  // Shared memory (per-CTA): under the lane's CTA ancestor.
+  SectionSP shared_sp =
+      nvgpu_core::FindChildByType(*cta_sp, eSectionTypeNVGPUSharedMemory);
+  if (size_t bytes = ReadFromMemorySection(shared_sp, addr, buf, size, core))
+    return bytes;
 
-  // Local memory (per-lane) -- address space "local" (6).
-  if (const LaneData *lane = gpu_thread->GetLane()) {
-    size_t bytes =
-        ReadFromMemorySection(lane->GetLocalMemory(core), addr, buf, size);
-    if (bytes > 0)
-      return bytes;
-  }
+  // Local memory (per-lane): a named child of the lane container.
+  SectionSP local_sp =
+      nvgpu_core::FindChildByType(*lane_sp, eSectionTypeNVGPULocalMemory);
+  if (size_t bytes = ReadFromMemorySection(local_sp, addr, buf, size, core))
+    return bytes;
 
   error = Status::FromErrorStringWithFormat(
       "core file does not contain address space '%s' address 0x%" PRIx64,
@@ -348,10 +358,10 @@ Status ProcessNVGPUCore::DoGetMemoryRegionInfo(addr_t load_addr,
                                                MemoryRegionInfo &region_info) {
   region_info.Clear();
 
-  const MemoryRegion *region = m_core_data.FindGlobalMemoryRegion(load_addr);
+  SectionSP region = FindGlobalMemorySection(load_addr);
   if (region) {
-    region_info.GetRange().SetRangeBase(region->addr);
-    region_info.GetRange().SetByteSize(region->size);
+    region_info.GetRange().SetRangeBase(region->GetFileAddress());
+    region_info.GetRange().SetByteSize(region->GetByteSize());
     region_info.SetReadable(MemoryRegionInfo::eYes);
     region_info.SetWritable(MemoryRegionInfo::eNo);
     region_info.SetExecutable(MemoryRegionInfo::eNo);

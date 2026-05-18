@@ -155,53 +155,65 @@ const char *Section::GetTypeAsCString() const {
     return "swift-modules";
   case eSectionTypeWasmName:
     return "wasm-name";
-  // [NVIDIA] CUDA section type strings.
-  case eSectionTypeCUDAGlobalMemory:
-    return "cuda-global-memory";
-  case eSectionTypeCUDAManagedMemory:
-    return "cuda-managed-memory";
-  case eSectionTypeCUDALocalMemory:
-    return "cuda-local-memory";
-  case eSectionTypeCUDASharedMemory:
-    return "cuda-shared-memory";
-  case eSectionTypeCUDAParamMemory:
-    return "cuda-param-memory";
-  case eSectionTypeCUDARegisters:
-    return "cuda-registers";
-  case eSectionTypeCUDAPredicates:
-    return "cuda-predicates";
-  case eSectionTypeCUDAUniformRegisters:
-    return "cuda-uniform-registers";
-  case eSectionTypeCUDAUniformPredicates:
-    return "cuda-uniform-predicates";
-  case eSectionTypeCUDARelocatedImage:
-    return "cuda-relocated-image";
-  case eSectionTypeCUDAUnrelocatedImage:
-    return "cuda-unrelocated-image";
-  case eSectionTypeCUDABacktrace:
-    return "cuda-backtrace";
-  case eSectionTypeCUDADeviceTable:
-    return "cuda-device-table";
-  case eSectionTypeCUDAContextTable:
-    return "cuda-context-table";
-  case eSectionTypeCUDASmTable:
-    return "cuda-sm-table";
-  case eSectionTypeCUDAGridTable:
-    return "cuda-grid-table";
-  case eSectionTypeCUDACtaTable:
-    return "cuda-cta-table";
-  case eSectionTypeCUDAWarpTable:
-    return "cuda-warp-table";
-  case eSectionTypeCUDALaneTable:
-    return "cuda-lane-table";
-  case eSectionTypeCUDAModuleTable:
-    return "cuda-module-table";
-  case eSectionTypeCUDAConstBankTable:
-    return "cuda-constbank-table";
-  case eSectionTypeCUDAMetadata:
-    return "cuda-metadata";
-  case eSectionTypeCUDAConvergenceBarrier:
-    return "cuda-convergence-barrier";
+  // [NVIDIA] NVGPU section type strings.
+  case eSectionTypeNVGPUGlobalMemory:
+    return "nvgpu-global-memory";
+  case eSectionTypeNVGPUManagedMemory:
+    return "nvgpu-managed-memory";
+  case eSectionTypeNVGPULocalMemory:
+    return "nvgpu-local-memory";
+  case eSectionTypeNVGPUSharedMemory:
+    return "nvgpu-shared-memory";
+  case eSectionTypeNVGPUParamMemory:
+    return "nvgpu-param-memory";
+  case eSectionTypeNVGPURegisters:
+    return "nvgpu-registers";
+  case eSectionTypeNVGPUPredicates:
+    return "nvgpu-predicates";
+  case eSectionTypeNVGPUUniformRegisters:
+    return "nvgpu-uniform-registers";
+  case eSectionTypeNVGPUUniformPredicates:
+    return "nvgpu-uniform-predicates";
+  case eSectionTypeNVGPURelocatedImage:
+    return "nvgpu-relocated-image";
+  case eSectionTypeNVGPUUnrelocatedImage:
+    return "nvgpu-unrelocated-image";
+  case eSectionTypeNVGPUBacktrace:
+    return "nvgpu-backtrace";
+  case eSectionTypeNVGPUDeviceTable:
+    return "nvgpu-device-table";
+  case eSectionTypeNVGPUContextTable:
+    return "nvgpu-context-table";
+  case eSectionTypeNVGPUSmTable:
+    return "nvgpu-sm-table";
+  case eSectionTypeNVGPUGridTable:
+    return "nvgpu-grid-table";
+  case eSectionTypeNVGPUCtaTable:
+    return "nvgpu-cta-table";
+  case eSectionTypeNVGPUWarpTable:
+    return "nvgpu-warp-table";
+  case eSectionTypeNVGPULaneTable:
+    return "nvgpu-lane-table";
+  case eSectionTypeNVGPUModuleTable:
+    return "nvgpu-module-table";
+  case eSectionTypeNVGPUConstBankTable:
+    return "nvgpu-constbank-table";
+  case eSectionTypeNVGPUMetadata:
+    return "nvgpu-metadata";
+  case eSectionTypeNVGPUConvergenceBarrier:
+    return "nvgpu-convergence-barrier";
+  case eSectionTypeNVGPURoot:
+    return "nvgpu-root";
+  case eSectionTypeNVGPUDevice:
+    return "nvgpu-device";
+  case eSectionTypeNVGPUSm:
+    return "nvgpu-sm";
+  case eSectionTypeNVGPUCta:
+    return "nvgpu-cta";
+  case eSectionTypeNVGPUWarp:
+    return "nvgpu-warp";
+  case eSectionTypeNVGPULane:
+    return "nvgpu-lane";
   case eSectionTypeOther:
     return "regular";
   }
@@ -465,30 +477,36 @@ bool Section::ContainsOnlyDebugInfo() const {
   case eSectionTypeGoSymtab:
   case eSectionTypeAbsoluteAddress:
   case eSectionTypeWasmName:
-  // [NVIDIA] CUDA section types for GetAddressClass.
-  case eSectionTypeCUDAGlobalMemory:
-  case eSectionTypeCUDAManagedMemory:
-  case eSectionTypeCUDALocalMemory:
-  case eSectionTypeCUDASharedMemory:
-  case eSectionTypeCUDAParamMemory:
-  case eSectionTypeCUDARegisters:
-  case eSectionTypeCUDAPredicates:
-  case eSectionTypeCUDAUniformRegisters:
-  case eSectionTypeCUDAUniformPredicates:
-  case eSectionTypeCUDARelocatedImage:
-  case eSectionTypeCUDAUnrelocatedImage:
-  case eSectionTypeCUDABacktrace:
-  case eSectionTypeCUDADeviceTable:
-  case eSectionTypeCUDAContextTable:
-  case eSectionTypeCUDASmTable:
-  case eSectionTypeCUDAGridTable:
-  case eSectionTypeCUDACtaTable:
-  case eSectionTypeCUDAWarpTable:
-  case eSectionTypeCUDALaneTable:
-  case eSectionTypeCUDAModuleTable:
-  case eSectionTypeCUDAConstBankTable:
-  case eSectionTypeCUDAMetadata:
-  case eSectionTypeCUDAConvergenceBarrier:
+  // [NVIDIA] NVGPU section types
+  case eSectionTypeNVGPUGlobalMemory:
+  case eSectionTypeNVGPUManagedMemory:
+  case eSectionTypeNVGPULocalMemory:
+  case eSectionTypeNVGPUSharedMemory:
+  case eSectionTypeNVGPUParamMemory:
+  case eSectionTypeNVGPURegisters:
+  case eSectionTypeNVGPUPredicates:
+  case eSectionTypeNVGPUUniformRegisters:
+  case eSectionTypeNVGPUUniformPredicates:
+  case eSectionTypeNVGPURelocatedImage:
+  case eSectionTypeNVGPUUnrelocatedImage:
+  case eSectionTypeNVGPUBacktrace:
+  case eSectionTypeNVGPUDeviceTable:
+  case eSectionTypeNVGPUContextTable:
+  case eSectionTypeNVGPUSmTable:
+  case eSectionTypeNVGPUGridTable:
+  case eSectionTypeNVGPUCtaTable:
+  case eSectionTypeNVGPUWarpTable:
+  case eSectionTypeNVGPULaneTable:
+  case eSectionTypeNVGPUModuleTable:
+  case eSectionTypeNVGPUConstBankTable:
+  case eSectionTypeNVGPUMetadata:
+  case eSectionTypeNVGPUConvergenceBarrier:
+  case eSectionTypeNVGPURoot:
+  case eSectionTypeNVGPUDevice:
+  case eSectionTypeNVGPUSm:
+  case eSectionTypeNVGPUCta:
+  case eSectionTypeNVGPUWarp:
+  case eSectionTypeNVGPULane:
   case eSectionTypeOther:
   // Used for "__dof_cache" in mach-o or ".debug" for COFF which isn't debug
   // information that we parse at all. This was causing system files with no
