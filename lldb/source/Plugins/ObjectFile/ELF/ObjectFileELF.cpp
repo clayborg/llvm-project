@@ -1684,6 +1684,13 @@ ObjectFileELF::StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const {
   return symbol_name.substr(0, pos);
 }
 
+bool ObjectFileELF::ELFSectionHeaderInfo::IsTruncated(
+    uint64_t file_size) const {
+  if (sh_size == 0)
+    return false;
+  return sh_size > file_size || sh_offset > file_size - sh_size;
+}
+
 // ParseSectionHeaders
 size_t ObjectFileELF::ParseSectionHeaders() {
   return GetSectionHeaderInfo(m_section_headers, *m_data_nsp.get(), m_header,
@@ -1711,13 +1718,9 @@ lldb::user_id_t ObjectFileELF::GetSectionIndexByName(const char *name) {
   return 0;
 }
 
-// [NVIDIA] True if `header`+`type` identifies a synthetic NVGPU corefile
-// (`EM_CUDA` machine type + `ET_CORE` file type). Free file-static helper
-// shared by `BuildNVGPUSectionList` and `CreateSections`.
-static bool IsNVGPUCoreFile(const elf::ELFHeader &header,
-                            ObjectFile::Type type) {
-  return header.e_machine == llvm::ELF::EM_CUDA &&
-         type == ObjectFile::eTypeCoreFile;
+bool ObjectFileELF::IsNVGPUCoreFile() const {
+  return m_header.e_machine == llvm::ELF::EM_CUDA &&
+         m_header.e_type == llvm::ELF::ET_CORE;
 }
 
 // [NVIDIA] Synthesize the NVGPU GPU hierarchy from `m_section_headers`.
@@ -1768,9 +1771,9 @@ static bool IsNVGPUCoreFile(const elf::ELFHeader &header,
 // recoverable from `Section::user_id` via `nvgpu::DecodeHwIdx`, which is
 // what `ProcessNVGPUCore::DoUpdateThreadList` uses to look up
 // `validLanesMask` bits regardless of sparseness.
-void ObjectFileELF::BuildNVGPUSectionList() {
+void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
   Log *log = GetLog(LLDBLog::Modules);
-  if (!IsNVGPUCoreFile(m_header, GetType()))
+  if (!IsNVGPUCoreFile())
     return;
   if (!ParseSectionHeaders() || m_section_headers.empty())
     return;
@@ -1791,11 +1794,6 @@ void ObjectFileELF::BuildNVGPUSectionList() {
   // error path; everything else we treat as a recoverable truncation:
   // skip the affected leaf, record its name, and warn at the end of the
   // build so the user knows their corefile is incomplete.
-  auto IsTruncated = [file_size](const ELFSectionHeaderInfo &h) {
-    if (h.sh_size == 0)
-      return false;
-    return h.sh_size > file_size || h.sh_offset > file_size - h.sh_size;
-  };
 
   llvm::SmallVector<std::string> truncated_sections;
 
@@ -1813,9 +1811,9 @@ void ObjectFileELF::BuildNVGPUSectionList() {
   SectionSP root_sp = std::make_shared<Section>(
       module_sp, this, nvgpu::MakeID(nvgpu::SectionKind::Root, 0),
       ConstString("nvgpucore"), eSectionTypeNVGPURoot,
-      /*file_addr*/ 0, /*byte_size*/ 0,
-      /*file_offset*/ 0, /*file_size*/ 0,
-      /*log2align*/ 0, /*flags*/ 0);
+      /*file_addr=*/0, /*byte_size=*/0,
+      /*file_offset=*/0, /*file_size=*/0,
+      /*log2align=*/0, /*flags=*/0);
 
   // Set by `GetOrCreateAncestor` and the leaf-attach lambdas when they detect
   // a malformed `sh_link` / `sh_info` they can't bail from directly. Checked
@@ -1956,9 +1954,9 @@ void ObjectFileELF::BuildNVGPUSectionList() {
     SectionSP container = std::make_shared<Section>(
         parent_sp, module_sp, this, nvgpu::MakeID(kind, (*seq)++, row_idx),
         ConstString(name.c_str()), child_type,
-        /*file_addr*/ 0, /*byte_size*/ 0, h.sh_offset + row_idx * h.sh_entsize,
+        /*file_addr=*/0, /*byte_size=*/0, h.sh_offset + row_idx * h.sh_entsize,
         h.sh_entsize,
-        /*log2align*/ 0, /*flags*/ 0);
+        /*log2align=*/0, /*flags=*/0);
     parent_sp->GetChildren().AddSection(container);
     containers_by_pos[key] = container;
     return container;
@@ -1973,20 +1971,19 @@ void ObjectFileELF::BuildNVGPUSectionList() {
   // readable permissions); otherwise the leaf stays metadata-only
   // (byte_size = 0).
   //
-  // A leaf whose data window falls past the end of the file (`IsTruncated`)
-  // is skipped here rather than attached as a broken Section -- without
-  // this, downstream readers of the section bytes would silently fail or
-  // read garbage. The skip happens before `GetOrCreateAncestor`, so
-  // truncated leaves don't materialize their parent chain; if every leaf
-  // belonging to a particular lane/warp/CTA is truncated, that container
-  // simply doesn't appear (consistent with the leaf-driven sparseness
-  // rule). The skipped section's name is recorded in `truncated_sections`
-  // so the build emits a single end-of-build warning listing what was
-  // dropped.
+  // A leaf whose data window falls past the end of the file is skipped
+  // here rather than attached as a broken Section -- without this,
+  // downstream readers of the section bytes would silently fail or read
+  // garbage. The skip happens before `GetOrCreateAncestor`, so truncated
+  // leaves don't materialize their parent chain; if every leaf belonging
+  // to a particular lane/warp/CTA is truncated, that container simply
+  // doesn't appear (consistent with the leaf-driven sparseness rule). The
+  // skipped section's name is recorded in `truncated_sections` so the
+  // build emits a single end-of-build warning listing what was dropped.
   auto AttachLeaf = [&](size_t i, llvm::StringRef name, SectionType type,
                         bool is_memory) {
     const ELFSectionHeaderInfo &h = m_section_headers[i];
-    if (IsTruncated(h)) {
+    if (h.IsTruncated(file_size)) {
       truncated_sections.push_back(h.section_name.GetStringRef().str());
       LLDB_LOG(log,
                "BuildNVGPUSectionList: section {0} at offset {1:x} is "
@@ -2003,7 +2000,7 @@ void ObjectFileELF::BuildNVGPUSectionList() {
         nvgpu::MakeID(nvgpu::SectionKind::Leaf, leaf_seq++), ConstString(name),
         type, is_memory ? h.sh_addr : 0, is_memory ? h.sh_size : 0, h.sh_offset,
         h.sh_size,
-        /*log2align*/ 0, /*flags*/ 0);
+        /*log2align=*/0, /*flags=*/0);
     if (is_memory)
       leaf->SetPermissions(ePermissionsReadable);
     parent->GetChildren().AddSection(leaf);
@@ -2099,7 +2096,7 @@ void ObjectFileELF::BuildNVGPUSectionList() {
       // sh_link, and can't reuse `AttachLeaf` (which would walk sh_link
       // through the unmodeled ModuleTable). Keep `byte_size = 0` so
       // cubins don't show a fake VM range in `image dump sections`.
-      if (IsTruncated(h)) {
+      if (h.IsTruncated(file_size)) {
         truncated_sections.push_back(h.section_name.GetStringRef().str());
         LLDB_LOG(log,
                  "BuildNVGPUSectionList: section {0} at offset {1:x} is "
@@ -2114,8 +2111,8 @@ void ObjectFileELF::BuildNVGPUSectionList() {
           root_sp, module_sp, this,
           nvgpu::MakeID(nvgpu::SectionKind::Leaf, leaf_seq++),
           ConstString(leaf_name), t,
-          /*file_addr*/ 0, /*byte_size*/ 0, h.sh_offset, h.sh_size,
-          /*log2align*/ 0, /*flags*/ 0);
+          /*file_addr=*/0, /*byte_size=*/0, h.sh_offset, h.sh_size,
+          /*log2align=*/0, /*flags=*/0);
       root_sp->GetChildren().AddSection(leaf);
       break;
     }
@@ -2148,11 +2145,12 @@ void ObjectFileELF::BuildNVGPUSectionList() {
     return;
   }
 
-  // Replace the flat section list with the new hierarchy. The old SectionSPs
-  // in the previous m_sections_up are abandoned (and destroyed when their
-  // last reference is released).
+  // Install the new hierarchy into both the ObjectFile's section list
+  // and the Module's unified section list -- both views are consumer-
+  // visible.
   m_sections_up = std::make_unique<SectionList>();
   m_sections_up->AddSection(root_sp);
+  unified_section_list.AddSection(root_sp);
 
   if (!truncated_sections.empty()) {
     std::string names = llvm::join(truncated_sections, ", ");
@@ -2190,28 +2188,8 @@ static SectionType GetSectionTypeFromName(llvm::StringRef Name) {
       .Default(eSectionTypeOther);
 }
 
-SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
-  switch (H.sh_type) {
-  case SHT_PROGBITS:
-    if (H.sh_flags & SHF_EXECINSTR)
-      return eSectionTypeCode;
-    break;
-  case SHT_NOBITS:
-    if (H.sh_flags & SHF_ALLOC)
-      return eSectionTypeZeroFill;
-    break;
-  case SHT_SYMTAB:
-    return eSectionTypeELFSymbolTable;
-  case SHT_DYNSYM:
-    return eSectionTypeELFDynamicSymbols;
-  case SHT_RELA:
-  case SHT_REL:
-    return eSectionTypeELFRelocationEntries;
-  case SHT_DYNAMIC:
-    return eSectionTypeELFDynamicLinkInfo;
-  // [NVIDIA] NVGPU corefile section types from cudacoredump.h (SHT_LOUSER + offset).
-  // These values are stable, defined by the public NVGPU corefile format spec.
-  // Added for ProcessNVGPUCore plugin.
+SectionType ObjectFileELF::ELFSectionHeaderInfo::GetNVGPUSectionType() const {
+  switch (sh_type) {
   case SHT_LOUSER + 1:  return eSectionTypeNVGPUManagedMemory;
   case SHT_LOUSER + 2:  return eSectionTypeNVGPUGlobalMemory;
   case SHT_LOUSER + 3:  return eSectionTypeNVGPULocalMemory;
@@ -2235,6 +2213,41 @@ SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
   case SHT_LOUSER + 21: return eSectionTypeNVGPUConstBankTable;
   case SHT_LOUSER + 22: return eSectionTypeNVGPUMetadata;
   case SHT_LOUSER + 23: return eSectionTypeNVGPUConvergenceBarrier;
+  default:
+    return eSectionTypeOther;
+  }
+}
+
+SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
+  switch (H.sh_type) {
+  case SHT_PROGBITS:
+    if (H.sh_flags & SHF_EXECINSTR)
+      return eSectionTypeCode;
+    break;
+  case SHT_NOBITS:
+    if (H.sh_flags & SHF_ALLOC)
+      return eSectionTypeZeroFill;
+    break;
+  case SHT_SYMTAB:
+    return eSectionTypeELFSymbolTable;
+  case SHT_DYNSYM:
+    return eSectionTypeELFDynamicSymbols;
+  case SHT_RELA:
+  case SHT_REL:
+    return eSectionTypeELFRelocationEntries;
+  case SHT_DYNAMIC:
+    return eSectionTypeELFDynamicLinkInfo;
+  default:
+    // [NVIDIA] Only treat SHT_LOUSER+N values as NVGPU section types if
+    // we're actually parsing an NVGPU corefile -- otherwise an unrelated
+    // ELF file that uses SHT_LOUSER+N for its own purpose would get
+    // mismapped.
+    if (IsNVGPUCoreFile()) {
+      SectionType nvgpu_type = H.GetNVGPUSectionType();
+      if (nvgpu_type != eSectionTypeOther)
+        return nvgpu_type;
+    }
+    break;
   }
   return GetSectionTypeFromName(H.section_name.GetStringRef());
 }
@@ -2458,52 +2471,52 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
   // VMAddressProvider's overlap detection, and BuildNVGPUSectionList
   // replaces m_sections_up wholesale anyway -- so any flat sections built
   // here would just be thrown away.
-  if (IsNVGPUCoreFile(m_header, GetType())) {
-    BuildNVGPUSectionList();
-  } else {
-    for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
-         I != m_section_headers.end(); ++I) {
-      const ELFSectionHeaderInfo &header = *I;
-      SectionType sect_type = GetSectionType(header);
+  if (IsNVGPUCoreFile()) {
+    BuildNVGPUSectionList(unified_section_list);
+    return;
+  }
 
-      ConstString &name = I->section_name;
-      const uint64_t file_size =
-          header.sh_type == SHT_NOBITS ? 0 : header.sh_size;
+  for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
+       I != m_section_headers.end(); ++I) {
+    const ELFSectionHeaderInfo &header = *I;
+    SectionType sect_type = GetSectionType(header);
 
-      VMAddressProvider &provider =
-          header.sh_flags & SHF_TLS ? tls_provider : regular_provider;
-      auto InfoOr = provider.GetAddressInfo(header);
-      if (!InfoOr)
-        continue;
+    ConstString &name = I->section_name;
+    const uint64_t file_size =
+        header.sh_type == SHT_NOBITS ? 0 : header.sh_size;
 
-      const uint32_t target_bytes_size =
-          GetTargetByteSize(sect_type, m_arch_spec);
+    VMAddressProvider &provider =
+        header.sh_flags & SHF_TLS ? tls_provider : regular_provider;
+    auto InfoOr = provider.GetAddressInfo(header);
+    if (!InfoOr)
+      continue;
 
-      elf::elf_xword log2align =
-          (header.sh_addralign == 0) ? 0
-                                     : llvm::Log2_64(header.sh_addralign);
+    const uint32_t target_bytes_size =
+        GetTargetByteSize(sect_type, m_arch_spec);
 
-      SectionSP section_sp(new Section(
-          InfoOr->Segment, GetModule(), // Module to which this section belongs.
-          this,            // ObjectFile to which this section belongs and should
-                           // read section data from.
-          SectionIndex(I), // Section ID.
-          name,            // Section name.
-          sect_type,       // Section type.
-          InfoOr->Range.GetRangeBase(), // VM address.
-          InfoOr->Range.GetByteSize(),  // VM size in bytes of this section.
-          header.sh_offset,             // Offset of this section in the file.
-          file_size,           // Size of the section as found in the file.
-          log2align,           // Alignment of the section
-          header.sh_flags,     // Flags for this section.
-          target_bytes_size)); // Number of host bytes per target byte
+    elf::elf_xword log2align =
+        (header.sh_addralign == 0) ? 0 : llvm::Log2_64(header.sh_addralign);
 
-      section_sp->SetPermissions(GetPermissions(header));
-      section_sp->SetIsThreadSpecific(header.sh_flags & SHF_TLS);
-      (InfoOr->Segment ? InfoOr->Segment->GetChildren() : *m_sections_up)
-          .AddSection(section_sp);
-      provider.AddSection(std::move(*InfoOr), std::move(section_sp));
-    }
+    SectionSP section_sp(new Section(
+        InfoOr->Segment, GetModule(), // Module to which this section belongs.
+        this,            // ObjectFile to which this section belongs and should
+                         // read section data from.
+        SectionIndex(I), // Section ID.
+        name,            // Section name.
+        sect_type,       // Section type.
+        InfoOr->Range.GetRangeBase(), // VM address.
+        InfoOr->Range.GetByteSize(),  // VM size in bytes of this section.
+        header.sh_offset,             // Offset of this section in the file.
+        file_size,           // Size of the section as found in the file.
+        log2align,           // Alignment of the section
+        header.sh_flags,     // Flags for this section.
+        target_bytes_size)); // Number of host bytes per target byte
+
+    section_sp->SetPermissions(GetPermissions(header));
+    section_sp->SetIsThreadSpecific(header.sh_flags & SHF_TLS);
+    (InfoOr->Segment ? InfoOr->Segment->GetChildren() : *m_sections_up)
+        .AddSection(section_sp);
+    provider.AddSection(std::move(*InfoOr), std::move(section_sp));
   }
 
   // Merge the two adding any new sections, and overwriting any existing
