@@ -150,20 +150,6 @@ public:
   llvm::ArrayRef<elf::ELFProgramHeader> ProgramHeaders();
   lldb_private::DataExtractor GetSegmentData(const elf::ELFProgramHeader &H);
 
-  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
-  /// Section header info extending ELFSectionHeader with the resolved name.
-  struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
-    lldb_private::ConstString section_name;
-  };
-
-  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
-  /// Returns the section header with the given id or NULL.
-  const ELFSectionHeaderInfo *GetSectionHeaderByIndex(lldb::user_id_t id);
-
-  // [NVIDIA] Made public for ProcessNVGPUCore SectionTree.
-  /// Returns the number of section headers
-  size_t GetNumSectionHeaders();
-
   llvm::StringRef
   StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const override;
 
@@ -188,6 +174,11 @@ private:
                 const lldb::ProcessSP &process_sp, lldb::addr_t header_addr);
 
   typedef std::vector<elf::ELFProgramHeader> ProgramHeaderColl;
+
+  /// Section header info extending ELFSectionHeader with the resolved name.
+  struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
+    lldb_private::ConstString section_name;
+  };
 
   typedef std::vector<ELFSectionHeaderInfo> SectionHeaderColl;
   typedef SectionHeaderColl::iterator SectionHeaderCollIter;
@@ -355,6 +346,29 @@ private:
   /// name can be found (note that section indices are always 1 based, and so
   /// section index 0 is never valid).
   lldb::user_id_t GetSectionIndexByName(const char *name);
+
+  /// Returns the section header with the given id or NULL.
+  const ELFSectionHeaderInfo *GetSectionHeaderByIndex(lldb::user_id_t id);
+
+  /// [NVIDIA] Synthesize the NVGPU GPU hierarchy directly from
+  /// `m_section_headers` and install it as `m_sections_up`:
+  ///
+  ///   `nvgpucore` root
+  ///     `global`, `managed`, `cubin`, `ucubin` leaves at root level
+  ///     `devN` -> `smM` -> `ctaK`
+  ///       `shared` leaf
+  ///       `warpL`
+  ///         `uregs`, `upreds`, `cbarrier` leaves
+  ///         `laneJ` -> {`regs`, `preds`, `local`} leaves
+  ///
+  /// Called from `CreateSections` only when `e_machine == EM_CUDA &&
+  /// GetType() == eTypeCoreFile`; the generic flat section-create loop is
+  /// skipped for those corefiles. A no-op for any other ELF input.
+  /// Trailing truncated global/managed memory sections are skipped and
+  /// reported via `Debugger::ReportWarning`; any malformed pre-global-memory
+  /// section is logged and leaves `m_sections_up` without a synthetic root,
+  /// so `ProcessNVGPUCore::DoLoadCore` rejects the corefile.
+  void BuildNVGPUSectionList();
 
   /// \name  ELF header dump routines
   //@{
