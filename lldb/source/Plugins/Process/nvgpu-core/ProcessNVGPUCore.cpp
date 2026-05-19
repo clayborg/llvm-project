@@ -289,8 +289,8 @@ size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
       std::min(static_cast<offset_t>(size), region->GetByteSize() - offset);
   if (bytes_to_read == 0)
     return 0;
-  return core_objfile->CopyData(region->GetFileOffset() + offset,
-                                bytes_to_read, buf);
+  return core_objfile->CopyData(region->GetFileOffset() + offset, bytes_to_read,
+                                buf);
 }
 
 /// Read `size` bytes from `addr` within `mem_section`'s data window. Returns
@@ -306,8 +306,8 @@ static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
   if (data.GetByteSize() == 0)
     return 0;
   const offset_t offset = addr - mem_section->GetFileAddress();
-  const size_t bytes_to_read = std::min<offset_t>(size,
-                                                  data.GetByteSize() - offset);
+  const size_t bytes_to_read =
+      std::min<offset_t>(size, data.GetByteSize() - offset);
   return data.CopyData(offset, bytes_to_read, buf);
 }
 
