@@ -48,9 +48,9 @@ namespace lldb_private::nvgpu_core {
 
 /// One row of a nvgpu-device-table.
 struct DeviceEntry : CudbgDeviceTableEntry {
-  static llvm::Expected<DeviceEntry>
-  Decode(const DataExtractor &data, lldb::offset_t *offset_ptr,
-         uint64_t entry_size);
+  static llvm::Expected<DeviceEntry> Decode(const DataExtractor &data,
+                                            lldb::offset_t *offset_ptr,
+                                            uint64_t entry_size);
 };
 
 /// One row of a nvgpu-sm-table.

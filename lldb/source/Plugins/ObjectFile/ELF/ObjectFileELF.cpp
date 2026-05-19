@@ -1684,13 +1684,6 @@ ObjectFileELF::StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const {
   return symbol_name.substr(0, pos);
 }
 
-bool ObjectFileELF::ELFSectionHeaderInfo::IsTruncated(
-    uint64_t file_size) const {
-  if (sh_size == 0)
-    return false;
-  return sh_size > file_size || sh_offset > file_size - sh_size;
-}
-
 // ParseSectionHeaders
 size_t ObjectFileELF::ParseSectionHeaders() {
   return GetSectionHeaderInfo(m_section_headers, *m_data_nsp.get(), m_header,
@@ -2188,33 +2181,57 @@ static SectionType GetSectionTypeFromName(llvm::StringRef Name) {
       .Default(eSectionTypeOther);
 }
 
-SectionType ObjectFileELF::ELFSectionHeaderInfo::GetNVGPUSectionType() const {
+std::optional<SectionType>
+ObjectFileELF::ELFSectionHeaderInfo::GetNVGPUSectionType() const {
   switch (sh_type) {
-  case SHT_LOUSER + 1:  return eSectionTypeNVGPUManagedMemory;
-  case SHT_LOUSER + 2:  return eSectionTypeNVGPUGlobalMemory;
-  case SHT_LOUSER + 3:  return eSectionTypeNVGPULocalMemory;
-  case SHT_LOUSER + 4:  return eSectionTypeNVGPUSharedMemory;
-  case SHT_LOUSER + 5:  return eSectionTypeNVGPURegisters;
-  case SHT_LOUSER + 6:  return eSectionTypeNVGPUUnrelocatedImage;
-  case SHT_LOUSER + 7:  return eSectionTypeNVGPURelocatedImage;
-  case SHT_LOUSER + 8:  return eSectionTypeNVGPUBacktrace;
-  case SHT_LOUSER + 9:  return eSectionTypeNVGPUDeviceTable;
-  case SHT_LOUSER + 10: return eSectionTypeNVGPUContextTable;
-  case SHT_LOUSER + 11: return eSectionTypeNVGPUSmTable;
-  case SHT_LOUSER + 12: return eSectionTypeNVGPUGridTable;
-  case SHT_LOUSER + 13: return eSectionTypeNVGPUCtaTable;
-  case SHT_LOUSER + 14: return eSectionTypeNVGPUWarpTable;
-  case SHT_LOUSER + 15: return eSectionTypeNVGPULaneTable;
-  case SHT_LOUSER + 16: return eSectionTypeNVGPUModuleTable;
-  case SHT_LOUSER + 17: return eSectionTypeNVGPUPredicates;
-  case SHT_LOUSER + 18: return eSectionTypeNVGPUParamMemory;
-  case SHT_LOUSER + 19: return eSectionTypeNVGPUUniformRegisters;
-  case SHT_LOUSER + 20: return eSectionTypeNVGPUUniformPredicates;
-  case SHT_LOUSER + 21: return eSectionTypeNVGPUConstBankTable;
-  case SHT_LOUSER + 22: return eSectionTypeNVGPUMetadata;
-  case SHT_LOUSER + 23: return eSectionTypeNVGPUConvergenceBarrier;
+  case SHT_LOUSER + 1:
+    return eSectionTypeNVGPUManagedMemory;
+  case SHT_LOUSER + 2:
+    return eSectionTypeNVGPUGlobalMemory;
+  case SHT_LOUSER + 3:
+    return eSectionTypeNVGPULocalMemory;
+  case SHT_LOUSER + 4:
+    return eSectionTypeNVGPUSharedMemory;
+  case SHT_LOUSER + 5:
+    return eSectionTypeNVGPURegisters;
+  case SHT_LOUSER + 6:
+    return eSectionTypeNVGPUUnrelocatedImage;
+  case SHT_LOUSER + 7:
+    return eSectionTypeNVGPURelocatedImage;
+  case SHT_LOUSER + 8:
+    return eSectionTypeNVGPUBacktrace;
+  case SHT_LOUSER + 9:
+    return eSectionTypeNVGPUDeviceTable;
+  case SHT_LOUSER + 10:
+    return eSectionTypeNVGPUContextTable;
+  case SHT_LOUSER + 11:
+    return eSectionTypeNVGPUSmTable;
+  case SHT_LOUSER + 12:
+    return eSectionTypeNVGPUGridTable;
+  case SHT_LOUSER + 13:
+    return eSectionTypeNVGPUCtaTable;
+  case SHT_LOUSER + 14:
+    return eSectionTypeNVGPUWarpTable;
+  case SHT_LOUSER + 15:
+    return eSectionTypeNVGPULaneTable;
+  case SHT_LOUSER + 16:
+    return eSectionTypeNVGPUModuleTable;
+  case SHT_LOUSER + 17:
+    return eSectionTypeNVGPUPredicates;
+  case SHT_LOUSER + 18:
+    return eSectionTypeNVGPUParamMemory;
+  case SHT_LOUSER + 19:
+    return eSectionTypeNVGPUUniformRegisters;
+  case SHT_LOUSER + 20:
+    return eSectionTypeNVGPUUniformPredicates;
+  case SHT_LOUSER + 21:
+    return eSectionTypeNVGPUConstBankTable;
+  case SHT_LOUSER + 22:
+    return eSectionTypeNVGPUMetadata;
+  case SHT_LOUSER + 23:
+    return eSectionTypeNVGPUConvergenceBarrier;
   default:
-    return eSectionTypeOther;
+    return std::nullopt;
   }
 }
 
@@ -2243,9 +2260,8 @@ SectionType ObjectFileELF::GetSectionType(const ELFSectionHeaderInfo &H) const {
     // ELF file that uses SHT_LOUSER+N for its own purpose would get
     // mismapped.
     if (IsNVGPUCoreFile()) {
-      SectionType nvgpu_type = H.GetNVGPUSectionType();
-      if (nvgpu_type != eSectionTypeOther)
-        return nvgpu_type;
+      if (std::optional<SectionType> nvgpu_type = H.GetNVGPUSectionType())
+        return *nvgpu_type;
     }
     break;
   }
@@ -2479,7 +2495,6 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
   for (SectionHeaderCollIter I = std::next(m_section_headers.begin());
        I != m_section_headers.end(); ++I) {
     const ELFSectionHeaderInfo &header = *I;
-    SectionType sect_type = GetSectionType(header);
 
     ConstString &name = I->section_name;
     const uint64_t file_size =
@@ -2490,6 +2505,8 @@ void ObjectFileELF::CreateSections(SectionList &unified_section_list) {
     auto InfoOr = provider.GetAddressInfo(header);
     if (!InfoOr)
       continue;
+
+    SectionType sect_type = GetSectionType(header);
 
     const uint32_t target_bytes_size =
         GetTargetByteSize(sect_type, m_arch_spec);
