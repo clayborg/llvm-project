@@ -181,14 +181,18 @@ private:
 
     /// True if this section's window extends past file_size.
     /// Zero-sized sections are never considered truncated.
-    bool IsTruncated(uint64_t file_size) const;
+    bool IsTruncated(uint64_t file_size) const {
+      if (sh_size == 0)
+        return false;
+      return sh_size > file_size || sh_offset > file_size - sh_size;
+    }
 
     /// [NVIDIA] Map this section header's `sh_type` to its NVGPU
     /// SectionType per cudacoredump.h's `CUDBG_SHT_*` enums (each
-    /// defined as `SHT_LOUSER + N`). Returns `eSectionTypeOther` for
+    /// defined as `SHT_LOUSER + N`). Returns `std::nullopt` for
     /// non-NVGPU sh_type values. Callers should only invoke this when
     /// the parent object file is an NVGPU corefile.
-    lldb::SectionType GetNVGPUSectionType() const;
+    std::optional<lldb::SectionType> GetNVGPUSectionType() const;
   };
 
   typedef std::vector<ELFSectionHeaderInfo> SectionHeaderColl;

@@ -74,23 +74,20 @@ RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
     DataExtractor data;
     core->ReadSectionData(section.get(), data);
     const size_t section_words = data.GetByteSize() / sizeof(uint32_t);
-    const size_t n = std::min({static_cast<size_t>(device_count),
-                               section_words, dst_capacity_words});
+    const size_t n = std::min(
+        {static_cast<size_t>(device_count), section_words, dst_capacity_words});
     if (n > 0)
       data.CopyData(0, n * sizeof(uint32_t), dst);
   };
 
-  copy_class(m_register_data.regular, sass::kNumRRegs,
-             dev_or->numRegsPerLane,
+  copy_class(m_register_data.regular, sass::kNumRRegs, dev_or->numRegsPerLane,
              nvgpu_core::FindChildByType(*lane_sp, eSectionTypeNVGPURegisters));
-  copy_class(m_register_data.predicate, sass::kNumPRegs,
-             dev_or->numPredicatesPrLane,
-             nvgpu_core::FindChildByType(*lane_sp,
-                                         eSectionTypeNVGPUPredicates));
-  copy_class(m_register_data.uniform, sass::kNumURRegs,
-             dev_or->numUniformRegsPrWarp,
-             nvgpu_core::FindChildByType(*warp_sp,
-                                         eSectionTypeNVGPUUniformRegisters));
+  copy_class(
+      m_register_data.predicate, sass::kNumPRegs, dev_or->numPredicatesPrLane,
+      nvgpu_core::FindChildByType(*lane_sp, eSectionTypeNVGPUPredicates));
+  copy_class(
+      m_register_data.uniform, sass::kNumURRegs, dev_or->numUniformRegsPrWarp,
+      nvgpu_core::FindChildByType(*warp_sp, eSectionTypeNVGPUUniformRegisters));
   copy_class(m_register_data.uniform_predicate, sass::kNumUPRegs,
              dev_or->numUniformPredicatesPrWarp,
              nvgpu_core::FindChildByType(*warp_sp,
