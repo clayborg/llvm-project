@@ -27,12 +27,12 @@ namespace sass {
 struct RegisterLayout {
   uint64_t PC;
   uint64_t errorPC;
-  uint32_t regular[kNumRRegs];             ///< R0..R254
-  uint32_t regular_zero;                   ///< RZ (R255, always reads 0)
-  uint32_t predicate[kNumPRegs];           ///< P0..P7
-  uint32_t uniform[kNumURRegs];            ///< UR0..UR254
-  uint32_t uniform_zero;                   ///< URZ (UR255, always reads 0)
-  uint32_t uniform_predicate[kNumUPRegs];  ///< UP0..UP7
+  uint32_t regular[kNumRRegs];            ///< R0..R254
+  uint32_t regular_zero;                  ///< RZ (R255, always reads 0)
+  uint32_t predicate[kNumPRegs];          ///< P0..P7
+  uint32_t uniform[kNumURRegs];           ///< UR0..UR254
+  uint32_t uniform_zero;                  ///< URZ (UR255, always reads 0)
+  uint32_t uniform_predicate[kNumUPRegs]; ///< UP0..UP7
 };
 
 /// Get the canonical register info table for SASS architecture.
