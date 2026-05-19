@@ -15,8 +15,8 @@ using namespace lldb_private;
 
 namespace lldb_private::nvgpu_core {
 
-llvm::SmallVector<SectionSP, 8>
-FindChildrenByType(const Section &parent, SectionType type) {
+llvm::SmallVector<SectionSP, 8> FindChildrenByType(const Section &parent,
+                                                   SectionType type) {
   llvm::SmallVector<SectionSP, 8> result;
   for (const SectionSP &child : parent.GetChildren()) {
     if (child && child->GetType() == type)
@@ -33,8 +33,8 @@ SectionSP FindChildByType(const Section &parent, SectionType type) {
   return nullptr;
 }
 
-llvm::SmallVector<SectionSP, 16>
-FindDescendantsByType(const Section &root, SectionType type) {
+llvm::SmallVector<SectionSP, 16> FindDescendantsByType(const Section &root,
+                                                       SectionType type) {
   llvm::SmallVector<SectionSP, 16> result;
   auto walk = [&](const Section &node, auto &self) -> void {
     for (const SectionSP &child : node.GetChildren()) {
