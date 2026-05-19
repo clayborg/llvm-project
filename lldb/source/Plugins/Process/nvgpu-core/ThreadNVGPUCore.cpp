@@ -25,10 +25,8 @@ using namespace lldb;
 using namespace lldb_private;
 
 ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
-                                 SectionSP lane_section_sp,
-                                 uint32_t lane_idx)
-    : Thread(process, tid),
-      m_lane_section_sp(std::move(lane_section_sp)),
+                                 SectionSP lane_section_sp, uint32_t lane_idx)
+    : Thread(process, tid), m_lane_section_sp(std::move(lane_section_sp)),
       m_lane_idx(lane_idx) {
   // Eagerly decode the CTA and lane rows once at construction time so:
   //   * `m_name` (used by `GetName()`) is a cached string, not a re-decode
@@ -38,10 +36,10 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   //     decodes the warp (and on cascade, the SM) row internally.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
   ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
-  auto cta_or = nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(
-      GetCTASection(), core);
-  auto lane_or = nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(
-      m_lane_section_sp, core);
+  auto cta_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(GetCTASection(), core);
+  auto lane_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(m_lane_section_sp, core);
 
   if (cta_or && lane_or)
     m_name = nvgpu_core::FormatThreadName(*cta_or, *lane_or);
