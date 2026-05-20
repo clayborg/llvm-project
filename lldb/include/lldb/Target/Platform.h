@@ -1053,11 +1053,20 @@ public:
   /// \param[in] only_threads_with_stop_reason
   ///     If true, only threads with a valid stop reason will be displayed.
   ///
+  /// \param[in] stop_reason_filter
+  ///     If non-empty, only show threads whose stop reason matches this
+  ///     filter. The platform decides how the filter is interpreted; the
+  ///     NVGPU plugin accepts the keyword `exception` (any CUDA exception),
+  ///     `signal` (any signal stop), a specific signal name (e.g.
+  ///     `SIGTRAP`), or any substring of the stop-reason description.
+  ///     Threads that do not match are folded into a single summary row.
+  ///
   /// \returns
   ///     The number of threads whose status was printed, or 0 if this
   ///     platform does not provide custom GPU thread status handling.
   virtual size_t GetGPUThreadStatus(Process &process, Stream &strm,
-                                    bool only_threads_with_stop_reason) {
+                                    bool only_threads_with_stop_reason,
+                                    llvm::StringRef stop_reason_filter = {}) {
     return 0;
   }
 
