@@ -54,8 +54,14 @@ public:
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
   void RefreshStateAfterStop() override {
+    // Prefer the exception thread; fall back to a lane stopped on an
+    // inline trap;/__trap(). If neither exists, leave selection to the
+    // default (`StopInfo::ShouldSelect()` already prefers any non-None
+    // reason over None, which is what we want).
     if (m_exception_tid != LLDB_INVALID_THREAD_ID)
       GetThreadList().SetSelectedThreadByID(m_exception_tid);
+    else if (m_stop_tid != LLDB_INVALID_THREAD_ID)
+      GetThreadList().SetSelectedThreadByID(m_stop_tid);
   }
 
   lldb_private::Status WillResume() override {
@@ -101,7 +107,12 @@ private:
 
   lldb::ModuleSP m_core_module_sp;
   lldb::SectionSP m_root_sp;
+  /// First thread with an attributed CUDA exception, or
+  /// `LLDB_INVALID_THREAD_ID` if no lane faulted in this corefile.
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
+  /// First thread on a warp halted at an inline `trap;` / `__trap()`,
+  /// used as the secondary selection if there's no exception thread.
+  lldb::tid_t m_stop_tid = LLDB_INVALID_THREAD_ID;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H

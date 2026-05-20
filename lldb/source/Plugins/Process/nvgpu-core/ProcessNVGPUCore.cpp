@@ -244,12 +244,18 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
           std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
       new_thread_list.AddThread(thread_sp);
 
-      // Select the first thread that any CUDA exception is attributed to
-      // (matches ThreadNVGPUCore::CalculateStopInfo's policy, so thread
-      // selection and stop reason stay consistent).
+      // Pick a thread to surface to the user. Mirrors the precedence
+      // baked into ThreadNVGPUCore::CalculateStopInfo so the selected
+      // thread is always one of the ones that has a non-None stop
+      // reason: prefer a CUDA exception thread, then fall back to a
+      // lane stopped on an inline trap;/__trap().
       if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
-          thread_sp->GetAttributedException() != 0)
+          thread_sp->GetAttributedException() != 0) {
         m_exception_tid = tid;
+      } else if (m_stop_tid == LLDB_INVALID_THREAD_ID &&
+                 thread_sp->IsWarpBrokenForThisLane()) {
+        m_stop_tid = tid;
+      }
     }
   }
 

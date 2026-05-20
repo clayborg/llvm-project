@@ -31,8 +31,9 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   // Eagerly decode the CTA and lane rows once at construction time so:
   //   * `m_name` (used by `GetName()`) is a cached string, not a re-decode
   //     of CTA+lane on every call to LLDB's stop-reason printers.
-  //   * `m_attributed_exception` (used by `GetAttributedException()` and
-  //     `CalculateStopInfo`) is a cached field. `ComputeAttributedException`
+  //   * `m_attributed_exception` and `m_warp_broken_active` (used by
+  //     `GetAttributedException()` / `IsWarpBrokenForThisLane()` and
+  //     `CalculateStopInfo`) are cached fields. `ComputeStopAttribution`
   //     decodes the warp (and on cascade, the SM) row internally.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
   ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
@@ -46,9 +47,13 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   if (m_name.empty())
     m_name = "NVIDIA GPU Thread";
 
-  if (lane_or)
-    m_attributed_exception = nvgpu_core::ComputeAttributedException(
-        *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
+  if (lane_or) {
+    nvgpu_core::StopAttribution attribution =
+        nvgpu_core::ComputeStopAttribution(
+            *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
+    m_attributed_exception = attribution.attributed_exception;
+    m_warp_broken_active = attribution.warp_broken_active;
+  }
 
   Log *log = GetLog(LLDBLog::Process);
   if (!cta_or)
@@ -104,15 +109,25 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
 const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }
 
 bool ThreadNVGPUCore::CalculateStopInfo() {
+  // Three buckets:
+  //   1. Attributed CUDA exception -> "stop reason = CUDA Exception: ...".
+  //   2. Lane was active on a warp halted at an inline trap;/__trap()
+  //      (`warp.isWarpBroken`) -> "stop reason = signal SIGTRAP (trap)".
+  //      The active-lane gate is applied in ComputeStopAttribution so
+  //      unrelated lanes on the same warp don't claim the trap.
+  //   3. Otherwise -> no stop reason. A corefile freezes the GPU as a
+  //      whole; lanes that didn't fault and didn't trap were merely
+  //      suspended, so leaving m_stop_info_sp null (yielding
+  //      eStopReasonNone) keeps `thread list` from misreporting SIGTRAP
+  //      on every lane in the dump.
   CUDBGException_t exc =
       static_cast<CUDBGException_t>(GetAttributedException());
   if (exc != CUDBG_EXCEPTION_NONE) {
     std::string desc =
         ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
     SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
-  } else {
-    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP));
+  } else if (IsWarpBrokenForThisLane()) {
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP, "trap"));
   }
-
   return true;
 }

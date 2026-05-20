@@ -148,12 +148,19 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
                                  lane.threadIdxZ);
 }
 
-uint32_t ComputeAttributedException(const LaneEntry &lane, uint32_t lane_idx,
-                                    lldb::SectionSP warp_section_sp,
-                                    lldb::SectionSP sm_section_sp,
-                                    ObjectFileELF *core) {
-  if (lane.exception != 0)
-    return lane.exception;
+StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
+                                       lldb::SectionSP warp_section_sp,
+                                       lldb::SectionSP sm_section_sp,
+                                       ObjectFileELF *core) {
+  StopAttribution out;
+
+  // A per-lane exception is definitive: a lane only carries an exception
+  // if it actually executed the faulting instruction, so we don't need to
+  // consult the warp or SM rows to attribute it.
+  if (lane.exception != 0) {
+    out.attributed_exception = lane.exception;
+    return out;
+  }
 
   Log *log = GetLog(LLDBLog::Process);
   llvm::Expected<WarpEntry> warp_or =
@@ -161,22 +168,32 @@ uint32_t ComputeAttributedException(const LaneEntry &lane, uint32_t lane_idx,
   if (!warp_or) {
     LLDB_LOG_ERROR(log, warp_or.takeError(),
                    "Failed to decode GPU warp data while attributing "
-                   "exception to lane {1}: {0}",
+                   "stop reason to lane {1}: {0}",
                    lane_idx);
-    return 0;
+    return out;
   }
+
+  // Inline `trap;` / `__trap()` shows up here: the CUDA SDK has no
+  // CUDBG_EXCEPTION_TRAP, so a hardcoded trap leaves `lane.exception ==
+  // 0` and `sm.exception == 0` but sets `warp.isWarpBroken`. Scope it to
+  // the active lanes so unrelated lanes on the same warp don't look like
+  // they hit the trap.
+  if (warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx))
+    out.warp_broken_active = true;
+
   if (!warp_or->errorPCValid || !warp_or->IsLaneActive(lane_idx))
-    return 0;
+    return out;
 
   llvm::Expected<SMEntry> sm_or = ReadAndDecode<SMEntry>(sm_section_sp, core);
   if (!sm_or) {
     LLDB_LOG_ERROR(log, sm_or.takeError(),
                    "Failed to decode GPU SM data while attributing "
-                   "exception to lane {1}: {0}",
+                   "stop reason to lane {1}: {0}",
                    lane_idx);
-    return 0;
+    return out;
   }
-  return sm_or->exception;
+  out.attributed_exception = sm_or->exception;
+  return out;
 }
 
 } // namespace lldb_private::nvgpu_core

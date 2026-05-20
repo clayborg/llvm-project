@@ -63,6 +63,12 @@ public:
   /// fault.
   uint32_t GetAttributedException() const { return m_attributed_exception; }
 
+  /// True if this thread's warp was halted at an inline `trap;` /
+  /// `__trap()` (`warp.isWarpBroken`) and this lane was active at that
+  /// moment. Distinguishes a real trap hit from a lane that was merely
+  /// suspended when the corefile was taken.
+  bool IsWarpBrokenForThisLane() const { return m_warp_broken_active; }
+
 protected:
   bool CalculateStopInfo() override;
 
@@ -71,6 +77,7 @@ private:
   uint32_t m_lane_idx;
   std::string m_name;
   uint32_t m_attributed_exception = 0;
+  bool m_warp_broken_active = false;
 };
 
 } // namespace lldb_private

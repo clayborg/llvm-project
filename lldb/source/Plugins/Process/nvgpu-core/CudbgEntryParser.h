@@ -117,8 +117,24 @@ llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
 /// fields by hand.
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 
-/// Compute the attributed exception code for `lane_idx` using the
-/// standard precedence cascade:
+/// What stopped a lane in a corefile.
+///
+/// A corefile freezes the whole GPU in one shot, so most lanes were
+/// merely suspended and have no per-thread stop reason. The two fields
+/// below capture the only two ways a lane can carry one:
+struct StopAttribution {
+  /// `CUDBGException_t` attributed to this lane via the precedence
+  /// cascade in `ComputeStopAttribution`, or 0 if none applies.
+  uint32_t attributed_exception = 0;
+  /// True if this lane's warp was halted at a hardcoded breakpoint /
+  /// inline `trap;` (`warp.isWarpBroken`) AND this lane was active at
+  /// that moment (`warp.IsLaneActive(lane_idx)`). The active-lane gate
+  /// scopes the trap to the lanes that actually executed it.
+  bool warp_broken_active = false;
+};
+
+/// Compute the stop-attribution facts for `lane_idx` from the lane / warp
+/// / SM rows. The precedence cascade for the exception field is:
 ///
 ///   1. Per-lane exception (`lane.exception`) is definitive when non-zero.
 ///      A lane that didn't execute the faulting instruction can't carry
@@ -129,12 +145,18 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 ///      `sm.exception`.
 ///   3. Otherwise 0 (`CUDBG_EXCEPTION_NONE`).
 ///
-/// Returns 0 on any read/decode failure of the warp or SM rows; errors
-/// are consumed internally so callers don't have to handle `Expected`.
-uint32_t ComputeAttributedException(const LaneEntry &lane, uint32_t lane_idx,
-                                    lldb::SectionSP warp_section_sp,
-                                    lldb::SectionSP sm_section_sp,
-                                    ObjectFileELF *core);
+/// The `warp_broken_active` flag is independently set from the warp row;
+/// it covers the case where a warp executed an inline `trap;` (which the
+/// CUDA SDK reports via `isWarpBroken`, not via the exception enum -- there
+/// is no `CUDBG_EXCEPTION_TRAP`).
+///
+/// Read/decode failures of the warp or SM rows are consumed internally,
+/// so callers don't have to handle `Expected`; on failure, the
+/// corresponding fields stay at their defaults.
+StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
+                                       lldb::SectionSP warp_section_sp,
+                                       lldb::SectionSP sm_section_sp,
+                                       ObjectFileELF *core);
 
 } // namespace lldb_private::nvgpu_core
 
