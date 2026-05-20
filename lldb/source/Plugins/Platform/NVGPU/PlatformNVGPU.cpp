@@ -30,6 +30,7 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <climits>
@@ -1062,12 +1063,18 @@ static void RenderAggregatedGroup(Stream &strm, const ThreadGroup &group) {
     module_name = sc.module_sp->GetFileSpec().GetFilename();
 
   switch (group.key.kind) {
-  case GroupKind::LineAndFunction:
+  case GroupKind::LineAndFunction: {
     if (module_name)
       strm.Printf("%s`", module_name.GetCString());
+    // Display just the basename so the source location reads like the rest
+    // of LLDB output (`module`function at file.cu:line`). The full path is
+    // retained in the GroupKey for equality so that two files with the same
+    // basename but different paths still hash to distinct groups.
+    llvm::StringRef basename = llvm::sys::path::filename(group.key.file);
     strm.Printf("%s at %s:%u", group.key.function.c_str(),
-                group.key.file.c_str(), group.key.line);
+                basename.str().c_str(), group.key.line);
     break;
+  }
   case GroupKind::FunctionOnly:
     if (module_name)
       strm.Printf("%s`", module_name.GetCString());

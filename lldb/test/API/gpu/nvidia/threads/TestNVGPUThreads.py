@@ -62,11 +62,11 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
 
         # Verbose mode opts out of GPU-specific aggregation and renders one
         # row per thread, like `thread list` on a CPU target. Each row uses
-        # the standard "thread #N: tid = ..." prefix and exposes the per-
-        # thread PC.
+        # the standard `thread #N: tid = ...` prefix and embeds the CUDA
+        # coordinates in the thread name.
         self.expect(
             "thread list -v",
-            substrs=["thread #", "pc =", "name = 'blockIdx"],
+            substrs=["thread #", "tid = 0x", "name = 'blockIdx"],
             matching=True,
         )
         self.expect("thread list -v", substrs=["thread(s):"], matching=False)
