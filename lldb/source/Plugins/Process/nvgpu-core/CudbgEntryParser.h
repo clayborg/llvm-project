@@ -42,6 +42,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace lldb_private::nvgpu_core {
@@ -122,27 +123,28 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 /// the only two ways a lane can claim one.
 struct StopAttribution {
   /// `CUDBGException_t` attributed to this lane, or 0 if none.
-  uint32_t attributed_exception = 0;
+  uint32_t attributed_exception;
   /// Lane was active on a warp halted at an inline `trap;` / `__trap()`
   /// (the SDK reports this via `isWarpBroken`, not via an exception
   /// code). The active-lane gate scopes the trap to lanes that
   /// actually executed it.
-  bool warp_broken_active = false;
+  bool warp_broken_active;
 };
 
-/// Compute stop attribution for `lane_idx`. Exception precedence:
+/// Compute stop attribution for `lane_idx`, or `std::nullopt` if the
+/// lane has no stop reason. Exception precedence:
 ///
 ///   1. `lane.exception` is definitive when non-zero.
 ///   2. Otherwise, if `warp.errorPCValid` AND the lane was active at
 ///      fault time, borrow `sm.exception`.
-///   3. Otherwise `CUDBG_EXCEPTION_NONE`.
+///   3. Otherwise no exception.
 ///
-/// Warp/SM read failures are consumed internally; affected fields are
-/// left at their defaults.
-StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
-                                       lldb::SectionSP warp_section_sp,
-                                       lldb::SectionSP sm_section_sp,
-                                       ObjectFileELF *core);
+/// Warp/SM read failures are consumed internally and treated as no
+/// attribution.
+std::optional<StopAttribution>
+ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
+                       lldb::SectionSP warp_section_sp,
+                       lldb::SectionSP sm_section_sp, ObjectFileELF *core);
 
 } // namespace lldb_private::nvgpu_core
 

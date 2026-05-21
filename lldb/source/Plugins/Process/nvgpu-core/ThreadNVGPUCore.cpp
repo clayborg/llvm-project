@@ -43,11 +43,13 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
     m_name = "NVIDIA GPU Thread";
 
   if (lane_or) {
-    nvgpu_core::StopAttribution attribution =
+    std::optional<nvgpu_core::StopAttribution> attribution =
         nvgpu_core::ComputeStopAttribution(
             *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
-    m_attributed_exception = attribution.attributed_exception;
-    m_warp_broken_active = attribution.warp_broken_active;
+    if (attribution) {
+      m_attributed_exception = attribution->attributed_exception;
+      m_warp_broken_active = attribution->warp_broken_active;
+    }
   }
 
   Log *log = GetLog(LLDBLog::Process);
@@ -110,8 +112,7 @@ bool ThreadNVGPUCore::CalculateStopInfo() {
   CUDBGException_t exc =
       static_cast<CUDBGException_t>(GetAttributedException());
   if (exc != CUDBG_EXCEPTION_NONE) {
-    std::string desc =
-        ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
+    std::string desc = ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
     SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
   } else if (IsWarpBrokenForThisLane()) {
     SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP, "trap"));
