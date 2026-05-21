@@ -112,7 +112,7 @@ bool ThreadNVGPUCore::CalculateStopInfo() {
   if (exc != CUDBG_EXCEPTION_NONE) {
     std::string desc = ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
     SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
-  } else if (m_stop_attribution->warp_broken_active) {
+  } else if (m_stop_attribution->at_trap) {
     SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP, "trap"));
   } else if (!m_stop_attribution->decode_error.empty()) {
     std::string desc = "error: " + m_stop_attribution->decode_error;

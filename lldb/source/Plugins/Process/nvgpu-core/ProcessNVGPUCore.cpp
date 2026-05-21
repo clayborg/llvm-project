@@ -250,7 +250,7 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
           thread_sp->GetAttributedException() != 0) {
         m_exception_tid = tid;
       } else if (m_stop_tid == LLDB_INVALID_THREAD_ID &&
-                 thread_sp->IsWarpBrokenForThisLane()) {
+                 thread_sp->IsAtTrap()) {
         m_stop_tid = tid;
       }
     }

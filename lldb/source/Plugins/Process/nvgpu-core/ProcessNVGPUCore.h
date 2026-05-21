@@ -54,12 +54,16 @@ public:
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
   void RefreshStateAfterStop() override {
-    // Prefer an exception thread, then a trap thread; otherwise leave
-    // selection at the default.
+    // Prefer an exception thread, then a trap thread; otherwise fall
+    // back to the first thread we created.
     if (m_exception_tid != LLDB_INVALID_THREAD_ID)
       GetThreadList().SetSelectedThreadByID(m_exception_tid);
     else if (m_stop_tid != LLDB_INVALID_THREAD_ID)
       GetThreadList().SetSelectedThreadByID(m_stop_tid);
+    else {
+      if (lldb::ThreadSP first = GetThreadList().GetThreadAtIndex(0))
+        GetThreadList().SetSelectedThreadByID(first->GetID());
+    }
   }
 
   lldb_private::Status WillResume() override {

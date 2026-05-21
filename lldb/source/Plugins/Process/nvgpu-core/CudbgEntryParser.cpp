@@ -170,8 +170,7 @@ ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
   // The SDK has no `CUDBG_EXCEPTION_TRAP`; an inline trap surfaces as
   // `isWarpBroken`. Gate by active lane so unrelated lanes on the same
   // warp don't claim the trap.
-  const bool warp_broken_active =
-      warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx);
+  const bool at_trap = warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx);
 
   uint32_t attributed_exception = 0;
   std::string decode_error;
@@ -188,9 +187,9 @@ ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
     }
   }
 
-  if (attributed_exception == 0 && !warp_broken_active && decode_error.empty())
+  if (attributed_exception == 0 && !at_trap && decode_error.empty())
     return std::nullopt;
-  return StopAttribution{attributed_exception, warp_broken_active,
+  return StopAttribution{attributed_exception, at_trap,
                          std::move(decode_error)};
 }
 

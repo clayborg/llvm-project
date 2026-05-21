@@ -124,11 +124,11 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 struct StopAttribution {
   /// `CUDBGException_t` attributed to this lane, or 0 if none.
   uint32_t attributed_exception;
-  /// Lane was active on a warp halted at an inline `trap;` / `__trap()`
-  /// (the SDK reports this via `isWarpBroken`, not via an exception
-  /// code). The active-lane gate scopes the trap to lanes that
-  /// actually executed it.
-  bool warp_broken_active;
+  /// Lane stopped at an inline `trap;` / `__trap()`. The CUDA SDK
+  /// reports this via `warp.isWarpBroken` rather than an exception
+  /// code, gated by the warp's active-lane mask so unrelated lanes on
+  /// the same warp don't claim the trap.
+  bool at_trap;
   /// If the warp or SM row failed to decode (typically a truncated
   /// corefile), a human-readable description of the failure. Surfaced
   /// as the lane's stop reason so the user sees the corruption in

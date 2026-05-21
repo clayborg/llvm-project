@@ -69,10 +69,9 @@ public:
     return m_stop_attribution ? m_stop_attribution->attributed_exception : 0;
   }
 
-  /// True if this lane was active on a warp halted at an inline `trap;`
-  /// / `__trap()`.
-  bool IsWarpBrokenForThisLane() const {
-    return m_stop_attribution && m_stop_attribution->warp_broken_active;
+  /// True if this lane stopped at an inline `trap;` / `__trap()`.
+  bool IsAtTrap() const {
+    return m_stop_attribution && m_stop_attribution->at_trap;
   }
 
 protected:
