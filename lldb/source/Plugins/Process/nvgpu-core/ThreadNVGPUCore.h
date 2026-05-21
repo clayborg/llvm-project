@@ -63,10 +63,8 @@ public:
   /// fault.
   uint32_t GetAttributedException() const { return m_attributed_exception; }
 
-  /// True if this thread's warp was halted at an inline `trap;` /
-  /// `__trap()` (`warp.isWarpBroken`) and this lane was active at that
-  /// moment. Distinguishes a real trap hit from a lane that was merely
-  /// suspended when the corefile was taken.
+  /// True if this lane was active on a warp halted at an inline `trap;`
+  /// / `__trap()`.
   bool IsWarpBrokenForThisLane() const { return m_warp_broken_active; }
 
 protected:

@@ -244,11 +244,8 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
           std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
       new_thread_list.AddThread(thread_sp);
 
-      // Pick a thread to surface to the user. Mirrors the precedence
-      // baked into ThreadNVGPUCore::CalculateStopInfo so the selected
-      // thread is always one of the ones that has a non-None stop
-      // reason: prefer a CUDA exception thread, then fall back to a
-      // lane stopped on an inline trap;/__trap().
+      // Remember the first thread of each stop kind so an interesting
+      // thread is auto-selected: prefer an exception, fall back to a trap.
       if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
           thread_sp->GetAttributedException() != 0) {
         m_exception_tid = tid;

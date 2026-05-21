@@ -154,9 +154,6 @@ StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                                        ObjectFileELF *core) {
   StopAttribution out;
 
-  // A per-lane exception is definitive: a lane only carries an exception
-  // if it actually executed the faulting instruction, so we don't need to
-  // consult the warp or SM rows to attribute it.
   if (lane.exception != 0) {
     out.attributed_exception = lane.exception;
     return out;
@@ -173,11 +170,9 @@ StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
     return out;
   }
 
-  // Inline `trap;` / `__trap()` shows up here: the CUDA SDK has no
-  // CUDBG_EXCEPTION_TRAP, so a hardcoded trap leaves `lane.exception ==
-  // 0` and `sm.exception == 0` but sets `warp.isWarpBroken`. Scope it to
-  // the active lanes so unrelated lanes on the same warp don't look like
-  // they hit the trap.
+  // The SDK has no `CUDBG_EXCEPTION_TRAP`; an inline trap surfaces as
+  // `isWarpBroken`. Gate by active lane so unrelated lanes on the same
+  // warp don't claim the trap.
   if (warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx))
     out.warp_broken_active = true;
 

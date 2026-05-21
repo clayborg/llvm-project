@@ -28,13 +28,8 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
                                  SectionSP lane_section_sp, uint32_t lane_idx)
     : Thread(process, tid), m_lane_section_sp(std::move(lane_section_sp)),
       m_lane_idx(lane_idx) {
-  // Eagerly decode the CTA and lane rows once at construction time so:
-  //   * `m_name` (used by `GetName()`) is a cached string, not a re-decode
-  //     of CTA+lane on every call to LLDB's stop-reason printers.
-  //   * `m_attributed_exception` and `m_warp_broken_active` (used by
-  //     `GetAttributedException()` / `IsWarpBrokenForThisLane()` and
-  //     `CalculateStopInfo`) are cached fields. `ComputeStopAttribution`
-  //     decodes the warp (and on cascade, the SM) row internally.
+  // Decode the CTA and lane rows once so the thread name and stop
+  // attribution are cached, instead of re-decoding on every query.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
   ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
   auto cta_or =
@@ -109,17 +104,9 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
 const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }
 
 bool ThreadNVGPUCore::CalculateStopInfo() {
-  // Three buckets:
-  //   1. Attributed CUDA exception -> "stop reason = CUDA Exception: ...".
-  //   2. Lane was active on a warp halted at an inline trap;/__trap()
-  //      (`warp.isWarpBroken`) -> "stop reason = signal SIGTRAP (trap)".
-  //      The active-lane gate is applied in ComputeStopAttribution so
-  //      unrelated lanes on the same warp don't claim the trap.
-  //   3. Otherwise -> no stop reason. A corefile freezes the GPU as a
-  //      whole; lanes that didn't fault and didn't trap were merely
-  //      suspended, so leaving m_stop_info_sp null (yielding
-  //      eStopReasonNone) keeps `thread list` from misreporting SIGTRAP
-  //      on every lane in the dump.
+  // Only faulted lanes and trap'd lanes carry a stop reason; merely
+  // suspended lanes are left with no stop info so they don't appear to
+  // have hit SIGTRAP in the dump.
   CUDBGException_t exc =
       static_cast<CUDBGException_t>(GetAttributedException());
   if (exc != CUDBG_EXCEPTION_NONE) {

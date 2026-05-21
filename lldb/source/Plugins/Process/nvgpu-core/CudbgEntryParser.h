@@ -117,42 +117,28 @@ llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
 /// fields by hand.
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 
-/// What stopped a lane in a corefile.
-///
-/// A corefile freezes the whole GPU in one shot, so most lanes were
-/// merely suspended and have no per-thread stop reason. The two fields
-/// below capture the only two ways a lane can carry one:
+/// Why a corefile lane stopped. Most lanes were merely suspended when
+/// the dump was taken and carry no stop reason; the fields below are
+/// the only two ways a lane can claim one.
 struct StopAttribution {
-  /// `CUDBGException_t` attributed to this lane via the precedence
-  /// cascade in `ComputeStopAttribution`, or 0 if none applies.
+  /// `CUDBGException_t` attributed to this lane, or 0 if none.
   uint32_t attributed_exception = 0;
-  /// True if this lane's warp was halted at a hardcoded breakpoint /
-  /// inline `trap;` (`warp.isWarpBroken`) AND this lane was active at
-  /// that moment (`warp.IsLaneActive(lane_idx)`). The active-lane gate
-  /// scopes the trap to the lanes that actually executed it.
+  /// Lane was active on a warp halted at an inline `trap;` / `__trap()`
+  /// (the SDK reports this via `isWarpBroken`, not via an exception
+  /// code). The active-lane gate scopes the trap to lanes that
+  /// actually executed it.
   bool warp_broken_active = false;
 };
 
-/// Compute the stop-attribution facts for `lane_idx` from the lane / warp
-/// / SM rows. The precedence cascade for the exception field is:
+/// Compute stop attribution for `lane_idx`. Exception precedence:
 ///
-///   1. Per-lane exception (`lane.exception`) is definitive when non-zero.
-///      A lane that didn't execute the faulting instruction can't carry
-///      an exception from it.
-///   2. Otherwise, if this lane's warp caused the SM fault
-///      (`warp.errorPCValid`) AND this lane was active at fault time
-///      (`warp.IsLaneActive(lane_idx)`), borrow the kind from
-///      `sm.exception`.
-///   3. Otherwise 0 (`CUDBG_EXCEPTION_NONE`).
+///   1. `lane.exception` is definitive when non-zero.
+///   2. Otherwise, if `warp.errorPCValid` AND the lane was active at
+///      fault time, borrow `sm.exception`.
+///   3. Otherwise `CUDBG_EXCEPTION_NONE`.
 ///
-/// The `warp_broken_active` flag is independently set from the warp row;
-/// it covers the case where a warp executed an inline `trap;` (which the
-/// CUDA SDK reports via `isWarpBroken`, not via the exception enum -- there
-/// is no `CUDBG_EXCEPTION_TRAP`).
-///
-/// Read/decode failures of the warp or SM rows are consumed internally,
-/// so callers don't have to handle `Expected`; on failure, the
-/// corresponding fields stay at their defaults.
+/// Warp/SM read failures are consumed internally; affected fields are
+/// left at their defaults.
 StopAttribution ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                                        lldb::SectionSP warp_section_sp,
                                        lldb::SectionSP sm_section_sp,
