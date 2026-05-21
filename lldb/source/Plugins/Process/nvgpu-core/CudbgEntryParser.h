@@ -120,7 +120,7 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 
 /// Why a corefile lane stopped. Most lanes were merely suspended when
 /// the dump was taken and carry no stop reason; the fields below are
-/// the only two ways a lane can claim one.
+/// the ways a lane can claim one.
 struct StopAttribution {
   /// `CUDBGException_t` attributed to this lane, or 0 if none.
   uint32_t attributed_exception;
@@ -129,6 +129,11 @@ struct StopAttribution {
   /// code). The active-lane gate scopes the trap to lanes that
   /// actually executed it.
   bool warp_broken_active;
+  /// If the warp or SM row failed to decode (typically a truncated
+  /// corefile), a human-readable description of the failure. Surfaced
+  /// as the lane's stop reason so the user sees the corruption in
+  /// `thread list` instead of the lane silently appearing healthy.
+  std::string decode_error;
 };
 
 /// Compute stop attribution for `lane_idx`, or `std::nullopt` if the
@@ -139,8 +144,9 @@ struct StopAttribution {
 ///      fault time, borrow `sm.exception`.
 ///   3. Otherwise no exception.
 ///
-/// Warp/SM read failures are consumed internally and treated as no
-/// attribution.
+/// Warp/SM read failures populate `decode_error` (and are also logged
+/// via the Process log channel) so the failure surfaces to the user as
+/// a stop reason rather than silently disappearing.
 std::optional<StopAttribution>
 ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                        lldb::SectionSP warp_section_sp,

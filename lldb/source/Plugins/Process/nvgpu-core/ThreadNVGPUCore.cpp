@@ -42,15 +42,9 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   if (m_name.empty())
     m_name = "NVIDIA GPU Thread";
 
-  if (lane_or) {
-    std::optional<nvgpu_core::StopAttribution> attribution =
-        nvgpu_core::ComputeStopAttribution(
-            *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
-    if (attribution) {
-      m_attributed_exception = attribution->attributed_exception;
-      m_warp_broken_active = attribution->warp_broken_active;
-    }
-  }
+  if (lane_or)
+    m_stop_attribution = nvgpu_core::ComputeStopAttribution(
+        *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
 
   Log *log = GetLog(LLDBLog::Process);
   if (!cta_or)
@@ -106,16 +100,23 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
 const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }
 
 bool ThreadNVGPUCore::CalculateStopInfo() {
-  // Only faulted lanes and trap'd lanes carry a stop reason; merely
-  // suspended lanes are left with no stop info so they don't appear to
-  // have hit SIGTRAP in the dump.
+  // A lane gets a stop reason if it faulted, trap'd, or had its row
+  // data fail to decode (surfaced so corrupt corefiles don't silently
+  // look healthy). Otherwise it's left with no stop info so suspended
+  // lanes don't appear to have hit SIGTRAP.
+  if (!m_stop_attribution)
+    return true;
+
   CUDBGException_t exc =
-      static_cast<CUDBGException_t>(GetAttributedException());
+      static_cast<CUDBGException_t>(m_stop_attribution->attributed_exception);
   if (exc != CUDBG_EXCEPTION_NONE) {
     std::string desc = ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
     SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
-  } else if (IsWarpBrokenForThisLane()) {
+  } else if (m_stop_attribution->warp_broken_active) {
     SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP, "trap"));
+  } else if (!m_stop_attribution->decode_error.empty()) {
+    std::string desc = "error: " + m_stop_attribution->decode_error;
+    SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
   }
   return true;
 }

@@ -153,17 +153,18 @@ ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                        lldb::SectionSP warp_section_sp,
                        lldb::SectionSP sm_section_sp, ObjectFileELF *core) {
   if (lane.exception != 0)
-    return StopAttribution{lane.exception, false};
+    return StopAttribution{lane.exception, false, ""};
 
   Log *log = GetLog(LLDBLog::Process);
   llvm::Expected<WarpEntry> warp_or =
       ReadAndDecode<WarpEntry>(warp_section_sp, core);
   if (!warp_or) {
-    LLDB_LOG_ERROR(log, warp_or.takeError(),
-                   "Failed to decode GPU warp data while attributing "
-                   "stop reason to lane {1}: {0}",
-                   lane_idx);
-    return std::nullopt;
+    std::string err =
+        llvm::formatv("failed to decode GPU warp data for lane {0}: {1}",
+                      lane_idx, llvm::toString(warp_or.takeError()))
+            .str();
+    LLDB_LOG(log, "{0}", err);
+    return StopAttribution{0, false, std::move(err)};
   }
 
   // The SDK has no `CUDBG_EXCEPTION_TRAP`; an inline trap surfaces as
@@ -173,20 +174,24 @@ ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
       warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx);
 
   uint32_t attributed_exception = 0;
+  std::string decode_error;
   if (warp_or->errorPCValid && warp_or->IsLaneActive(lane_idx)) {
     llvm::Expected<SMEntry> sm_or = ReadAndDecode<SMEntry>(sm_section_sp, core);
-    if (!sm_or)
-      LLDB_LOG_ERROR(log, sm_or.takeError(),
-                     "Failed to decode GPU SM data while attributing "
-                     "stop reason to lane {1}: {0}",
-                     lane_idx);
-    else
+    if (!sm_or) {
+      decode_error =
+          llvm::formatv("failed to decode GPU SM data for lane {0}: {1}",
+                        lane_idx, llvm::toString(sm_or.takeError()))
+              .str();
+      LLDB_LOG(log, "{0}", decode_error);
+    } else {
       attributed_exception = sm_or->exception;
+    }
   }
 
-  if (attributed_exception == 0 && !warp_broken_active)
+  if (attributed_exception == 0 && !warp_broken_active && decode_error.empty())
     return std::nullopt;
-  return StopAttribution{attributed_exception, warp_broken_active};
+  return StopAttribution{attributed_exception, warp_broken_active,
+                         std::move(decode_error)};
 }
 
 } // namespace lldb_private::nvgpu_core
