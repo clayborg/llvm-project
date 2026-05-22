@@ -9,8 +9,12 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_THREADNVGPUCORE_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_THREADNVGPUCORE_H
 
+#include "CudbgEntryParser.h"
+
 #include "lldb/Target/Thread.h"
 #include "lldb/lldb-forward.h"
+
+#include <optional>
 
 namespace lldb_private {
 
@@ -61,7 +65,14 @@ public:
   /// Return the CUDA exception code attributed to this thread, or
   /// `CUDBG_EXCEPTION_NONE` (zero) if this thread did not participate in a
   /// fault.
-  uint32_t GetAttributedException() const { return m_attributed_exception; }
+  uint32_t GetAttributedException() const {
+    return m_stop_attribution ? m_stop_attribution->attributed_exception : 0;
+  }
+
+  /// True if this lane stopped at an inline `trap;` / `__trap()`.
+  bool IsAtTrap() const {
+    return m_stop_attribution && m_stop_attribution->at_trap;
+  }
 
 protected:
   bool CalculateStopInfo() override;
@@ -70,7 +81,7 @@ private:
   lldb::SectionSP m_lane_section_sp;
   uint32_t m_lane_idx;
   std::string m_name;
-  uint32_t m_attributed_exception = 0;
+  std::optional<nvgpu_core::StopAttribution> m_stop_attribution;
 };
 
 } // namespace lldb_private

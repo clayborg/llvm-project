@@ -42,6 +42,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace lldb_private::nvgpu_core {
@@ -117,24 +118,39 @@ llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
 /// fields by hand.
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
 
-/// Compute the attributed exception code for `lane_idx` using the
-/// standard precedence cascade:
+/// Why a corefile lane stopped. Most lanes were merely suspended when
+/// the dump was taken and carry no stop reason; the fields below are
+/// the ways a lane can claim one.
+struct StopAttribution {
+  /// `CUDBGException_t` attributed to this lane, or 0 if none.
+  uint32_t attributed_exception;
+  /// Lane stopped at an inline `trap;` / `__trap()`. The CUDA SDK
+  /// reports this via `warp.isWarpBroken` rather than an exception
+  /// code, gated by the warp's active-lane mask so unrelated lanes on
+  /// the same warp don't claim the trap.
+  bool at_trap;
+  /// If the warp or SM row failed to decode (typically a truncated
+  /// corefile), a human-readable description of the failure. Surfaced
+  /// as the lane's stop reason so the user sees the corruption in
+  /// `thread list` instead of the lane silently appearing healthy.
+  std::string decode_error;
+};
+
+/// Compute stop attribution for `lane_idx`, or `std::nullopt` if the
+/// lane has no stop reason. Exception precedence:
 ///
-///   1. Per-lane exception (`lane.exception`) is definitive when non-zero.
-///      A lane that didn't execute the faulting instruction can't carry
-///      an exception from it.
-///   2. Otherwise, if this lane's warp caused the SM fault
-///      (`warp.errorPCValid`) AND this lane was active at fault time
-///      (`warp.IsLaneActive(lane_idx)`), borrow the kind from
-///      `sm.exception`.
-///   3. Otherwise 0 (`CUDBG_EXCEPTION_NONE`).
+///   1. `lane.exception` is definitive when non-zero.
+///   2. Otherwise, if `warp.errorPCValid` AND the lane was active at
+///      fault time, borrow `sm.exception`.
+///   3. Otherwise no exception.
 ///
-/// Returns 0 on any read/decode failure of the warp or SM rows; errors
-/// are consumed internally so callers don't have to handle `Expected`.
-uint32_t ComputeAttributedException(const LaneEntry &lane, uint32_t lane_idx,
-                                    lldb::SectionSP warp_section_sp,
-                                    lldb::SectionSP sm_section_sp,
-                                    ObjectFileELF *core);
+/// Warp/SM read failures populate `decode_error` (and are also logged
+/// via the Process log channel) so the failure surfaces to the user as
+/// a stop reason rather than silently disappearing.
+std::optional<StopAttribution>
+ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
+                       lldb::SectionSP warp_section_sp,
+                       lldb::SectionSP sm_section_sp, ObjectFileELF *core);
 
 } // namespace lldb_private::nvgpu_core
 
