@@ -54,8 +54,16 @@ public:
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
   void RefreshStateAfterStop() override {
+    // Prefer an exception thread, then a trap thread; otherwise fall
+    // back to the first thread we created.
     if (m_exception_tid != LLDB_INVALID_THREAD_ID)
       GetThreadList().SetSelectedThreadByID(m_exception_tid);
+    else if (m_stop_tid != LLDB_INVALID_THREAD_ID)
+      GetThreadList().SetSelectedThreadByID(m_stop_tid);
+    else {
+      if (lldb::ThreadSP first = GetThreadList().GetThreadAtIndex(0))
+        GetThreadList().SetSelectedThreadByID(first->GetID());
+    }
   }
 
   lldb_private::Status WillResume() override {
@@ -101,7 +109,10 @@ private:
 
   lldb::ModuleSP m_core_module_sp;
   lldb::SectionSP m_root_sp;
+  /// First thread with an attributed CUDA exception.
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
+  /// First thread stopped on an inline `trap;` / `__trap()`.
+  lldb::tid_t m_stop_tid = LLDB_INVALID_THREAD_ID;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
