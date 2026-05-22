@@ -28,12 +28,8 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
                                  SectionSP lane_section_sp, uint32_t lane_idx)
     : Thread(process, tid), m_lane_section_sp(std::move(lane_section_sp)),
       m_lane_idx(lane_idx) {
-  // Eagerly decode the CTA and lane rows once at construction time so:
-  //   * `m_name` (used by `GetName()`) is a cached string, not a re-decode
-  //     of CTA+lane on every call to LLDB's stop-reason printers.
-  //   * `m_attributed_exception` (used by `GetAttributedException()` and
-  //     `CalculateStopInfo`) is a cached field. `ComputeAttributedException`
-  //     decodes the warp (and on cascade, the SM) row internally.
+  // Decode the CTA and lane rows once so the thread name and stop
+  // attribution are cached, instead of re-decoding on every query.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
   ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
   auto cta_or =
@@ -47,7 +43,7 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
     m_name = "NVIDIA GPU Thread";
 
   if (lane_or)
-    m_attributed_exception = nvgpu_core::ComputeAttributedException(
+    m_stop_attribution = nvgpu_core::ComputeStopAttribution(
         *lane_or, GetLaneIndex(), GetWarpSection(), GetSMSection(), core);
 
   Log *log = GetLog(LLDBLog::Process);
@@ -104,15 +100,23 @@ ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
 const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }
 
 bool ThreadNVGPUCore::CalculateStopInfo() {
-  CUDBGException_t exc =
-      static_cast<CUDBGException_t>(GetAttributedException());
-  if (exc != CUDBG_EXCEPTION_NONE) {
-    std::string desc =
-        ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
-    SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
-  } else {
-    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP));
-  }
+  // A lane gets a stop reason if it faulted, trap'd, or had its row
+  // data fail to decode (surfaced so corrupt corefiles don't silently
+  // look healthy). Otherwise it's left with no stop info so suspended
+  // lanes don't appear to have hit SIGTRAP.
+  if (!m_stop_attribution)
+    return true;
 
+  CUDBGException_t exc =
+      static_cast<CUDBGException_t>(m_stop_attribution->attributed_exception);
+  if (exc != CUDBG_EXCEPTION_NONE) {
+    std::string desc = ("CUDA Exception: " + CUDAExceptionToString(exc)).str();
+    SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
+  } else if (m_stop_attribution->at_trap) {
+    SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGTRAP, "trap"));
+  } else if (!m_stop_attribution->decode_error.empty()) {
+    std::string desc = "error: " + m_stop_attribution->decode_error;
+    SetStopInfo(StopInfo::CreateStopReasonWithException(*this, desc.c_str()));
+  }
   return true;
 }
