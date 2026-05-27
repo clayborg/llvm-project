@@ -532,8 +532,11 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
               lib_info->file_offset.value_or(0),
               lib_info->file_size.value_or(0));
 
-    // Load the module
+    // Load the module.
     std::shared_ptr<DataBufferHeap> data_sp;
+    TargetSP cpu_target_sp = target.GetNativeTargetForGPU();
+    ProcessSP cpu_process_sp =
+        cpu_target_sp ? cpu_target_sp->GetProcessSP() : nullptr;
 
     // Read the object file from memory if available
     if (lib_info->native_memory_address.has_value() &&
@@ -544,9 +547,6 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
       LLDB_LOG(log, "Reading \"{0}\" from memory at {1:x}", lib_info->pathname,
                native_mem_addr);
 
-      TargetSP cpu_target_sp = target.GetNativeTargetForGPU();
-      ProcessSP cpu_process_sp =
-          cpu_target_sp ? cpu_target_sp->GetProcessSP() : nullptr;
       if (cpu_process_sp) {
         data_sp = std::make_shared<DataBufferHeap>(native_mem_size, 0);
         Status error;
@@ -566,6 +566,18 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
 
     // Create a module specification from the info we got.
     UUID uuid;
+    if (lib_info->uuid_str.has_value())
+      uuid.SetFromStringRef(*lib_info->uuid_str);
+    if (!uuid.IsValid() && lib_info->load_address.has_value()) {
+      if (std::shared_ptr<ProcessElfCore> cpu_core_process = GetCpuProcess())
+        uuid =
+            cpu_core_process->FindBuidIdInCoreMemory(*lib_info->load_address);
+    }
+
+    if (uuid.IsValid())
+      LLDB_LOG(log, "Code object \"{0}\" has build ID {1}", lib_info->pathname,
+               uuid.GetAsString(""));
+
     ModuleSpec module_spec(FileSpec(lib_info->pathname), uuid, data_sp);
 
     // Set file offset and size if available

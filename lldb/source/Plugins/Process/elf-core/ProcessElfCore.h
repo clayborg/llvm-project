@@ -102,6 +102,9 @@ public:
 
   std::vector<lldb_private::CoreNote> GetCoreNotes();
 
+  // Returns the GNU build ID for an ELF image loaded at the given core address.
+  lldb_private::UUID FindBuidIdInCoreMemory(lldb::addr_t address);
+
 protected:
   void Clear();
 
@@ -174,9 +177,6 @@ private:
 
   // Returns the main executable path
   llvm::StringRef GetMainExecutablePath();
-
-  // Returns the value of certain type of note of a given start address
-  lldb_private::UUID FindBuidIdInCoreMemory(lldb::addr_t address);
 
   // Parse a contiguous address range of the process from LOAD segment
   lldb::addr_t
