@@ -150,17 +150,23 @@ Module::Module(const ModuleSpec &module_spec)
               module_spec.GetObjectName().IsEmpty() ? "" : ")");
 
   auto data_sp = module_spec.GetData();
+  lldb::offset_t file_size = 0;
+  if (data_sp)
+    file_size = data_sp->GetByteSize();
 
-  // First extract all module specifications from the file using the local file
-  // path. If there are no specifications, then don't fill anything in
+  // Slice-backed callers already describe the exact subobject they want. Plain
+  // file lookups still need whole-file enumeration so container plugins can
+  // contribute every member or slice before we pick the matching spec.
   ModuleSpecList modules_specs;
-
-  if (ObjectFile::GetModuleSpecifications(
-          module_spec.GetFileSpec(), 
-          module_spec.GetObjectOffset(), 
-          module_spec.GetObjectSize(), 
-          modules_specs, 
-          data_sp) == 0)
+  const bool use_explicit_bounds =
+      data_sp && module_spec.HasObjectFileBounds();
+  const auto module_offset =
+      use_explicit_bounds ? module_spec.GetObjectOffset() : 0;
+  const auto module_size =
+      use_explicit_bounds ? module_spec.GetObjectSize() : file_size;
+  if (ObjectFile::GetModuleSpecifications(module_spec.GetFileSpec(),
+                                          module_offset, module_size,
+                                          modules_specs, data_sp) == 0)
     return;
 
   // Now make sure that one of the module specifications matches what we just
@@ -1199,10 +1205,15 @@ ObjectFile *Module::GetObjectFile() {
         // FindPlugin will modify its data_sp argument. Do not let it
         // modify our m_data_sp member.
         auto data_sp = m_data_sp;
+        // Memory-backed slices already supply the exact subobject bytes. Plain
+        // file-backed container members still reopen through the rest of the
+        // backing file so the object plugin can recover the final bounds.
+        const lldb::offset_t object_size =
+            (m_data_sp && m_object_size) ? m_object_size
+                                         : file_size - m_object_offset;
         m_objfile_sp = ObjectFile::FindPlugin(
-            shared_from_this(), &m_file, m_object_offset,
-            m_object_size ? m_object_size : file_size - m_object_offset, 
-            data_sp, data_offset);
+            shared_from_this(), &m_file, m_object_offset, object_size, data_sp,
+            data_offset);
         if (m_objfile_sp) {
           // Once we get the object file, update our module with the object
           // file's architecture since it might differ in vendor/os if some
@@ -1524,7 +1535,7 @@ bool Module::MatchesModuleSpec(const ModuleSpec &module_ref) {
   if (!FileSpec::Match(platform_file_spec, GetPlatformFileSpec()))
     return false;
 
-  if (m_object_offset != module_ref.GetObjectOffset())
+  if (!module_ref.MatchesObjectFileSlice(m_object_offset, m_object_size))
     return false;
 
   const ArchSpec &arch = module_ref.GetArchitecture();

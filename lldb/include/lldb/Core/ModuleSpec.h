@@ -116,6 +116,40 @@ public:
 
   void SetObjectSize(uint64_t object_size) { m_object_size = object_size; }
 
+  /// Returns true when this spec carries explicit byte bounds for a subobject
+  /// inside the backing file or supplied data buffer.
+  bool HasObjectFileBounds() const {
+    if (m_object_offset != 0)
+      return true;
+    if (m_object_size == 0)
+      return false;
+    if (m_data)
+      return m_object_size != m_data->GetByteSize();
+    if (!m_file)
+      return false;
+    const uint64_t file_size = FileSystem::Instance().GetByteSize(m_file);
+    return file_size != 0 && m_object_size != file_size;
+  }
+
+  /// Returns true when this spec identifies a subobject inside the backing
+  /// file, so object offset and size should participate in matching.
+  bool HasObjectFileSlice() const {
+    return m_object_name || HasObjectFileBounds();
+  }
+
+  /// Checks whether this spec's requested object offset and size match a
+  /// candidate object range.
+  bool MatchesObjectFileSlice(uint64_t object_offset,
+                              uint64_t object_size) const {
+    if (!HasObjectFileSlice())
+      return true;
+    if (GetObjectOffset() != object_offset)
+      return false;
+    if (GetObjectSize() != 0 && GetObjectSize() != object_size)
+      return false;
+    return true;
+  }
+
   llvm::sys::TimePoint<> &GetObjectModificationTime() {
     return m_object_mod_time;
   }
@@ -245,6 +279,9 @@ public:
         match_module_spec.GetObjectName() != GetObjectName())
       return false;
     if (!FileSpec::Match(match_module_spec.GetFileSpec(), GetFileSpec()))
+      return false;
+    if (!match_module_spec.MatchesObjectFileSlice(GetObjectOffset(),
+                                                  GetObjectSize()))
       return false;
     if (GetPlatformFileSpec() &&
         !FileSpec::Match(match_module_spec.GetPlatformFileSpec(),
