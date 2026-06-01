@@ -167,6 +167,19 @@ std::shared_ptr<ProcessElfEmbeddedCore> ProcessAmdGpuCore::CreateInstance(
   cpu_core_process->GetTarget().SetGPUPluginTarget(
       gpu_process_sp->GetPluginName(), gpu_target_sp);
 
+  // Inherit the CPU (host) target's executable search paths. The GPU target is
+  // created fresh and would otherwise start with an empty
+  // target.exec-search-paths. GPU code objects are file-backed by the host
+  // shared library that embeds them (e.g. libcaffe2_ATen-hip.so), so without
+  // these search paths LoadCore() below cannot locate the host binary by
+  // basename and the GPU modules stay (*) placeholders -- even when the host
+  // binary has already been downloaded onto the CPU target's search paths.
+  auto &cpu_target = cpu_core_process->GetTarget();
+  auto cpu_search_paths = cpu_target.GetExecutableSearchPaths();
+  for (size_t i = 0; i < cpu_search_paths.GetSize(); ++i)
+    gpu_target_sp->AppendExecutableSearchPaths(
+        cpu_search_paths.GetFileSpecAtIndex(i));
+
   // Load the GPU core - report errors to user if loading fails
   Status error = gpu_process_sp->LoadCore();
   if (error.Fail()) {
