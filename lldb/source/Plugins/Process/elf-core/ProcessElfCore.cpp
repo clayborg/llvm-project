@@ -286,8 +286,16 @@ void ProcessElfCore::UpdateBuildIdForNTFileEntries() {
   for (NT_FILE_Entry &entry : m_nt_file_entries) {
     UUID uuid = FindBuidIdInCoreMemory(entry.start);
     if (uuid.IsValid()) {
-      // Assert that either the path is not in the map or the UUID matches
-      assert(m_uuids.count(entry.path) == 0 || m_uuids[entry.path] == uuid);
+      // GPU core dumps can report distinct code-object mappings with the same
+      // device-node path (for example /dev/dri/renderD128), so this path map is
+      // best-effort. Log conflicts rather than aborting core loading.
+      if (m_uuids.count(entry.path) != 0 && m_uuids[entry.path] != uuid && log)
+        LLDB_LOGF(log,
+                  "%s found conflicting UUID @ %16.16" PRIx64
+                  ": existing %s new %s \"%s\"",
+                  __FUNCTION__, entry.start,
+                  m_uuids[entry.path].GetAsString().c_str(),
+                  uuid.GetAsString().c_str(), entry.path.c_str());
       m_uuids[entry.path] = uuid;
       if (log)
         LLDB_LOGF(log, "%s found UUID @ %16.16" PRIx64 ": %s \"%s\"",
