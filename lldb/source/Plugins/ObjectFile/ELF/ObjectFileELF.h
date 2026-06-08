@@ -147,6 +147,13 @@ public:
   size_t ReadSectionData(lldb_private::Section *section,
                          lldb_private::DataExtractor &section_data) override;
 
+  /// For NVGPU corefiles, return a DataExtractor over the raw bytes of the
+  /// `.cudbg.meta` metadata section (producer driver / CUDA version), or an
+  /// empty extractor if there is none. This is file-level metadata rather
+  /// than part of the synthetic GPU section hierarchy, so it is read straight
+  /// from the ELF section headers instead of being surfaced as a Section.
+  lldb_private::DataExtractor GetNVGPUMetadata();
+
   llvm::ArrayRef<elf::ELFProgramHeader> ProgramHeaders();
   lldb_private::DataExtractor GetSegmentData(const elf::ELFProgramHeader &H);
 

@@ -88,6 +88,7 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
 void ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
   Log *log = GetLog(GDBRLog::Plugin);
   m_api = api.GetRawAPI();
+  m_api_version = api.GetAPIVersion();
   m_devices = DeviceStateRegistry(*this);
   size_t max_num_threads = m_devices.GetMaxNumSupportedThreads();
   LLDB_LOG(log,

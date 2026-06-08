@@ -2162,6 +2162,23 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
            dev_seq, sm_seq, cta_seq, warp_seq, lane_seq);
 }
 
+DataExtractor ObjectFileELF::GetNVGPUMetadata() {
+  if (!IsNVGPUCoreFile() || !ParseSectionHeaders())
+    return DataExtractor();
+
+  // The metadata section is file-level data, not part of the synthetic GPU
+  // hierarchy built above, so it is not surfaced as a Section. Find its ELF
+  // header and return a view over its file window.
+  for (const ELFSectionHeaderInfo &H : m_section_headers) {
+    if (H.GetNVGPUSectionType() != eSectionTypeNVGPUMetadata)
+      continue;
+    DataExtractor data;
+    GetData(H.sh_offset, H.sh_size, data);
+    return data;
+  }
+  return DataExtractor();
+}
+
 static SectionType GetSectionTypeFromName(llvm::StringRef Name) {
   if (Name.consume_front(".debug_"))
     return ObjectFile::GetDWARFSectionTypeFromName(Name);

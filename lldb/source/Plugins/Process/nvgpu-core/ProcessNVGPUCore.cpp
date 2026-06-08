@@ -27,6 +27,7 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/CUDAAddressSpaces.h"
 #include "lldb/Utility/NVGPU/NVGPUSectionID.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Threading.h"
 
 using namespace lldb;
@@ -140,6 +141,8 @@ Status ProcessNVGPUCore::DoLoadCore() {
         "NVGPU corefile did not produce a nvgpucore root section "
         "(likely missing or malformed nvgpu-device-table)");
 
+  LoadProducerInfo(core);
+
   // Register the corefile module itself in the target's module list so it
   // shows up in `image list` and is reachable from the SBModule API. Without
   // this, target.modules only contains the cubin sub-modules added by
@@ -214,6 +217,46 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
 
   target.ModulesDidLoad(loaded_modules);
   return llvm::Error::success();
+}
+
+void ProcessNVGPUCore::LoadProducerInfo(ObjectFileELF *core) {
+  Log *log = GetLog(LLDBLog::Process);
+
+  m_producer = nvgpu_core::DecodeProducerInfo(core->GetNVGPUMetadata());
+
+  if (!m_producer.has_metadata) {
+    // The metadata section was added in driver r565, so every supported
+    // in-major coredump has it. A missing section means we can't confirm the
+    // producing driver matches this build; reads stay in-bounds (absent
+    // fields read back as zero via the per-entry-size zero-fill in Decode),
+    // but surface a warning since GPU state may be missing or misdecoded.
+    Debugger::ReportWarning(
+        "NVGPU corefile has no metadata section; the producing driver version "
+        "could not be determined and some GPU state may be missing or decoded "
+        "incorrectly.",
+        GetTarget().GetDebugger().GetID());
+    return;
+  }
+
+  LLDB_LOG(log, "NVGPU corefile producer: NVML driver branch r{0}, CUDA {1}.{2}",
+           m_producer.driver_branch, m_producer.cuda_major,
+           m_producer.cuda_minor);
+
+  // Single-major policy: a coredump from a different CUDA major release may
+  // use an incompatible field layout. Don't fail the load (the per-entry-size
+  // zero-fill still keeps reads in-bounds), but surface a warning to the user
+  // -- not just the log channel -- since GPU state may be decoded incorrectly.
+  if (m_producer.cuda_major != 0 &&
+      m_producer.cuda_major != CUDBG_API_VERSION_MAJOR)
+    Debugger::ReportWarning(
+        llvm::formatv(
+            "NVGPU corefile was produced by CUDA {0}.{1}, but this debugger "
+            "was built for CUDA {2}.x. Cross-major-release coredumps are not "
+            "supported; some GPU state may be missing or decoded incorrectly.",
+            m_producer.cuda_major, m_producer.cuda_minor,
+            CUDBG_API_VERSION_MAJOR)
+            .str(),
+        GetTarget().GetDebugger().GetID());
 }
 
 bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
