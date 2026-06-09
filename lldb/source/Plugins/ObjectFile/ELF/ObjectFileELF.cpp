@@ -1801,6 +1801,9 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
   uint32_t warp_seq = 0;
   uint32_t lane_seq = 0;
 
+  // Section index of the coredump metadata table, if present.
+  std::optional<size_t> metadata_section_idx;
+
   SectionSP root_sp = std::make_shared<Section>(
       module_sp, this, nvgpu::MakeID(nvgpu::SectionKind::Root, 0),
       ConstString("nvgpucore"), eSectionTypeNVGPURoot,
@@ -2109,12 +2112,16 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       root_sp->GetChildren().AddSection(leaf);
       break;
     }
+    case eSectionTypeNVGPUMetadata:
+      // Record now; surfaced under root after the device-hierarchy check so a
+      // metadata-only (deviceless) file is still rejected below.
+      metadata_section_idx = i;
+      break;
     default:
-      // Device table, lane table, and unrelated metadata / context /
-      // grid / module / param-memory sections fall through. The device
-      // and lane tables are consulted lazily via `GetOrCreateAncestor`
-      // for row data windows; everything else is intentionally not
-      // surfaced in the synthetic tree.
+      // Device table, lane table, and unrelated context / grid / module /
+      // param-memory sections fall through. The device and lane tables are
+      // consulted lazily via `GetOrCreateAncestor` for row data windows;
+      // everything else is intentionally not surfaced in the synthetic tree.
       break;
     }
   }
@@ -2136,6 +2143,26 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
     Debugger::ReportWarning(
         "GPU corefile contains no device hierarchy and cannot be loaded.");
     return;
+  }
+
+  // Surface the coredump metadata section as a leaf under nvgpu-root so
+  // consumers (ProcessNVGPUCore) can read its producer driver/CUDA version via
+  // the normal section APIs. It is not part of the device hierarchy and
+  // carries no VM range. Added after the device-hierarchy check above so it
+  // never resurrects an otherwise-empty (deviceless) corefile.
+  if (metadata_section_idx) {
+    const ELFSectionHeaderInfo &h = m_section_headers[*metadata_section_idx];
+    if (h.IsTruncated(file_size)) {
+      truncated_sections.push_back(h.section_name.GetStringRef().str());
+    } else {
+      SectionSP meta_leaf = std::make_shared<Section>(
+          root_sp, module_sp, this,
+          nvgpu::MakeID(nvgpu::SectionKind::Leaf, leaf_seq++),
+          ConstString("metadata"), eSectionTypeNVGPUMetadata,
+          /*file_addr=*/0, /*byte_size=*/0, h.sh_offset, h.sh_size,
+          /*log2align=*/0, /*flags=*/0);
+      root_sp->GetChildren().AddSection(meta_leaf);
+    }
   }
 
   // Install the new hierarchy into both the ObjectFile's section list

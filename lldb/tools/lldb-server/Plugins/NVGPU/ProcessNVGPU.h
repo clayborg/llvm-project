@@ -61,6 +61,13 @@ public:
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
+  /// The API version this session runs at: the lesser of the compiled and the
+  /// live driver's versions. Gate calls to entry points newer than the
+  /// major's baseline on this -- `if (GetAPIVersion().AtLeast(13, 4, 0))
+  /// api->newCall(...)` -- since a driver older than the compiled header lacks
+  /// those (appended) slots and reading the pointer would be out of bounds.
+  nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
+
   /// Resume the GPU, change its state and the state of each thread, then
   /// report the state change to the delegate, which will notify the client.
   ///
@@ -341,6 +348,9 @@ private:
   /// using the class used for CPU processes for this for simplicity.
   ProcessInstanceInfo m_process_info;
   CUDBGAPI m_api;
+  /// API version in use with the live driver, for runtime gating of
+  /// version-specific API calls.
+  nvgpu::CudbgApiVersion m_api_version;
 
   /// The list of all the cubins loaded by the GPU.
   std::vector<GPUDynamicLoaderLibraryInfo> m_all_libraries;
