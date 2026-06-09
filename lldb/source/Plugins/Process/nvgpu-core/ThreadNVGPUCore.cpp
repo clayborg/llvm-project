@@ -11,8 +11,8 @@
 #include "ProcessNVGPUCore.h"
 #include "RegisterContextNVGPUCore.h"
 
-#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
@@ -31,7 +31,7 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   // Decode the CTA and lane rows once so the thread name and stop
   // attribution are cached, instead of re-decoding on every query.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
-  ObjectFileELF *core = nvgpu_process.GetCoreObjectFile();
+  ObjectFile *core = nvgpu_process.GetCoreObjectFile();
   auto cta_or =
       nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(GetCTASection(), core);
   auto lane_or =
