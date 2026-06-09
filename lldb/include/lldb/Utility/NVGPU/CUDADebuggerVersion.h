@@ -26,6 +26,7 @@
 #include "cudadebugger.h"
 
 #include <cstdint>
+#include <tuple>
 
 /// The CUDA major release this LLDB build targets. Cross-major-release
 /// compatibility is explicitly out of scope: a build works against any
@@ -68,11 +69,8 @@ struct CudbgApiVersion {
   /// Lexicographic comparison over (major, minor, revision), used to pick the
   /// lesser of the compiled and driver versions.
   bool operator<(const CudbgApiVersion &rhs) const {
-    if (major != rhs.major)
-      return major < rhs.major;
-    if (minor != rhs.minor)
-      return minor < rhs.minor;
-    return revision < rhs.revision;
+    return std::tie(major, minor, revision) <
+           std::tie(rhs.major, rhs.minor, rhs.revision);
   }
 
   /// True if this version is at least (maj, min, rev). Use this to gate calls
