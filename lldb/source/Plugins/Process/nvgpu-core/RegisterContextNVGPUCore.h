@@ -13,8 +13,6 @@
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/lldb-forward.h"
 
-class ObjectFileELF;
-
 namespace lldb_private {
 
 class RegisterContextNVGPUCore : public RegisterContext {
@@ -34,7 +32,7 @@ public:
   ///     ObjectFile for the corefile, used to read the lane / warp / device
   ///     section data. May be null, in which case the register buffer is
   ///     left zero-initialized.
-  RegisterContextNVGPUCore(Thread &thread, ObjectFileELF *core);
+  RegisterContextNVGPUCore(Thread &thread, ObjectFile *core);
 
   ~RegisterContextNVGPUCore() override;
 

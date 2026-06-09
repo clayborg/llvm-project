@@ -33,8 +33,12 @@
 // since the CudbgXxxTableEntry types are already declared.
 #undef SHT_LOUSER
 
-#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
+// Brings in cudadebugger.h (for the CUDBG_API_VERSION_* macros that gate the
+// version-specific field reads below) and the single-major static_assert.
+#include "lldb/Utility/NVGPU/CUDADebuggerVersion.h"
+
 #include "lldb/Core/Section.h"
+#include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
@@ -46,6 +50,18 @@
 #include <string>
 
 namespace lldb_private::nvgpu_core {
+
+/// Version of the driver/toolkit that produced a coredump, decoded from the
+/// `CudbgMetaDataEntry` metadata section. Used for diagnostics (logging the
+/// producer version and warning on a cross-major coredump).
+struct ProducerInfo {
+  /// Driver branch major (e.g. 575/580/615), matching the "Since CUDA
+  /// driver rXXX" annotations in cudacoredump.h.
+  uint32_t driver_branch = 0;
+  /// CUDA driver version (e.g. 13/0) reported by the producer.
+  uint32_t cuda_major = 0;
+  uint32_t cuda_minor = 0;
+};
 
 /// One row of a nvgpu-device-table.
 struct DeviceEntry : CudbgDeviceTableEntry {
@@ -97,12 +113,16 @@ struct LaneEntry : CudbgThreadTableEntry {
                                           uint64_t entry_size);
 };
 
+/// Decode the producer version from the raw bytes of the coredump metadata
+/// section. Returns std::nullopt if `data` is empty (no metadata section).
+std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data);
+
 /// Read `section_sp`'s data window from `core` and decode it into an
 /// `EntryT` (one of the wrapper structs above). Returns the parse error if
 /// either input is missing or `EntryT::Decode` fails.
 template <typename EntryT>
 llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
-                                     ObjectFileELF *core) {
+                                     ObjectFile *core) {
   if (!section_sp || !core)
     return llvm::createStringError("missing section or core object file");
   DataExtractor data;
@@ -150,7 +170,7 @@ struct StopAttribution {
 std::optional<StopAttribution>
 ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                        lldb::SectionSP warp_section_sp,
-                       lldb::SectionSP sm_section_sp, ObjectFileELF *core);
+                       lldb::SectionSP sm_section_sp, ObjectFile *core);
 
 } // namespace lldb_private::nvgpu_core
 
