@@ -11,8 +11,8 @@
 #include "SectionUtils.h"
 #include "ThreadNVGPUCore.h"
 
-#include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
@@ -27,7 +27,7 @@ using namespace lldb;
 using namespace lldb_private;
 
 RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
-                                                   ObjectFileELF *core)
+                                                   ObjectFile *core)
     : RegisterContext(thread, 0) {
   if (!core)
     return;

@@ -10,10 +10,10 @@
 #include "../Utils/Utils.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Error.h"
 
 #include <cstring>
-#include <dlfcn.h>
 #include <string>
 #include <type_traits>
 
@@ -36,6 +36,7 @@ static std::string CUDBG_DEBUGGER_CAPABILITIES =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_CAPABILITIES);
 static std::string CUDBG_INJECTION_PATH = "cudbgInjectionPath";
 static std::string CUDBG_GET_API = "cudbgGetAPI";
+static std::string CUDBG_GET_API_VERSION = "cudbgGetAPIVersion";
 static std::string CUDA_INITIALIZATION_SYMBOL =
     CMAKE_NVGPU_INITIALIZATION_SYMBOL;
 } // namespace Symbols
@@ -143,25 +144,26 @@ WriteInitializationSymbolsToHost(const GPUPluginBreakpointHitArgs &bp_args,
   return Error::success();
 }
 
-static Error WriteConfigurationToLibcuda(void *libcuda, uint32_t pid,
-                                         uint32_t revision, uint32_t session_id,
+static Error WriteConfigurationToLibcuda(llvm::sys::DynamicLibrary &libcuda,
+                                         uint32_t pid, uint32_t revision,
+                                         uint32_t session_id,
                                          StringRef libcuda_library_name) {
   auto *api_client_pid = reinterpret_cast<uint32_t *>(
-      dlsym(libcuda, Symbols::CUDBG_APICLIENT_PID.c_str()));
+      libcuda.getAddressOfSymbol(Symbols::CUDBG_APICLIENT_PID.c_str()));
   if (!api_client_pid)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_PID,
                                 libcuda_library_name);
 
   auto *api_client_revision = reinterpret_cast<uint32_t *>(
-      dlsym(libcuda, Symbols::CUDBG_APICLIENT_REVISION.c_str()));
+      libcuda.getAddressOfSymbol(Symbols::CUDBG_APICLIENT_REVISION.c_str()));
   if (!api_client_revision)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_APICLIENT_REVISION,
                                 libcuda_library_name);
 
   auto *session_id_ptr = reinterpret_cast<uint32_t *>(
-      dlsym(libcuda, Symbols::CUDBG_SESSION_ID.c_str()));
+      libcuda.getAddressOfSymbol(Symbols::CUDBG_SESSION_ID.c_str()));
   if (!session_id_ptr)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_SESSION_ID,
@@ -176,7 +178,8 @@ static Error WriteConfigurationToLibcuda(void *libcuda, uint32_t pid,
 
 static Error
 WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
-                            NativeProcessProtocol &linux_process, void *libcuda,
+                            NativeProcessProtocol &linux_process,
+                            llvm::sys::DynamicLibrary &libcuda,
                             StringRef libcuda_library_name) {
   auto write_c_str = [&](const std::string &symbol_name,
                          const char *value) -> Error {
@@ -187,7 +190,7 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
     if (Error err = write_c_str(Symbols::CUDBG_INJECTION_PATH, path))
       return err;
     char *injection_path = reinterpret_cast<char *>(
-        dlsym(libcuda, Symbols::CUDBG_INJECTION_PATH.c_str()));
+        libcuda.getAddressOfSymbol(Symbols::CUDBG_INJECTION_PATH.c_str()));
     if (!injection_path)
       return createStringErrorFmt("Failed to find symbol {} in {}",
                                   Symbols::CUDBG_INJECTION_PATH,
@@ -197,20 +200,49 @@ WriteInjectionPathToLibcuda(const GPUPluginBreakpointHitArgs &bp_args,
   return Error::success();
 }
 
-static Expected<CUDBGAPI> GetRawAPIInstance(void *libcuda,
-                                            StringRef libcuda_library_name) {
+// Query the CUDA debugger API version that the live driver supports. This is
+// the basis for choosing a mutually-supported revision so the debugger can
+// attach to any driver within its compiled major release.
+static Expected<nvgpu::CudbgApiVersion>
+GetDriverAPIVersion(llvm::sys::DynamicLibrary &libcuda,
+                    StringRef libcuda_library_name) {
+  using CudbgGetAPIVersionFn =
+      CUDBGResult (*)(uint32_t *, uint32_t *, uint32_t *);
+  const auto cudbgGetAPIVersion = reinterpret_cast<CudbgGetAPIVersionFn>(
+      libcuda.getAddressOfSymbol(Symbols::CUDBG_GET_API_VERSION.c_str()));
+  if (!cudbgGetAPIVersion)
+    return createStringErrorFmt("Failed to find symbol {} in {}",
+                                Symbols::CUDBG_GET_API_VERSION,
+                                libcuda_library_name);
+
+  nvgpu::CudbgApiVersion version;
+  CUDBGResult res =
+      cudbgGetAPIVersion(&version.major, &version.minor, &version.revision);
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt("The `cudbgGetAPIVersion` call failed. {}",
+                                cudbgGetErrorString(res));
+
+  return version;
+}
+
+static Expected<CUDBGAPI>
+GetRawAPIInstance(llvm::sys::DynamicLibrary &libcuda,
+                  StringRef libcuda_library_name,
+                  const nvgpu::CudbgApiVersion &version) {
   using CudbgGetAPIFn =
       CUDBGResult (*)(uint32_t, uint32_t, uint32_t, CUDBGAPI *);
   const CudbgGetAPIFn cudbgGetAPI = reinterpret_cast<CudbgGetAPIFn>(
-      dlsym(libcuda, Symbols::CUDBG_GET_API.c_str()));
+      libcuda.getAddressOfSymbol(Symbols::CUDBG_GET_API.c_str()));
   if (!cudbgGetAPI)
     return createStringErrorFmt("Failed to find symbol {} in {}",
                                 Symbols::CUDBG_GET_API, libcuda_library_name);
 
+  // Request the chosen version (the lesser of the compiled and driver
+  // versions). The driver returns an API table matching the requested
+  // version's ABI.
   CUDBGAPI api;
   CUDBGResult res =
-      cudbgGetAPI(CUDBG_API_VERSION_MAJOR, CUDBG_API_VERSION_MINOR,
-                  CUDBG_API_VERSION_REVISION, &api);
+      cudbgGetAPI(version.major, version.minor, version.revision, &api);
   if (res != CUDBG_SUCCESS)
     return createStringErrorFmt("The `cudbgGetAPI` call failed. {}",
                                 cudbgGetErrorString(res));
@@ -227,15 +259,51 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
 
   const uint32_t pid = getpid();
   const uint32_t session_id = 0;
-  const uint32_t revision = CUDBG_API_VERSION_REVISION;
+
+  std::string load_error;
+  llvm::sys::DynamicLibrary libcuda =
+      llvm::sys::DynamicLibrary::getPermanentLibrary(
+          libcuda_library_name.str().c_str(), &load_error);
+  if (!libcuda.isValid())
+    return createStringErrorFmt("Failed to load {}: {}", libcuda_library_name,
+                                load_error);
+
+  // Discover the driver's supported API version and choose the version to
+  // use. We support any driver within our compiled major release; using the
+  // lesser of the compiled and driver versions lets an older in-major driver
+  // still attach (newer-than-driver features are simply unavailable).
+  Expected<nvgpu::CudbgApiVersion> driver_version_or =
+      GetDriverAPIVersion(libcuda, libcuda_library_name);
+  if (!driver_version_or)
+    return driver_version_or.takeError();
+
+  const nvgpu::CudbgApiVersion driver_version = *driver_version_or;
+  const nvgpu::CudbgApiVersion compiled_version =
+      nvgpu::CudbgApiVersion::Compiled();
+
+  if (driver_version.major != compiled_version.major)
+    return createStringErrorFmt(
+        "The CUDA driver debugger API major version ({0}) does not match the "
+        "version this lldb-server was built against ({1}). Cross-major-release "
+        "GPU debugging is not supported; use an lldb-server built against CUDA "
+        "{0}.x.",
+        driver_version.major, compiled_version.major);
+
+  const nvgpu::CudbgApiVersion api_version =
+      driver_version < compiled_version ? driver_version : compiled_version;
+  const uint32_t revision = api_version.revision;
+
+  LLDB_LOG(log,
+           "CUDADebuggerAPI: compiled {0}.{1}.{2}, driver {3}.{4}.{5}, "
+           "using {6}.{7}.{8}",
+           compiled_version.major, compiled_version.minor,
+           compiled_version.revision, driver_version.major,
+           driver_version.minor, driver_version.revision, api_version.major,
+           api_version.minor, api_version.revision);
 
   if (Error err = WriteInitializationSymbolsToHost(bp_args, linux_process, pid,
                                                    session_id, revision))
     return err;
-
-  void *libcuda = dlopen(libcuda_library_name.str().c_str(), RTLD_LAZY);
-  if (!libcuda)
-    return createStringErrorFmt("Failed to dlopen {}", libcuda_library_name);
 
   if (Error err = WriteConfigurationToLibcuda(libcuda, pid, revision,
                                               session_id, libcuda_library_name))
@@ -245,11 +313,12 @@ CUDADebuggerAPI::InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,
                                               libcuda_library_name))
     return err;
 
-  Expected<CUDBGAPI> api_or = GetRawAPIInstance(libcuda, libcuda_library_name);
+  Expected<CUDBGAPI> api_or =
+      GetRawAPIInstance(libcuda, libcuda_library_name, api_version);
   if (!api_or)
     return api_or.takeError();
 
-  CUDADebuggerAPI api(*api_or);
+  CUDADebuggerAPI api(*api_or, api_version);
 
   CUDBGResult res = api->initialize();
   if (res != CUDBG_SUCCESS)
