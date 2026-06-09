@@ -85,15 +85,29 @@ starting lldb-server.
 Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^
 
-This plugin relies on a header file provided by NVIDIA `cudadebugger.h` that
-contains hardcoded version numbers of the CUDA driver this plugin will interact
-with. This header is provided by the current CUDA Toolkit installation, unless
-specified manually via the `NVGPU_DEBUGGER_INCLUDE_DIR` CMake variable.
-Make sure that this version matches the one of your driver, otherwise this
-plugin won't be able to initialize.
+This plugin is built against a single CUDA debugger-API header
+(`cudadebugger.h`, provided by the CUDA Toolkit installation or the
+`NVGPU_DEBUGGER_INCLUDE_DIR` CMake variable). The header's
+`CUDBG_API_VERSION_MAJOR` identifies the CUDA *major* release the build
+targets.
 
-- The version numbers in this header file are specified by the variables
-  `CUDBG_API_VERSION_MAJOR` and `CUDBG_API_VERSION_MINOR`.
+Support policy: a build works with any CUDA driver -- and reads any GPU
+coredump -- within that same major release. There is no cross-major-release
+compatibility. In other words, an lldb-server (or corefile reader) built
+against, say, CUDA 13.x supports every 13.x driver/coredump, but not 12.x or
+14.x.
+
+- Live debugging: the plugin queries the driver's API version
+  (`cudbgGetAPIVersion`) and negotiates the API revision down to the lesser of
+  the driver's and the compiled header's. An older in-major driver therefore
+  attaches successfully; API features newer than that driver are simply
+  unavailable. A driver from a different major release is rejected with a clear
+  error -- rebuild lldb-server against that major's header.
+- Coredumps: the reader applies the same policy. It reads any in-major
+  coredump and ignores fields the producing driver predates, using the
+  producer version recorded in the coredump's metadata section. A coredump
+  produced by a different major release is loaded best-effort with a warning,
+  since field layouts are not guaranteed across majors.
 - The version of your driver can be obtained via the `DRIVER version` section
   of the `nvidia-smi --version` output.
 
