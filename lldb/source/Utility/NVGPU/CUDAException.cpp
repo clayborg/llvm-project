@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Utility/NVGPU/CUDAException.h"
+#include "lldb/Utility/NVGPU/CUDADebuggerVersion.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <cassert>
@@ -41,12 +42,21 @@ llvm::StringRef lldb_private::CUDAExceptionToString(CUDBGException_t exception) 
     return "Cluster Out-of-range Address";
   case CUDBG_EXCEPTION_WARP_STACK_CANARY:
     return "Warp Stack Canary";
+  // Exception codes 20-22 first appear in CUDBG API revision 163 (CUDA 13.0
+  // / driver r580). Guard so the plugin still builds against older in-major
+  // headers that lack these enumerators; unknown codes fall through to the
+  // default below.
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(163)
   case CUDBG_EXCEPTION_WARP_TMEM_ACCESS_CHECK:
     return "Warp Tensor Memory Access Check";
   case CUDBG_EXCEPTION_WARP_TMEM_LEAK:
     return "Warp Tensor Memory Leak";
   case CUDBG_EXCEPTION_WARP_CALL_REQUIRES_NEWER_DRIVER:
     return "Warp Call Requires Newer Driver";
+#endif
+  // Exception codes 23-35 first appear in CUDBG API revision 167 (CUDA 13.1
+  // / driver r590).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
   case CUDBG_EXCEPTION_WARP_MISALIGNED_PC:
     return "Warp Misaligned PC";
   case CUDBG_EXCEPTION_WARP_PC_OVERFLOW:
@@ -73,6 +83,7 @@ llvm::StringRef lldb_private::CUDAExceptionToString(CUDBGException_t exception) 
     return "Warp Block Not Present";
   case CUDBG_EXCEPTION_WARP_USER_STACK_OVERFLOW:
     return "Warp User Stack Overflow";
+#endif
   default:
     return "Device Unknown Exception";
   }

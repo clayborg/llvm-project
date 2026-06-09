@@ -11,22 +11,14 @@
 
 #include "cudadebugger.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
+// Shared single-major version policy: the LLDB_NVGPU_CUDBG_API_* compile-time
+// macros, the single-major static_assert, and the runtime CudbgApiVersion
+// type used to pick a driver-compatible API version.
+#include "lldb/Utility/NVGPU/CUDADebuggerVersion.h"
 
 #include <memory>
 
 namespace lldb_private::lldb_server {
-
-// Verify if the provided version numbers are less than the current CUDA
-// Debugger API version.
-#define IS_CUGDB_API_VERSION_LT(major, minor, revision)                        \
-  (CUDBG_API_VERSION_MAJOR < major ||                                          \
-   (CUDBG_API_VERSION_MAJOR == major && CUDBG_API_VERSION_MINOR < minor) || \
-   (CUDBG_API_VERSION_MAJOR == major && CUDBG_API_VERSION_MINOR == minor && CUDBG_API_VERSION_REVISION < revision))
-
-// Verify if the provided version numbers are greater than or equal to the
-// current CUDA Debugger API version.
-#define IS_CUGDB_API_VERSION_GTE(major, minor, revision)                       \
-  !IS_CUGDB_API_VERSION_LT(major, minor, revision)
 
 /// Custom deleter for CUDBGAPI.
 void CUDBGAPIDeleter(CUDBGAPI api);
@@ -55,13 +47,26 @@ public:
 
   CUDBGAPI GetRawAPI() const { return m_api_up.get(); }
 
+  /// The CUDA debugger API version this session operates at: the lesser of
+  /// this build's compiled version and the live driver's reported version.
+  /// Any driver of the same CUDA major release works -- older OR newer than
+  /// the compiled header; only the major must match (a different major is
+  /// rejected at initialization, see Initialize). Taking the lesser of the
+  /// two just means we never request an entry point the running driver
+  /// doesn't provide. Carried so it can be handed to `ProcessNVGPU` for
+  /// runtime gating of version-specific API calls (see
+  /// `ProcessNVGPU::GetAPIVersion`).
+  nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
+
   static GPUBreakpointInfo
   GetInitializationBreakpointInfo(llvm::StringRef library_name);
 
 private:
-  CUDADebuggerAPI(CUDBGAPI api) : m_api_up(api, CUDBGAPIDeleter) {}
+  CUDADebuggerAPI(CUDBGAPI api, nvgpu::CudbgApiVersion api_version)
+      : m_api_up(api, CUDBGAPIDeleter), m_api_version(api_version) {}
 
   std::unique_ptr<const CUDBGAPI_st, decltype(&CUDBGAPIDeleter)> m_api_up;
+  nvgpu::CudbgApiVersion m_api_version;
 
   static llvm::Expected<CUDADebuggerAPI>
   InitializeImpl(const GPUPluginBreakpointHitArgs &bp_args,

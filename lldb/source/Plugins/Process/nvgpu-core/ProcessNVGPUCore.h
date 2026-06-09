@@ -20,10 +20,12 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_PROCESSNVGPUCORE_H
 
+#include "CudbgEntryParser.h"
+
 #include "lldb/Target/PostMortemProcess.h"
 #include "lldb/lldb-forward.h"
 
-class ObjectFileELF;
+#include <optional>
 
 class ProcessNVGPUCore : public lldb_private::PostMortemProcess {
 public:
@@ -86,7 +88,7 @@ public:
                       const lldb_private::AddressSpaceInfo &info, void *buf,
                       size_t size, lldb_private::Status &error) override;
 
-  ObjectFileELF *GetCoreObjectFile() const;
+  lldb_private::ObjectFile *GetCoreObjectFile() const;
 
 protected:
   lldb_private::Status
@@ -95,6 +97,16 @@ protected:
 
 private:
   llvm::Error LoadCubinModules();
+
+  /// Decode the coredump metadata section (if present) into `m_producer`, log
+  /// the producer driver/CUDA version, and warn the user if it is missing or
+  /// from a different CUDA major release.
+  void LoadProducerInfo(const lldb_private::SectionList &sections);
+
+  /// Raw bytes of the `.cudbg.meta` metadata section (producer driver / CUDA
+  /// version), or std::nullopt if the coredump has no such section.
+  std::optional<lldb_private::DataExtractor>
+  GetNVGPUMetadata(const lldb_private::SectionList &sections);
 
   /// Find the nvgpu-global-memory or nvgpu-managed-memory leaf section
   /// under the nvgpucore root that contains the given GPU virtual address.
@@ -109,6 +121,9 @@ private:
 
   lldb::ModuleSP m_core_module_sp;
   lldb::SectionSP m_root_sp;
+  /// Driver/toolkit version that produced this coredump (from the metadata
+  /// section), or std::nullopt if the coredump has no decodable metadata.
+  std::optional<lldb_private::nvgpu_core::ProducerInfo> m_producer;
   /// First thread with an attributed CUDA exception.
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
   /// First thread stopped on an inline `trap;` / `__trap()`.
