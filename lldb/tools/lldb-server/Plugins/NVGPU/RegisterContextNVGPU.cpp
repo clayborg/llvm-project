@@ -44,8 +44,7 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // (possibly older) driver we attached to -- no runtime version check is
   // needed. CTK 13.2 (CUDBG API revision > 167) renamed it to
   // readRegisterRange60 and appended a new 8-arg readRegisterRange variant we
-  // don't use; select the right name at compile time. Mirrors cuda-gdb's
-  // cuda_debugapi::read_register_range.
+  // don't use; select the right name at compile time.
 #if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(168)
   CUDBGResult res = api->readRegisterRange60(
       thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,

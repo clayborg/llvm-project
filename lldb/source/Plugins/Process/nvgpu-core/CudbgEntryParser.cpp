@@ -152,22 +152,21 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   return out;
 }
 
-ProducerInfo DecodeProducerInfo(const DataExtractor &data) {
-  ProducerInfo info;
+std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data) {
   if (data.GetByteSize() == 0)
-    return info; // No metadata section; has_metadata stays false.
+    return std::nullopt; // No metadata section.
 
   // CudbgMetaDataEntry layout (since CUDA driver r565): uint64 generatorName,
   // uint32 driverVersion{Major,Minor}, uint32 cudaDriverVersion{Major,Minor},
-  // then flags/timestamp we don't need. driverVersionMajor is the NVML driver
+  // then flags/timestamp we don't need. driverVersionMajor is the GPU driver
   // branch (e.g. 575/580/615); it is not set on Tegra (stays 0 = "unknown").
+  ProducerInfo info;
   offset_t offset = 0;
   data.GetU64(&offset); // generatorName (string-table index; unused)
   info.driver_branch = data.GetU32(&offset);
   data.GetU32(&offset); // driverVersionMinor (unused)
   info.cuda_major = data.GetU32(&offset);
   info.cuda_minor = data.GetU32(&offset);
-  info.has_metadata = true;
   return info;
 }
 
@@ -180,7 +179,7 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
 std::optional<StopAttribution>
 ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                        lldb::SectionSP warp_section_sp,
-                       lldb::SectionSP sm_section_sp, ObjectFileELF *core) {
+                       lldb::SectionSP sm_section_sp, ObjectFile *core) {
   if (lane.exception != 0)
     return StopAttribution{lane.exception, false, ""};
 
