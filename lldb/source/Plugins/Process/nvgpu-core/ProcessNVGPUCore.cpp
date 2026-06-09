@@ -18,6 +18,7 @@
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
 #include "lldb/Host/FileSystem.h"
+#include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/MemoryRegionInfo.h"
 #include "lldb/Target/Platform.h"
@@ -27,6 +28,7 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/CUDAAddressSpaces.h"
 #include "lldb/Utility/NVGPU/NVGPUSectionID.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Threading.h"
 
 using namespace lldb;
@@ -103,10 +105,10 @@ bool ProcessNVGPUCore::CanDebug(TargetSP target_sp,
   return false;
 }
 
-ObjectFileELF *ProcessNVGPUCore::GetCoreObjectFile() const {
+ObjectFile *ProcessNVGPUCore::GetCoreObjectFile() const {
   if (!m_core_module_sp)
     return nullptr;
-  return llvm::dyn_cast<ObjectFileELF>(m_core_module_sp->GetObjectFile());
+  return m_core_module_sp->GetObjectFile();
 }
 
 Status ProcessNVGPUCore::DoLoadCore() {
@@ -125,7 +127,7 @@ Status ProcessNVGPUCore::DoLoadCore() {
           target.GetDebugger().GetPlatformList().GetOrCreate("nvgpu"))
     target.SetPlatform(nvgpu_platform);
 
-  ObjectFileELF *core = GetCoreObjectFile();
+  ObjectFile *core = GetCoreObjectFile();
   if (!core)
     return Status::FromErrorString("core module is not an ELF object file");
 
@@ -139,6 +141,8 @@ Status ProcessNVGPUCore::DoLoadCore() {
     return Status::FromErrorString(
         "NVGPU corefile did not produce a nvgpucore root section "
         "(likely missing or malformed nvgpu-device-table)");
+
+  LoadProducerInfo(*section_list);
 
   // Register the corefile module itself in the target's module list so it
   // shows up in `image list` and is reachable from the SBModule API. Without
@@ -164,7 +168,7 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOG(log, "ProcessNVGPUCore::LoadCubinModules()");
 
-  ObjectFileELF *core = GetCoreObjectFile();
+  ObjectFile *core = GetCoreObjectFile();
   Target &target = GetTarget();
   ModuleList loaded_modules;
   const FileSpec &core_file = core->GetFileSpec();
@@ -216,11 +220,65 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
   return llvm::Error::success();
 }
 
+std::optional<DataExtractor>
+ProcessNVGPUCore::GetNVGPUMetadata(const SectionList &sections) {
+  // The metadata leaf hangs under the nvgpucore root, so search recursively.
+  SectionSP sect_sp = sections.FindSectionByType(eSectionTypeNVGPUMetadata,
+                                                 /*check_children=*/true);
+  if (!sect_sp)
+    return std::nullopt;
+  DataExtractor data;
+  if (sect_sp->GetSectionData(data))
+    return data;
+  return std::nullopt;
+}
+
+void ProcessNVGPUCore::LoadProducerInfo(const SectionList &sections) {
+  Log *log = GetLog(LLDBLog::Process);
+
+  if (std::optional<DataExtractor> metadata = GetNVGPUMetadata(sections))
+    m_producer = nvgpu_core::DecodeProducerInfo(*metadata);
+
+  if (!m_producer) {
+    // The metadata section was added in driver r565, so every supported
+    // in-major coredump has it. A missing section means we can't confirm the
+    // producing driver matches this build; reads stay in-bounds (absent
+    // fields read back as zero via the per-entry-size zero-fill in Decode),
+    // but surface a warning since GPU state may be missing or misdecoded.
+    Debugger::ReportWarning(
+        "NVGPU corefile has no metadata section; the producing driver version "
+        "could not be determined and some GPU state may be missing or decoded "
+        "incorrectly.",
+        GetTarget().GetDebugger().GetID());
+    return;
+  }
+
+  LLDB_LOG(log, "NVGPU corefile producer: GPU driver branch r{0}, CUDA {1}.{2}",
+           m_producer->driver_branch, m_producer->cuda_major,
+           m_producer->cuda_minor);
+
+  // Single-major policy: a coredump from a different CUDA major release may
+  // use an incompatible field layout. Don't fail the load (the per-entry-size
+  // zero-fill still keeps reads in-bounds), but surface a warning to the user
+  // -- not just the log channel -- since GPU state may be decoded incorrectly.
+  if (m_producer->cuda_major != 0 &&
+      m_producer->cuda_major != CUDBG_API_VERSION_MAJOR)
+    Debugger::ReportWarning(
+        llvm::formatv(
+            "NVGPU corefile was produced by CUDA {0}.{1}, but this debugger "
+            "was built for CUDA {2}.x. Cross-major-release coredumps are not "
+            "supported; some GPU state may be missing or decoded incorrectly.",
+            m_producer->cuda_major, m_producer->cuda_minor,
+            CUDBG_API_VERSION_MAJOR)
+            .str(),
+        GetTarget().GetDebugger().GetID());
+}
+
 bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
                                           ThreadList &new_thread_list) {
   Log *log = GetLog(LLDBLog::Process);
 
-  ObjectFileELF *core = GetCoreObjectFile();
+  ObjectFile *core = GetCoreObjectFile();
 
   uint32_t tid = 0;
 
@@ -301,7 +359,7 @@ size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
 /// range.
 static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
                                     void *buf, size_t size,
-                                    ObjectFileELF *core) {
+                                    ObjectFile *core) {
   if (!mem_section || !mem_section->ContainsFileAddress(addr))
     return 0;
   DataExtractor data;
@@ -325,7 +383,7 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
            "size={2}",
            addr, info.name, size);
 
-  ObjectFileELF *core = GetCoreObjectFile();
+  ObjectFile *core = GetCoreObjectFile();
 
   // Get the thread from the AddressSpec. An absent thread is the API's
   // expected signal (not all callers attach one), so we don't surface it

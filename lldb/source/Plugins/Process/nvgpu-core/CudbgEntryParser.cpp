@@ -37,8 +37,10 @@ llvm::Expected<DeviceEntry> DeviceEntry::Decode(const DataExtractor &data,
   // Since CUDA driver r400.
   out.numUniformRegsPrWarp = data.GetU32(offset_ptr);
   out.numUniformPredicatesPrWarp = data.GetU32(offset_ptr);
-  // Since CUDA driver r575.
+  // Since CUDA driver r575 (CUDBG API revision 156).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(156)
   out.numConvergenceBarriersPrWarp = data.GetU32(offset_ptr);
+#endif
   return out;
 }
 
@@ -58,8 +60,10 @@ llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
   out.clusterExceptionTargetBlockIdxX = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxY = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxZ = data.GetU32(offset_ptr);
-  // Since CUDA driver r580.
+  // Since CUDA driver r580 (CUDBG API revision 163).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(163)
   out.exceptionString = data.GetAddress(offset_ptr);
+#endif
   return out;
 }
 
@@ -110,10 +114,12 @@ llvm::Expected<WarpEntry> WarpEntry::Decode(const DataExtractor &data,
   out.cbuActiveLanesMask = data.GetU32(offset_ptr);
   out.cbuExitedLanesMask = data.GetU32(offset_ptr);
   out.cbuCollectiveLanesMask = data.GetU32(offset_ptr);
-  // Since CUDA driver r590.
+  // Since CUDA driver r590 (CUDBG API revision 167).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
   out.barrierScope = data.GetU32(offset_ptr);
   out.padding3 = data.GetU32(offset_ptr);
   out.additionalBarrierInfo = data.GetAddress(offset_ptr);
+#endif
   return out;
 }
 
@@ -133,13 +139,35 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   out.callDepth = data.GetU32(offset_ptr);
   out.syscallCallDepth = data.GetU32(offset_ptr);
   out.ccRegister = data.GetU32(offset_ptr);
-  // Since CUDA driver r575.
+  // Since CUDA driver r575 (CUDBG API revision 156).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(156)
   out.cbuThreadState = data.GetU32(offset_ptr);
   out.padding0 = data.GetU32(offset_ptr);
-  // Since CUDA driver r615.
+#endif
+  // Since CUDA driver r615 (CUDBG API revision 192).
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(192)
   out.rpcLo = data.GetU32(offset_ptr);
   out.rpcHi = data.GetU32(offset_ptr);
+#endif
   return out;
+}
+
+std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data) {
+  if (data.GetByteSize() == 0)
+    return std::nullopt; // No metadata section.
+
+  // CudbgMetaDataEntry layout (since CUDA driver r565): uint64 generatorName,
+  // uint32 driverVersion{Major,Minor}, uint32 cudaDriverVersion{Major,Minor},
+  // then flags/timestamp we don't need. driverVersionMajor is the GPU driver
+  // branch (e.g. 575/580/615); it is not set on Tegra (stays 0 = "unknown").
+  ProducerInfo info;
+  offset_t offset = 0;
+  data.GetU64(&offset); // generatorName (string-table index; unused)
+  info.driver_branch = data.GetU32(&offset);
+  data.GetU32(&offset); // driverVersionMinor (unused)
+  info.cuda_major = data.GetU32(&offset);
+  info.cuda_minor = data.GetU32(&offset);
+  return info;
 }
 
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
@@ -151,7 +179,7 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
 std::optional<StopAttribution>
 ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
                        lldb::SectionSP warp_section_sp,
-                       lldb::SectionSP sm_section_sp, ObjectFileELF *core) {
+                       lldb::SectionSP sm_section_sp, ObjectFile *core) {
   if (lane.exception != 0)
     return StopAttribution{lane.exception, false, ""};
 
