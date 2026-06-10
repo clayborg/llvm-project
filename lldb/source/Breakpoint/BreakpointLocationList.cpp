@@ -12,6 +12,7 @@
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
@@ -232,6 +233,21 @@ BreakpointLocationSP BreakpointLocationList::AddLocation(
       }
     }
   }
+
+  // When we add a new location, check if the target is a host and has
+  // associated GPU targets that suggest disabling the location. I.e. the GPU
+  // target has a better match than the CPU target.
+  Target &target = m_owner.GetTarget();
+  if (bp_loc_sp && !target.IsGPUTarget()) {
+    target.ForEachGPUPluginTarget(
+        [&](llvm::StringRef plugin_name, const TargetSP &gpu_target_sp) {
+          PlatformSP platform_sp = gpu_target_sp->GetPlatform();
+          if (platform_sp)
+            platform_sp->HandleNativeBreakpointLocation(*bp_loc_sp);
+          return IterationAction::Continue;
+        });
+  }
+
   return bp_loc_sp;
 }
 

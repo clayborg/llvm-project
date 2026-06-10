@@ -56,6 +56,7 @@
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/MemoryRegionInfo.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/RegisterFlags.h"
 #include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
@@ -1102,7 +1103,7 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!platform_sp)
     return Status::FromErrorString("invalid platform for target needed for "
                                    "connecting to process");
-                                   
+
   ProcessSP process_sp =
       gpu_action.connect_info->synchronous
           ? platform_sp->ConnectProcessSynchronous(
@@ -1117,6 +1118,13 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     return Status::FromErrorString("invalid process after connecting");
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
                 "created process!!!");
+
+  // Broadcast the target creation event so DAP can create a child session
+  auto event_sp = std::make_shared<Event>(
+      Target::eBroadcastBitNewTargetCreated,
+      new Target::TargetEventData(GetTarget().shared_from_this(),
+                                  gpu_target_sp));
+  GetTarget().BroadcastEvent(event_sp);
   return Status();
 }
 

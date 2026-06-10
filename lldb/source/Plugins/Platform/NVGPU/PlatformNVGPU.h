@@ -11,6 +11,11 @@
 
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Target/Platform.h"
+#include "llvm/ADT/IntervalMap.h"
+
+#include <map>
+#include <string>
+#include <vector>
 
 namespace lldb_private::platform_NVGPU {
 
@@ -91,7 +96,16 @@ public:
   bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
                           GPUDim3 &thread_idx) override;
 
+  /// Check if the native breakpoint location is within a "shadow function", a
+  /// trampoline function that wraps around a `__device_stub` call to a GPU
+  /// kernel.
+  void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) override;
+
 private:
+  using ShadowFunctionRangeMap =
+      llvm::IntervalMap<lldb::addr_t, bool, 4,
+                        llvm::IntervalMapHalfOpenInfo<lldb::addr_t>>;
+
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
   uint64_t FindRegisterLocations(const lldb::ModuleSP &module_sp,
@@ -104,6 +118,8 @@ private:
   std::vector<ArchSpec> m_supported_architectures;
 
   std::map<lldb::ModuleSP, PTXPRegMap> m_entries;
+  ShadowFunctionRangeMap::Allocator m_shadow_function_range_alloc;
+  ShadowFunctionRangeMap m_shadow_function_ranges;
 };
 
 } // namespace lldb_private::platform_NVGPU

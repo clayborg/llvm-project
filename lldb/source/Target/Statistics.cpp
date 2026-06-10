@@ -152,7 +152,6 @@ TargetStats::ToJSON(Target &target,
       target_metrics_json.try_emplace("loadCoreTime",
                                       m_load_core_time.get().count());
     }
-
     json::Array breakpoints_array;
     double totalBreakpointResolveTime = 0.0;
     // Report both the normal breakpoint list and the internal breakpoint list.

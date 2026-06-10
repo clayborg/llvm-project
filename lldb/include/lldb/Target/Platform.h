@@ -420,6 +420,17 @@ public:
     return;
   }
 
+  /// Give the platform a chance to adjust a native target breakpoint location.
+  ///
+  /// This hook is used by targets that have associated plugin-managed targets,
+  /// such as GPU targets paired with a native CPU target. The platform can
+  /// inspect the resolved native breakpoint location and mutate it when the
+  /// platform has a better target-specific match. A typical use is disabling a
+  /// CPU-side trampoline or launch-stub breakpoint location when the
+  /// corresponding GPU breakpoint should be preferred instead.
+  ///
+  virtual void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {}
+
   /// Attach to an existing process by process name.
   ///
   /// This function is not meant to be overridden by Process subclasses. It

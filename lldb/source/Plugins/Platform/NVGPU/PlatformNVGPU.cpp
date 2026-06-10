@@ -8,6 +8,10 @@
 
 #include "PlatformNVGPU.h"
 #include "cudadebugger.h"
+#include "lldb/Breakpoint/Breakpoint.h"
+#include "lldb/Breakpoint/BreakpointList.h"
+#include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Core/Mangled.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
@@ -16,6 +20,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StackFrame.h"
+#include "lldb/Target/Statistics.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
@@ -24,6 +29,7 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Stream.h"
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -44,6 +50,81 @@ enum {
 #define LLDB_PROPERTIES_platformnvgpuuser
 #include "PlatformNVGPUUserPropertiesEnum.inc"
 };
+
+constexpr llvm::StringLiteral kDeviceStubPrefix = "__device_stub_";
+
+ConstString GetConcreteOwningMangledName(const SymbolContext &sc) {
+  if (sc.function)
+    return sc.function->GetMangled().GetMangledName();
+
+  if (sc.symbol)
+    return sc.symbol->GetMangled().GetMangledName();
+
+  return {};
+}
+
+bool HasDeviceStubSymbol(const ModuleSP &module_sp, ConstString mangled_name) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+  if (!module_sp || !mangled_name)
+    return false;
+
+  llvm::SmallString<128> stub_name(kDeviceStubPrefix);
+  stub_name += mangled_name.GetStringRef();
+  ConstString stub_name_cs{llvm::StringRef(stub_name)};
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: searching for device stub base name {1}",
+           __FUNCTION__, stub_name);
+
+  SymbolContextList sc_list;
+  module_sp->FindFunctionSymbols(stub_name_cs, lldb::eFunctionNameTypeBase,
+                                 sc_list);
+  if (sc_list.GetSize() == 0) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup failed in module "
+             "{1}",
+             __FUNCTION__, module_sp->GetSpecificationDescription());
+    return false;
+  }
+
+  SymbolContext sc;
+  if (!sc_list.GetContextAtIndex(0, sc) || !sc.symbol) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup produced an "
+             "unexpected symbol context",
+             __FUNCTION__);
+    return false;
+  }
+
+  const Mangled &candidate_name = sc.symbol->GetMangled();
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: found matching device stub: mangled={1}, "
+           "demangled={2}",
+           __FUNCTION__, candidate_name.GetMangledName().GetStringRef(),
+           candidate_name.GetDemangledName().GetStringRef());
+  if (sc_list.GetSize() > 1) {
+    LLDB_LOG(log,
+             "PlatformNVGPU::{0}: indexed device stub lookup returned {1} "
+             "candidates for base name {2}",
+             __FUNCTION__, sc_list.GetSize(), stub_name);
+  }
+  return true;
+}
+bool IsShadowFunction(const SymbolContext &candidate_sc) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+
+  if (!candidate_sc.module_sp)
+    return false;
+
+  ConstString function_name = GetConcreteOwningMangledName(candidate_sc);
+  if (!function_name)
+    return false;
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0}: searching for device stub corresponding to {1}",
+           __FUNCTION__, function_name.GetStringRef());
+  return HasDeviceStubSymbol(candidate_sc.module_sp, function_name);
+}
 } // namespace
 
 PlatformNVGPU::PluginProperties::PluginProperties() {
@@ -105,7 +186,9 @@ void PlatformNVGPU::Terminate() {
   Platform::Terminate();
 }
 
-PlatformNVGPU::PlatformNVGPU() : Platform(/*is_host=*/false) {
+PlatformNVGPU::PlatformNVGPU()
+    : Platform(/*is_host=*/false),
+      m_shadow_function_ranges(m_shadow_function_range_alloc) {
   m_supported_architectures = CreateArchList(
       {llvm::Triple::nvptx, llvm::Triple::nvptx64}, llvm::Triple::CUDA);
 }
@@ -272,6 +355,29 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
   return llvm::Error::success();
 }
 
+void PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
+  Log *log = GetLog(LLDBLog::Breakpoints);
+
+  // No need to re-disable an already-disabled breakpoint location.
+  if (!bp_loc.IsEnabled())
+    return;
+
+  SymbolContext sc;
+  bp_loc.GetAddress().CalculateSymbolContext(
+      &sc, lldb::eSymbolContextFunction | lldb::eSymbolContextSymbol);
+  if (!IsShadowFunction(sc))
+    return;
+
+  if (llvm::Error err = bp_loc.SetEnabled(false))
+    LLDB_LOG_ERROR(log, std::move(err),
+                   "Error when disabling native breakpoint location: {0}");
+
+  LLDB_LOG(log,
+           "PlatformNVGPU::{0} disabling native breakpoint "
+           "location (load_addr = 0x{1:x}) for GPU platform '{2}'",
+           __FUNCTION__, bp_loc.GetLoadAddress(), GetName());
+}
+
 ///   The PTX to SASS register map table is made of a series of entries,
 ///   one per function. Each function entry is made of a list of register
 ///   mappings, from a PTX register to a SASS register. The table size is
@@ -368,14 +474,13 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
       AddressRange func_range = sc.function->GetAddressRanges()[0];
       func_start = func_range.GetBaseAddress().GetLoadAddress(&target);
       func_end = func_start + func_range.GetByteSize();
-      LLDB_LOG(log, "Function %s: [0x%" PRIx64 " - 0x%" PRIx64 ")\n",
-               function_name, func_start, func_end);
+      LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name, func_start, func_end);
       break;
     }
   }
 
   if (i == sc_list.GetSize()) {
-    LLDB_LOG(log, "Function %s symbol not found.", function_name);
+    LLDB_LOG(log, "Function {0} symbol not found.", function_name);
     return;
   }
 
@@ -566,8 +671,7 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
   PTXPRegMap &ptx_reg_map = m_entries[module_sp];
   auto map_iter = ptx_reg_map.find(reg_num);
   if (map_iter == ptx_reg_map.end()) {
-    LLDB_LOG(log, "RecordLoadedModule: PTX register mapping not found in the module {0}",
-             module_name);
+    LLDB_LOG(log, "RecordLoadedModule: PTX register mapping not found in the module {0}", module_name);
     return 0;
   }
 
@@ -842,7 +946,7 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
         Address frame_addr = frame_sp->GetFrameCodeAddress();
 
         // Print frame address.
-        strm.Printf("0x%0*" PRIx64 " ",
+        strm.Printf("0x%0*" PRIx64 " ", 
                     target ? (target->GetArchitecture().GetAddressByteSize() * 2)
                            : 16,
                     frame_addr.GetLoadAddress(target));
