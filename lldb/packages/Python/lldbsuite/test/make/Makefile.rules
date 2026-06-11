@@ -124,6 +124,7 @@ ifneq "$(strip $(NVCC_SOURCES))" ""
 	override CXX := $(NVCC)
 	override CC_TYPE := cuda
 	USE_SYSTEM_STDLIB := 1
+	NVCC_ARCHFLAGS ?= -arch=native
 endif
 
 
@@ -349,7 +350,7 @@ CXXFLAGS += -std=c++11 $(CFLAGS) $(ARCH_CXXFLAGS)
 HIPFLAGS ?= $(CFLAGS)
 # Copy common options to the linker flags (dwarf, arch. & etc).
 # Note: we get some 'garbage' options for linker here (such as -I, --isystem & etc).
-NVCCFLAGS ?= $(CFLAGS) -G -g -O0
+NVCCFLAGS ?= $(CFLAGS) $(NVCC_ARCHFLAGS) -G -g -O0
 LDFLAGS += $(CFLAGS)
 LDFLAGS += $(LD_EXTRAS) $(ARCH_LDFLAGS)
 ifeq (,$(filter $(OS), Windows_NT Android Darwin))
