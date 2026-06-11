@@ -10,6 +10,24 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 class TestNVGPUUnwind(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
+    MAX_CONTINUE_ATTEMPTS = 3
+
+    def wait_for_stop_reason(self, stop_reason, resume=True):
+        """Continue and retry until thread 0 stops for the expected reason."""
+        for attempt in range(self.MAX_CONTINUE_ATTEMPTS):
+            if resume or attempt > 0:
+                self.gpu_process.Continue()
+                self.select_gpu()
+                self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+
+            if self.gpu_process.thread[0].GetStopReason() == stop_reason:
+                return
+
+        self.fail(
+            f"GPU did not stop with reason {stop_reason} after "
+            f"{self.MAX_CONTINUE_ATTEMPTS} continue attempts"
+        )
+
     def check_backtrace(self, test_name, expected_frames):
         """Verify that the backtrace contains the expected frames.
 
@@ -85,7 +103,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(self.dbg.GetNumTargets(), 2)
 
         self.select_gpu()
-        self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint, resume=False)
 
         expected_frames = [
             ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
@@ -118,8 +136,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.dbg.SetAsync(False)
 
         # Test 2: Unwind with arguments
-        self.gpu_process.Continue()
-        self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint)
 
         expected_frames = [
             ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
@@ -132,8 +149,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.check_backtrace("test_unwind_with_arguments", expected_frames)
 
         # Test 3: Unwind with divergent control flow
-        self.gpu_process.Continue()
-        self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint)
 
         # fmt: off
         expected_frames = [
@@ -149,9 +165,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
 
         # Test 4: Unwind with null function pointer (no breakpoint - hits fault directly)
         # Note: This must be the last test because it hits a fault and stops the process
-        self.gpu_process.Continue()
-        self.select_gpu()
-        self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+        self.wait_for_stop_reason(lldb.eStopReasonException)
 
         expected_frames = [
             (None, None, None),  # Invalid address (no debug info)
