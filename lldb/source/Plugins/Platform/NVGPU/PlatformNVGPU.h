@@ -83,7 +83,9 @@ public:
                           Target &target) override;
 
   size_t GetGPUThreadStatus(Process &process, Stream &strm,
-                            bool only_threads_with_stop_reason) override;
+                            bool only_threads_with_stop_reason,
+                            std::optional<lldb::StopReason> stop_reason_filter =
+                                std::nullopt) override;
 
   lldb::ThreadSP FindGPUThread(Process &process, const GPUDim3 &block_idx,
                                const GPUDim3 &thread_idx) override;
