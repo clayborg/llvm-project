@@ -1,0 +1,43 @@
+//===-- StopReason.def ------------------------------------------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file enumerates the lldb::StopReason values together with their textual
+// names. It is the single source of truth shared by
+// Thread::StopReasonAsString() and Thread::StopReasonFromString(), so the two
+// conversions cannot drift out of sync.
+//
+// Keep this list in sync with lldb::StopReason in lldb-enumerations.h. The
+// no-default switch in Thread::StopReasonAsString() will fail to compile if a
+// new enumerator is added without a corresponding entry here.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLDB_STOP_REASON
+#error "LLDB_STOP_REASON(reason_enum, reason_name) must be defined"
+#endif
+
+LLDB_STOP_REASON(eStopReasonInvalid, "invalid")
+LLDB_STOP_REASON(eStopReasonNone, "none")
+LLDB_STOP_REASON(eStopReasonTrace, "trace")
+LLDB_STOP_REASON(eStopReasonBreakpoint, "breakpoint")
+LLDB_STOP_REASON(eStopReasonWatchpoint, "watchpoint")
+LLDB_STOP_REASON(eStopReasonSignal, "signal")
+LLDB_STOP_REASON(eStopReasonException, "exception")
+LLDB_STOP_REASON(eStopReasonExec, "exec")
+LLDB_STOP_REASON(eStopReasonFork, "fork")
+LLDB_STOP_REASON(eStopReasonVFork, "vfork")
+LLDB_STOP_REASON(eStopReasonVForkDone, "vfork done")
+LLDB_STOP_REASON(eStopReasonPlanComplete, "plan complete")
+LLDB_STOP_REASON(eStopReasonThreadExiting, "thread exiting")
+LLDB_STOP_REASON(eStopReasonInstrumentation, "instrumentation break")
+LLDB_STOP_REASON(eStopReasonProcessorTrace, "processor trace")
+LLDB_STOP_REASON(eStopReasonInterrupt, "async interrupt")
+LLDB_STOP_REASON(eStopReasonHistoryBoundary, "history boundary")
+LLDB_STOP_REASON(eStopReasonDynamicLoader, "dynamic loader")
+
+#undef LLDB_STOP_REASON

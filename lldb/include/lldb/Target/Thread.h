@@ -263,6 +263,19 @@ public:
 
   static std::string StopReasonAsString(lldb::StopReason reason);
 
+  /// Parse a stop reason from its string representation.
+  ///
+  /// This is the inverse of StopReasonAsString().
+  ///
+  /// \param[in] reason_str
+  ///     The string representation of the stop reason (e.g. "breakpoint").
+  ///
+  /// \return
+  ///     The matching StopReason, or std::nullopt if the string does not
+  ///     name a known stop reason.
+  static std::optional<lldb::StopReason>
+  StopReasonFromString(llvm::StringRef reason_str);
+
   virtual const char *GetInfo() { return nullptr; }
 
   /// Retrieve a dictionary of information about this thread

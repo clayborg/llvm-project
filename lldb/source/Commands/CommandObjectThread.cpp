@@ -1321,9 +1321,51 @@ protected:
 };
 
 // CommandObjectThreadList
+#define LLDB_OPTIONS_thread_list
+#include "CommandOptions.inc"
 
 class CommandObjectThreadList : public CommandObjectParsed {
 public:
+  class CommandOptions : public Options {
+  public:
+    CommandOptions() { OptionParsingStarting(nullptr); }
+
+    ~CommandOptions() override = default;
+
+    void OptionParsingStarting(ExecutionContext *execution_context) override {
+      m_verbose = false;
+      m_stop_reason_filter.reset();
+    }
+
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      const int short_option = m_getopt_table[option_idx].val;
+      Status error;
+
+      switch (short_option) {
+      case 'v':
+        m_verbose = true;
+        break;
+      case 's':
+        m_stop_reason_filter = Thread::StopReasonFromString(option_arg);
+        if (!m_stop_reason_filter)
+          error = Status::FromErrorStringWithFormat("invalid stop reason '%s'",
+                                                    option_arg.str().c_str());
+        break;
+      default:
+        llvm_unreachable("Unimplemented option");
+      }
+      return error;
+    }
+
+    llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
+      return llvm::ArrayRef(g_thread_list_options);
+    }
+
+    bool m_verbose;
+    std::optional<lldb::StopReason> m_stop_reason_filter;
+  };
+
   CommandObjectThreadList(CommandInterpreter &interpreter)
       : CommandObjectParsed(
             interpreter, "thread list",
@@ -1336,6 +1378,8 @@ public:
 
   ~CommandObjectThreadList() override = default;
 
+  Options *GetOptions() override { return &m_options; }
+
 protected:
   void DoExecute(Args &command, CommandReturnObject &result) override {
     Stream &strm = result.GetOutputStream();
@@ -1343,27 +1387,63 @@ protected:
     Process *process = m_exe_ctx.GetProcessPtr();
     const bool only_threads_with_stop_reason = false;
 
-    // Check if this is a GPU target and delegate to the platform plugin if so.
+    // GPU targets get the aggregated platform path by default. `-v` opts out
+    // of the GPU-specific aggregation entirely and uses the same per-thread
+    // rendering as the rest of LLDB; this lets the user fall back to a
+    // detailed view (or filter the per-thread view via `-s`).
     Target &target = process->GetTarget();
-    if (target.IsGPUTarget()) {
+    if (target.IsGPUTarget() && !m_options.m_verbose) {
       PlatformSP platform_sp = target.GetPlatform();
       if (platform_sp) {
-        size_t num_printed =
-            platform_sp->GetGPUThreadStatus(*process, strm,
-                                            only_threads_with_stop_reason);
+        size_t num_printed = platform_sp->GetGPUThreadStatus(
+            *process, strm, only_threads_with_stop_reason,
+            m_options.m_stop_reason_filter);
         if (num_printed > 0)
           return;
-        // Fall through to default behavior if the platform didn't handle it.
       }
+    }
+
+    process->GetStatus(strm);
+
+    if (target.IsGPUTarget() && m_options.m_stop_reason_filter) {
+      // -v with --stop-reason on a GPU target: per-thread rendering, filtered
+      // to threads whose stop reason matches. Mirrors Process::GetThreadStatus
+      // but with the extra filter applied at iteration time.
+      auto matches = [&](Thread &thread) -> bool {
+        StopInfoSP stop_info_sp = thread.GetStopInfo();
+        if (!stop_info_sp)
+          return false;
+        return stop_info_sp->GetStopReason() == *m_options.m_stop_reason_filter;
+      };
+
+      llvm::SmallVector<ThreadSP, 64> threads;
+      {
+        std::lock_guard<std::recursive_mutex> guard(
+            process->GetThreadList().GetMutex());
+        ThreadList &thread_list = process->GetThreadList();
+        uint32_t num_threads = thread_list.GetSize();
+        threads.reserve(num_threads);
+        for (uint32_t i = 0; i < num_threads; ++i)
+          threads.push_back(thread_list.GetThreadAtIndex(i));
+      }
+      for (const ThreadSP &thread_sp : threads) {
+        if (!thread_sp || !matches(*thread_sp))
+          continue;
+        thread_sp->GetStatus(strm, /*start_frame=*/0, /*num_frames=*/0,
+                             /*num_frames_with_source=*/0, /*stop_format=*/false,
+                             /*show_hidden=*/true);
+      }
+      return;
     }
 
     const uint32_t start_frame = 0;
     const uint32_t num_frames = 0;
     const uint32_t num_frames_with_source = 0;
-    process->GetStatus(strm);
     process->GetThreadStatus(strm, only_threads_with_stop_reason, start_frame,
                              num_frames, num_frames_with_source, false);
   }
+
+  CommandOptions m_options;
 };
 
 // CommandObjectThreadInfo
