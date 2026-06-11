@@ -30,8 +30,12 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
 
         self.select_gpu()
 
+        # Use `thread list -v` to opt out of the GPU-specific aggregation so
+        # each (blockIdx, threadIdx) row is rendered separately. This lets us
+        # verify that the specific (0,0,0) thread in each of the four blocks
+        # hit the breakpoint.
         self.expect(
-            "thread list",
+            "thread list -v",
             substrs=[
                 f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
                 f"at {source}:{gpu_bp_line}, name = 'blockIdx(x=1 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 1.1",
@@ -44,7 +48,7 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
         self.select_gpu()
         self.gpu_process.Continue()
         self.expect(
-            "thread list",
+            "thread list -v",
             substrs=[
                 f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=0 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
                 f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=1 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",

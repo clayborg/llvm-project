@@ -1861,6 +1861,22 @@ let Command = "thread until" in {
              "or leave the function - can be specified multiple times.">;
 }
 
+let Command = "thread list" in {
+  def thread_list_verbose : Option<"verbose", "v">,
+    Desc<"For GPU targets, disable platform-specific aggregation and render "
+         "one row per thread, the same way `thread list` works for CPU "
+         "targets.">;
+  def thread_list_stop_reason : Option<"stop-reason", "s">, Arg<"Name">,
+    Desc<"For GPU targets, only show threads whose stop reason matches the "
+         "given name. Must be one of the stop reason names produced by "
+         "'thread list': 'invalid', 'none', 'trace', 'breakpoint', "
+         "'watchpoint', 'signal', 'exception', 'exec', 'fork', 'vfork', "
+         "'vfork done', 'plan complete', 'thread exiting', "
+         "'instrumentation break', 'processor trace', 'async interrupt', "
+         "'history boundary', or 'dynamic loader'. Threads that do not match "
+         "are summarised in a single trailing row.">;
+}
+
 let Command = "thread info" in {
   def thread_info_json : Option<"json", "j">,
                          Desc<"Display the thread info in"

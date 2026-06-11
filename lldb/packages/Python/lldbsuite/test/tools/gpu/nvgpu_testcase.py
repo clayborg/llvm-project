@@ -12,7 +12,15 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
     def killCPUOnTeardown(self):
-        self.addTearDownHook(lambda: self.cpu_process.Kill())
+        # TestBase.tearDown deletes all targets (and kills their processes)
+        # before running registered hooks, so by the time this fires
+        # self.cpu_process may already be gone. Guard against that instead
+        # of blowing up the test with an AttributeError.
+        def kill_cpu():
+            proc = self.cpu_process
+            if proc:
+                proc.Kill()
+        self.addTearDownHook(kill_cpu)
 
     def continue_cpu_and_wait_for_gpu_to_stop(self):
         """Resume the CPU process and wait for the GPU process to stop. The gpu_target must be already running."""

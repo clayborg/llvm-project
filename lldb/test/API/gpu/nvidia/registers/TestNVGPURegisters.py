@@ -26,7 +26,7 @@ class TestNVGPURegisters(NVGPUTestCaseBase):
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
         some_thread_with_exception = self.find_thread_by_stop_reason(lldb.eStopReasonException)
-        self.assertIn("CUDA Exception(6): Warp - Misaligned address at 0x", str(some_thread_with_exception))
+        self.assertIn("CUDA Exception(6): Warp Misaligned Address at 0x", str(some_thread_with_exception))
 
         frame = some_thread_with_exception.frame[0]
 

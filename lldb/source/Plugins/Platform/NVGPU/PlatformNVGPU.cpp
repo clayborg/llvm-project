@@ -8,6 +8,7 @@
 
 #include "PlatformNVGPU.h"
 #include "cudadebugger.h"
+#include "lldb/Core/Address.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
@@ -24,9 +25,15 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Stream.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <climits>
 #include <map>
 #include <regex>
 
@@ -586,18 +593,6 @@ struct Dim3 {
   int x = 0;
   int y = 0;
   int z = 0;
-
-  bool operator==(const Dim3 &other) const {
-    return x == other.x && y == other.y && z == other.z;
-  }
-
-  bool operator<(const Dim3 &other) const {
-    if (z != other.z)
-      return z < other.z;
-    if (y != other.y)
-      return y < other.y;
-    return x < other.x;
-  }
 };
 
 /// Represents a CUDA thread's full coordinates.
@@ -605,44 +600,6 @@ struct CUDAThreadCoord {
   Dim3 block_idx;
   Dim3 thread_idx;
   lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
-
-  bool operator<(const CUDAThreadCoord &other) const {
-    if (block_idx < other.block_idx)
-      return true;
-    if (other.block_idx < block_idx)
-      return false;
-    return thread_idx < other.thread_idx;
-  }
-};
-
-/// Represents a range of CUDA thread coordinates that share the same PC.
-struct CUDAThreadRange {
-  Dim3 block_min;
-  Dim3 block_max;
-  Dim3 thread_min;
-  Dim3 thread_max;
-  size_t count = 0;
-
-  void AddCoord(const CUDAThreadCoord &coord) {
-    if (count == 0) {
-      block_min = block_max = coord.block_idx;
-      thread_min = thread_max = coord.thread_idx;
-    } else {
-      block_min.x = std::min(block_min.x, coord.block_idx.x);
-      block_min.y = std::min(block_min.y, coord.block_idx.y);
-      block_min.z = std::min(block_min.z, coord.block_idx.z);
-      block_max.x = std::max(block_max.x, coord.block_idx.x);
-      block_max.y = std::max(block_max.y, coord.block_idx.y);
-      block_max.z = std::max(block_max.z, coord.block_idx.z);
-      thread_min.x = std::min(thread_min.x, coord.thread_idx.x);
-      thread_min.y = std::min(thread_min.y, coord.thread_idx.y);
-      thread_min.z = std::min(thread_min.z, coord.thread_idx.z);
-      thread_max.x = std::max(thread_max.x, coord.thread_idx.x);
-      thread_max.y = std::max(thread_max.y, coord.thread_idx.y);
-      thread_max.z = std::max(thread_max.z, coord.thread_idx.z);
-    }
-    ++count;
-  }
 };
 
 /// Parse a CUDA thread name in the format:
@@ -667,76 +624,255 @@ static bool ParseCUDAThreadName(llvm::StringRef name, CUDAThreadCoord &coord) {
   return true;
 }
 
-/// Format a dimension range, showing just the value if min==max,
-/// or [min...max] if they differ.
-static void FormatDimRange(Stream &strm, const char *name, int min_val,
-                           int max_val) {
-  if (min_val == max_val)
-    strm.Printf("%s=%d", name, min_val);
-  else
-    strm.Printf("%s=[%d...%d]", name, min_val, max_val);
-}
+/// Per-dimension value tracker for the aggregated thread-list path.
+///
+/// Stores every distinct value seen for a single CUDA coordinate dimension
+/// (e.g. blockIdx.x) within a group, so we can decide between three display
+/// forms: a single value, a contiguous range, or a wildcard when the values
+/// are non-contiguous.
+struct DimSet {
+  int min_v = INT_MAX;
+  int max_v = INT_MIN;
+  llvm::DenseSet<int> values;
 
-/// Format a Dim3 range for display.
-static void FormatDim3Range(Stream &strm, const char *prefix,
-                            const Dim3 &min_dim, const Dim3 &max_dim) {
-  strm.Printf("%s(", prefix);
-  FormatDimRange(strm, "x", min_dim.x, max_dim.x);
-  strm.PutChar(' ');
-  FormatDimRange(strm, "y", min_dim.y, max_dim.y);
-  strm.PutChar(' ');
-  FormatDimRange(strm, "z", min_dim.z, max_dim.z);
-  strm.PutChar(')');
-}
+  void Insert(int v) {
+    min_v = std::min(min_v, v);
+    max_v = std::max(max_v, v);
+    values.insert(v);
+  }
+  bool IsEmpty() const { return values.empty(); }
+  bool IsSingle() const { return values.size() == 1; }
+  bool IsContiguous() const {
+    return !IsEmpty() &&
+           static_cast<size_t>(max_v - min_v + 1) == values.size();
+  }
+};
 
-/// Represents a group of consecutive threads sharing the same PC and stop
-/// reason.
-struct ConsecutiveThreadGroup {
+/// How a group's representative location was identified.
+///
+/// Resolution order: LineAndFunction first (most specific), then FunctionOnly
+/// (e.g. function missing line info), then PCOnly (no symbol resolution at
+/// all). Each tier produces a distinct group key and a distinct rendering.
+/// FilteredOut is a synthetic tier used to collapse all threads dropped by a
+/// list-time filter (e.g. --exceptions) into a single summary entry that is
+/// rendered alongside the real groups.
+///
+/// Empty and Tombstone are sentinels reserved for llvm::DenseMapInfo<GroupKey>
+/// and are never produced by BuildGroupKey.
+enum class GroupKind {
+  LineAndFunction,
+  FunctionOnly,
+  PCOnly,
+  FilteredOut,
+  Empty,
+  Tombstone,
+};
+
+/// Identity of an aggregated thread group. Only fields relevant to the kind
+/// are populated; the rest stay defaulted and are ignored by equality and
+/// hashing (e.g. `pc` is meaningful only for PCOnly groups).
+struct GroupKey {
+  GroupKind kind = GroupKind::PCOnly;
+  std::string file;
+  uint32_t line = 0;
+  std::string function;
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
   uint64_t stop_value = 0;
-  std::vector<CUDAThreadCoord> coords;
-  ThreadSP representative_thread;
+
+  bool operator==(const GroupKey &other) const {
+    if (kind != other.kind)
+      return false;
+    // Sentinel-like kinds (FilteredOut, plus DenseMap Empty/Tombstone)
+    // carry no additional identity beyond the kind itself.
+    if (kind == GroupKind::FilteredOut || kind == GroupKind::Empty ||
+        kind == GroupKind::Tombstone)
+      return true;
+    if (stop_reason != other.stop_reason || stop_value != other.stop_value)
+      return false;
+    switch (kind) {
+    case GroupKind::LineAndFunction:
+      return line == other.line && file == other.file &&
+             function == other.function;
+    case GroupKind::FunctionOnly:
+      return function == other.function;
+    case GroupKind::PCOnly:
+      return pc == other.pc;
+    case GroupKind::FilteredOut:
+    case GroupKind::Empty:
+    case GroupKind::Tombstone:
+      llvm_unreachable("sentinel kinds handled above");
+    }
+    return false;
+  }
 };
 
-size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
-                                         bool only_threads_with_stop_reason) {
-  // Build groups of consecutive threads that share the same PC.
-  // We only coalesce threads that are adjacent in the thread list.
-  std::vector<ConsecutiveThreadGroup> groups;
+struct GroupKeyHash {
+  size_t operator()(const GroupKey &k) const {
+    switch (k.kind) {
+    case GroupKind::LineAndFunction:
+      return llvm::hash_combine(static_cast<int>(k.kind),
+                                llvm::StringRef(k.file), k.line,
+                                llvm::StringRef(k.function),
+                                static_cast<int>(k.stop_reason), k.stop_value);
+    case GroupKind::FunctionOnly:
+      return llvm::hash_combine(static_cast<int>(k.kind),
+                                llvm::StringRef(k.function),
+                                static_cast<int>(k.stop_reason), k.stop_value);
+    case GroupKind::PCOnly:
+      return llvm::hash_combine(static_cast<int>(k.kind), k.pc,
+                                static_cast<int>(k.stop_reason), k.stop_value);
+    case GroupKind::FilteredOut:
+    case GroupKind::Empty:
+    case GroupKind::Tombstone:
+      return llvm::hash_value(static_cast<int>(k.kind));
+    }
+    return 0;
+  }
+};
 
-  // Collect all thread IDs first to avoid holding the lock while iterating.
-  std::vector<lldb::tid_t> thread_ids;
+namespace llvm {
+template <> struct DenseMapInfo<::GroupKey> {
+  static ::GroupKey getEmptyKey() {
+    ::GroupKey k;
+    k.kind = ::GroupKind::Empty;
+    return k;
+  }
+  static ::GroupKey getTombstoneKey() {
+    ::GroupKey k;
+    k.kind = ::GroupKind::Tombstone;
+    return k;
+  }
+  static unsigned getHashValue(const ::GroupKey &k) {
+    return static_cast<unsigned>(::GroupKeyHash{}(k));
+  }
+  static bool isEqual(const ::GroupKey &lhs, const ::GroupKey &rhs) {
+    return lhs == rhs;
+  }
+};
+} // namespace llvm
+
+/// Aggregated representation of all threads sharing one GroupKey.
+struct ThreadGroup {
+  GroupKey key;
+  llvm::SmallVector<CUDAThreadCoord, 32> coords;
+  ThreadSP representative_thread;
+  /// SymbolContext that produced the group key for the representative thread,
+  /// kept around so the renderer can pull display fields (module name, frame
+  /// address) without re-resolving.
+  SymbolContext representative_sc;
+  /// Address used to resolve `representative_sc`. May be the per-warp errorPC.
+  lldb::addr_t representative_address = LLDB_INVALID_ADDRESS;
+  /// True when grouping is anchored on errorPC rather than the per-thread PC.
+  bool used_error_pc = false;
+  /// True when the user-selected thread belongs to this group; used to
+  /// prefix the rendered row with "*".
+  bool contains_selected = false;
+  DimSet bx, by, bz, tx, ty, tz;
+};
+
+/// Format a DimSet as either name=v, name=[min...max], or name=*.
+static void FormatDimSet(Stream &strm, const char *name, const DimSet &dim) {
+  if (dim.IsEmpty()) {
+    strm.Printf("%s=*", name);
+    return;
+  }
+  if (dim.IsSingle()) {
+    strm.Printf("%s=%d", name, dim.min_v);
+    return;
+  }
+  if (dim.IsContiguous()) {
+    strm.Printf("%s=[%d...%d]", name, dim.min_v, dim.max_v);
+    return;
+  }
+  strm.Printf("%s=*", name);
+}
+
+/// Format an aggregated blockIdx/threadIdx triple using DimSet wildcards.
+static void FormatDim3Set(Stream &strm, const char *prefix, const DimSet &x,
+                          const DimSet &y, const DimSet &z) {
+  strm.Printf("%s(", prefix);
+  FormatDimSet(strm, "x", x);
+  strm.PutChar(' ');
+  FormatDimSet(strm, "y", y);
+  strm.PutChar(' ');
+  FormatDimSet(strm, "z", z);
+  strm.PutChar(')');
+}
+
+/// Snapshot of the inputs we need to build groups, captured up front so we do
+/// not hold the thread-list lock while iterating frames and symbols.
+struct ThreadSnapshot {
+  ThreadSP thread_sp;
+  CUDAThreadCoord coord;
+  lldb::addr_t pc = LLDB_INVALID_ADDRESS;
+  /// Per-warp errorPC reported by the NVIDIA debugger backend, or
+  /// LLDB_INVALID_ADDRESS when no valid errorPC is available. The backend
+  /// reports 0 for warps that are not at a fault. When a warp hits an
+  /// exception, the per-lane PC may have advanced past the actual fault site
+  /// due to instruction slippage; errorPC pinpoints the real fault address and
+  /// lets us aggregate threads from different warps that hit the same fault.
+  lldb::addr_t error_pc = LLDB_INVALID_ADDRESS;
+  lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
+  uint64_t stop_value = 0;
+};
+
+/// Accumulate one snapshot's coordinates into a group: per-dim DimSets and
+/// the coords vector. The caller is responsible for setting `representative_*`
+/// fields on first insertion.
+static void AccumulateSnapshotIntoGroup(ThreadGroup &group,
+                                        const ThreadSnapshot &snap) {
+  group.coords.push_back(snap.coord);
+  group.bx.Insert(snap.coord.block_idx.x);
+  group.by.Insert(snap.coord.block_idx.y);
+  group.bz.Insert(snap.coord.block_idx.z);
+  group.tx.Insert(snap.coord.thread_idx.x);
+  group.ty.Insert(snap.coord.thread_idx.y);
+  group.tz.Insert(snap.coord.thread_idx.z);
+}
+
+/// Collect per-thread snapshots needed to build groups. Threads without CUDA
+/// coordinates, register contexts, or PCs are dropped here so neither group
+/// builder has to special-case them. List-time filters such as
+/// --exceptions are applied later in the group-building phase by routing
+/// non-matching threads to a synthetic FilteredOut group.
+static llvm::SmallVector<ThreadSnapshot, 64>
+CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
+  // Snapshot the list of threads under the list lock, then iterate them
+  // outside of it. Looking each thread up by ID inside the loop would be
+  // O(N) per call (linear scan + mutex op + UpdateThreadListIfNeeded check),
+  // turning the whole collection step quadratic for tens of thousands of
+  // GPU lanes.
+  llvm::SmallVector<ThreadSP, 64> threads;
   {
     std::lock_guard<std::recursive_mutex> guard(
         process.GetThreadList().GetMutex());
     ThreadList &thread_list = process.GetThreadList();
     uint32_t num_threads = thread_list.GetSize();
-    thread_ids.reserve(num_threads);
+    threads.reserve(num_threads);
     for (uint32_t i = 0; i < num_threads; ++i)
-      thread_ids.push_back(thread_list.GetThreadAtIndex(i)->GetID());
+      threads.push_back(thread_list.GetThreadAtIndex(i));
   }
 
-  // Get selected thread ID for marking.
-  lldb::tid_t selected_tid = LLDB_INVALID_THREAD_ID;
-  ThreadSP selected_thread = process.GetThreadList().GetSelectedThread();
-  if (selected_thread)
-    selected_tid = selected_thread->GetID();
+  // The errorPC RegisterInfo is identical across every NVGPU thread because
+  // they all share the SASS register layout. Look it up once on the first
+  // valid register context and reuse the pointer for every subsequent
+  // thread instead of a string scan per thread. nullopt = not yet looked up;
+  // a populated nullptr = looked up but the register isn't exposed.
+  std::optional<const RegisterInfo *> err_pc_info;
 
-  // Process each thread, grouping consecutive threads with the same PC.
-  for (lldb::tid_t tid : thread_ids) {
-    ThreadSP thread_sp = process.GetThreadList().FindThreadByID(tid);
+  llvm::SmallVector<ThreadSnapshot, 64> snapshots;
+  snapshots.reserve(threads.size());
+
+  for (const ThreadSP &thread_sp : threads) {
     if (!thread_sp)
       continue;
 
-    // Filter by stop reason if requested.
-    if (only_threads_with_stop_reason) {
-      StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
-      if (!stop_info_sp || !stop_info_sp->ShouldShow())
-        continue;
-    }
+    StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
+    if (only_threads_with_stop_reason &&
+        (!stop_info_sp || !stop_info_sp->ShouldShow()))
+      continue;
 
-    // Get the thread name and parse CUDA coordinates.
     const char *name = thread_sp->GetName();
     if (!name)
       continue;
@@ -744,10 +880,8 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
     CUDAThreadCoord coord;
     if (!ParseCUDAThreadName(name, coord))
       continue;
+    coord.tid = thread_sp->GetID();
 
-    coord.tid = tid;
-
-    // Get the PC from the register context.
     RegisterContextSP reg_ctx_sp = thread_sp->GetRegisterContext();
     if (!reg_ctx_sp)
       continue;
@@ -756,118 +890,295 @@ size_t PlatformNVGPU::GetGPUThreadStatus(Process &process, Stream &strm,
     if (pc == LLDB_INVALID_ADDRESS)
       continue;
 
-    lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
-    uint64_t stop_value = 0;
-    StopInfoSP stop_info_sp = thread_sp->GetStopInfo();
-    if (stop_info_sp) {
-      stop_reason = stop_info_sp->GetStopReason();
-      stop_value = stop_info_sp->GetValue();
-    }
+    if (!err_pc_info)
+      err_pc_info = reg_ctx_sp->GetRegisterInfoByName("errorPC");
 
-    // Group consecutive threads that share the same PC and stop reason.
-    if (!groups.empty() && groups.back().pc == pc &&
-        groups.back().stop_reason == stop_reason &&
-        groups.back().stop_value == stop_value) {
-      groups.back().coords.push_back(coord);
-    } else {
-      ConsecutiveThreadGroup new_group;
-      new_group.pc = pc;
-      new_group.stop_reason = stop_reason;
-      new_group.stop_value = stop_value;
-      new_group.coords.push_back(coord);
-      new_group.representative_thread = thread_sp;
-      groups.push_back(std::move(new_group));
+    ThreadSnapshot snap;
+    snap.thread_sp = thread_sp;
+    snap.coord = coord;
+    snap.pc = pc;
+    if (*err_pc_info) {
+      RegisterValue val;
+      if (reg_ctx_sp->ReadRegister(*err_pc_info, val)) {
+        lldb::addr_t err_pc =
+            val.GetAsUInt64(/*fail_value=*/LLDB_INVALID_ADDRESS);
+        // The backend reports errorPC == 0 for warps that are not at a fault.
+        // Treat that as "no errorPC" so those threads fall back to their
+        // per-thread PC instead of all collapsing onto address 0x0.
+        if (err_pc != 0)
+          snap.error_pc = err_pc;
+      }
     }
+    if (stop_info_sp) {
+      snap.stop_reason = stop_info_sp->GetStopReason();
+      snap.stop_value = stop_info_sp->GetValue();
+    }
+    snapshots.push_back(std::move(snap));
+  }
+  return snapshots;
+}
+
+/// Resolution result for a thread's location: the SymbolContext we used and
+/// the address it was resolved from (errorPC when available, otherwise the
+/// thread's own PC).
+struct ResolvedLocation {
+  SymbolContext sc;
+  lldb::addr_t address = LLDB_INVALID_ADDRESS;
+  /// True when `address` is the per-warp errorPC instead of the per-thread PC.
+  bool used_error_pc = false;
+};
+
+/// Per-call cache mapping a load address to its resolved SymbolContext. Used
+/// to dedupe DWARF lookups across the (potentially tens of thousands of)
+/// threads that share a small set of distinct PCs / errorPCs.
+using LocationCache = llvm::DenseMap<lldb::addr_t, SymbolContext>;
+
+/// Resolve `pc` to a SymbolContext, consulting `cache` first. Empty
+/// SymbolContext on failure (matches existing behaviour).
+static SymbolContext ResolveSymbolContextCached(lldb::addr_t pc, Target &target,
+                                                LocationCache &cache) {
+  auto it = cache.find(pc);
+  if (it != cache.end())
+    return it->second;
+  SymbolContext sc;
+  Address addr;
+  if (addr.SetLoadAddress(pc, &target))
+    addr.CalculateSymbolContext(&sc, eSymbolContextEverything);
+  cache[pc] = sc;
+  return sc;
+}
+
+/// Resolve a thread's location, preferring the per-warp errorPC when
+/// available so that warps suffering from exception-induced PC slippage all
+/// resolve to the same fault site. SymbolContext lookups are deduped across
+/// threads via `cache`.
+static ResolvedLocation ResolveLocation(const ThreadSnapshot &snap,
+                                        Target &target, LocationCache &cache) {
+  ResolvedLocation out;
+  if (snap.error_pc != LLDB_INVALID_ADDRESS) {
+    out.sc = ResolveSymbolContextCached(snap.error_pc, target, cache);
+    out.address = snap.error_pc;
+    out.used_error_pc = true;
+    return out;
+  }
+  out.sc = ResolveSymbolContextCached(snap.pc, target, cache);
+  out.address = snap.pc;
+  return out;
+}
+
+/// Test whether a snapshot's stop reason matches a `--stop-reason` filter.
+/// An unset filter matches everything; otherwise the snapshot's stop reason
+/// must equal the filter exactly. This mirrors the per-thread filtering done
+/// by `thread list -v` so both rendering paths agree.
+static bool MatchesStopReasonFilter(const ThreadSnapshot &snap,
+                                    std::optional<lldb::StopReason> filter) {
+  if (!filter)
+    return true;
+  return snap.stop_reason == *filter;
+}
+
+/// Pick the most specific tier (line+function > function-only > pc-only) that
+/// the resolved location supports and produce the corresponding GroupKey.
+/// When `stop_reason_filter` is set and the snapshot does not match it,
+/// returns a synthetic FilteredOut key so all such threads aggregate into a
+/// single summary group.
+static GroupKey
+BuildGroupKey(const ThreadSnapshot &snap, const ResolvedLocation &loc,
+              std::optional<lldb::StopReason> stop_reason_filter) {
+  GroupKey key;
+  if (!MatchesStopReasonFilter(snap, stop_reason_filter)) {
+    key.kind = GroupKind::FilteredOut;
+    return key;
   }
 
-  if (groups.empty())
+  key.stop_reason = snap.stop_reason;
+  key.stop_value = snap.stop_value;
+
+  ConstString fn = loc.sc.GetFunctionName(Mangled::ePreferDemangled);
+  llvm::StringRef fn_ref = fn.GetStringRef();
+
+  if (loc.sc.line_entry.IsValid() &&
+      loc.sc.line_entry.line != LLDB_INVALID_LINE_NUMBER && !fn_ref.empty()) {
+    key.kind = GroupKind::LineAndFunction;
+    key.file = loc.sc.line_entry.GetFile().GetPath(/*denormalize=*/false);
+    key.line = loc.sc.line_entry.line;
+    key.function = fn_ref.str();
+    return key;
+  }
+
+  if (!fn_ref.empty()) {
+    key.kind = GroupKind::FunctionOnly;
+    key.function = fn_ref.str();
+    return key;
+  }
+
+  key.kind = GroupKind::PCOnly;
+  key.pc = loc.address;
+  return key;
+}
+
+/// Render one aggregated group: count, coordinates with wildcards, stop
+/// reason on the first line, then a single indented location line whose
+/// contents depend on the group's tier.
+static void RenderAggregatedGroup(Stream &strm, const ThreadGroup &group) {
+  strm.Indent();
+  strm.Printf("%c %zu thread(s)", group.contains_selected ? '*' : ' ',
+              group.coords.size());
+
+  // For PC-only groups (no function name was resolvable), keep an
+  // "at pc=0x..." prefix so users can still navigate to the address. When the
+  // group was anchored on the per-warp errorPC (NVIDIA exception), label it
+  // as such so it is not confused with the per-thread PC.
+  if (group.key.kind == GroupKind::PCOnly) {
+    strm.Printf(" at %s=0x%llx", group.used_error_pc ? "errorPC" : "pc",
+                static_cast<unsigned long long>(group.key.pc));
+  }
+  strm.PutCString(": ");
+
+  FormatDim3Set(strm, "blockIdx", group.bx, group.by, group.bz);
+  strm.PutChar(' ');
+  FormatDim3Set(strm, "threadIdx", group.tx, group.ty, group.tz);
+
+  if (group.key.kind == GroupKind::FilteredOut) {
+    strm.PutCString(", hidden by --stop-reason filter");
+    strm.EOL();
+    return;
+  }
+
+  if (group.key.stop_reason != lldb::eStopReasonInvalid) {
+    if (StopInfoSP stop_info = group.representative_thread->GetStopInfo())
+      strm.Printf(", stop reason = %s", stop_info->GetDescription());
+  }
+  strm.EOL();
+
+  strm.IndentMore();
+  strm.IndentMore();
+  strm.Indent();
+
+  const SymbolContext &sc = group.representative_sc;
+  ConstString module_name;
+  if (sc.module_sp)
+    module_name = sc.module_sp->GetFileSpec().GetFilename();
+
+  switch (group.key.kind) {
+  case GroupKind::LineAndFunction: {
+    if (module_name)
+      strm.Printf("%s`", module_name.GetCString());
+    // Display just the basename so the source location reads like the rest
+    // of LLDB output (`module`function at file.cu:line`). The full path is
+    // retained in the GroupKey for equality so that two files with the same
+    // basename but different paths still hash to distinct groups.
+    llvm::StringRef basename = llvm::sys::path::filename(group.key.file);
+    strm.Printf("%s at %s:%u", group.key.function.c_str(),
+                basename.str().c_str(), group.key.line);
+    break;
+  }
+  case GroupKind::FunctionOnly:
+    if (module_name)
+      strm.Printf("%s`", module_name.GetCString());
+    strm.PutCString(group.key.function);
+    break;
+  case GroupKind::FilteredOut:
+  case GroupKind::Empty:
+  case GroupKind::Tombstone:
+    llvm_unreachable("sentinel kinds handled above or never rendered");
+  case GroupKind::PCOnly: {
+    // sc.target_sp is not populated by Address::CalculateSymbolContext, so
+    // pull the target from the representative thread directly.
+    Target &target = group.representative_thread->GetProcess()->GetTarget();
+    Address resolved_addr;
+    resolved_addr.SetLoadAddress(group.representative_address, &target);
+    strm.Printf("0x%0*" PRIx64 " ",
+                target.GetArchitecture().GetAddressByteSize() * 2,
+                static_cast<uint64_t>(group.representative_address));
+    StackFrameSP frame_sp =
+        group.representative_thread->GetStackFrameAtIndex(0);
+    ExecutionContext exe_ctx(frame_sp);
+    sc.DumpStopContext(&strm, exe_ctx.GetBestExecutionContextScope(),
+                       resolved_addr,
+                       /*show_fullpaths=*/false,
+                       /*show_module=*/true, /*show_inlined_frames=*/true,
+                       /*show_function_arguments=*/false,
+                       /*show_function_name=*/true);
+    break;
+  }
+  }
+  strm.EOL();
+  strm.IndentLess();
+  strm.IndentLess();
+}
+
+/// Build aggregated groups using the most specific available identity per
+/// thread, then render them in first-seen order. The FilteredOut summary
+/// group (when present) is moved to the end of the list so the summary line
+/// always trails the real entries.
+static size_t
+RenderAggregated(Process &process, Stream &strm,
+                 bool only_threads_with_stop_reason,
+                 std::optional<lldb::StopReason> stop_reason_filter) {
+  llvm::SmallVector<ThreadSnapshot, 64> snapshots =
+      CollectThreadSnapshots(process, only_threads_with_stop_reason);
+  if (snapshots.empty())
     return 0;
 
-  // Print the process status first.
-  process.GetStatus(strm);
+  lldb::tid_t selected_tid = LLDB_INVALID_THREAD_ID;
+  if (ThreadSP selected_thread = process.GetThreadList().GetSelectedThread())
+    selected_tid = selected_thread->GetID();
 
-  // Print each group of consecutive threads.
-  size_t groups_printed = 0;
-  for (const auto &group : groups) {
-    // Compute the range covered by all threads in this group.
-    CUDAThreadRange range;
-    for (const auto &coord : group.coords)
-      range.AddCoord(coord);
+  // Map each GroupKey to an index into `groups`. Insertion order in `groups`
+  // gives us deterministic output; the map is only used for O(1) lookup of
+  // an existing group when a snapshot's key matches.
+  llvm::DenseMap<GroupKey, size_t> key_to_index;
+  llvm::SmallVector<ThreadGroup, 8> groups;
 
-    // Check if this group contains the selected thread.
-    bool is_selected = false;
-    if (selected_tid != LLDB_INVALID_THREAD_ID) {
-      for (const auto &coord : group.coords) {
-        if (coord.tid == selected_tid) {
-          is_selected = true;
-          break;
-        }
-      }
+  Target &target = process.GetTarget();
+  LocationCache location_cache;
+  for (const ThreadSnapshot &snap : snapshots) {
+    ResolvedLocation loc = ResolveLocation(snap, target, location_cache);
+    GroupKey key = BuildGroupKey(snap, loc, stop_reason_filter);
+    auto [it, inserted] =
+        key_to_index.try_emplace(std::move(key), groups.size());
+    if (inserted) {
+      ThreadGroup g;
+      g.key = it->first;
+      g.representative_thread = snap.thread_sp;
+      g.representative_sc = loc.sc;
+      g.representative_address = loc.address;
+      g.used_error_pc = loc.used_error_pc;
+      groups.push_back(std::move(g));
     }
-
-    // Add spacing between thread entries for better readability.
-    if (groups_printed > 0)
-      strm.EOL();
-
-    strm.Indent();
-    strm.Printf("%c ", is_selected ? '*' : ' ');
-
-    // Print coalesced thread info.
-    strm.Printf("%zu thread(s) at pc=0x%llx: ", range.count,
-                static_cast<unsigned long long>(group.pc));
-    FormatDim3Range(strm, "blockIdx", range.block_min, range.block_max);
-    strm.PutChar(' ');
-    FormatDim3Range(strm, "threadIdx", range.thread_min, range.thread_max);
-    if (group.stop_reason != lldb::eStopReasonInvalid) {
-      StopInfoSP stop_info =
-          group.representative_thread->GetStopInfo();
-      if (stop_info)
-        strm.Printf(", stop reason = %s", stop_info->GetDescription());
-    }
-    strm.EOL();
-
-    // Print the frame info from the representative thread.
-    // We show only the function name without arguments or source context
-    // since all coalesced threads share the same location.
-    ThreadSP thread_sp = group.representative_thread;
-    if (thread_sp) {
-      StackFrameSP frame_sp = thread_sp->GetStackFrameAtIndex(0);
-      if (frame_sp) {
-        strm.IndentMore();
-        strm.IndentMore();
-        strm.Indent();
-
-        ExecutionContext exe_ctx(frame_sp);
-        Target *target = exe_ctx.GetTargetPtr();
-        Address frame_addr = frame_sp->GetFrameCodeAddress();
-
-        // Print frame address.
-        strm.Printf("0x%0*" PRIx64 " ",
-                    target ? (target->GetArchitecture().GetAddressByteSize() * 2)
-                           : 16,
-                    frame_addr.GetLoadAddress(target));
-
-        // Get symbol context and dump without function arguments or source.
-        SymbolContext sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
-        const bool show_fullpaths = false;
-        const bool show_module = true;
-        const bool show_inlined_frames = true;
-        const bool show_function_arguments = false;
-        const bool show_function_name = true;
-        sc.DumpStopContext(&strm, exe_ctx.GetBestExecutionContextScope(),
-                           frame_addr, show_fullpaths, show_module,
-                           show_inlined_frames, show_function_arguments,
-                           show_function_name);
-        strm.EOL();
-        strm.IndentLess();
-        strm.IndentLess();
-      }
-    }
-
-    ++groups_printed;
+    ThreadGroup &group = groups[it->second];
+    AccumulateSnapshotIntoGroup(group, snap);
+    if (selected_tid != LLDB_INVALID_THREAD_ID &&
+        snap.coord.tid == selected_tid)
+      group.contains_selected = true;
   }
 
-  return groups_printed;
+  // Move the FilteredOut summary group, if any, to the end of the list so the
+  // summary line always trails the real entries. Relative order of the real
+  // groups is preserved.
+  ThreadGroup *filtered_it =
+      std::find_if(groups.begin(), groups.end(), [](const ThreadGroup &g) {
+        return g.key.kind == GroupKind::FilteredOut;
+      });
+  if (filtered_it != groups.end())
+    std::rotate(filtered_it, filtered_it + 1, groups.end());
+
+  process.GetStatus(strm);
+
+  for (size_t i = 0; i < groups.size(); ++i) {
+    if (i > 0)
+      strm.EOL();
+    RenderAggregatedGroup(strm, groups[i]);
+  }
+  return groups.size();
+}
+
+size_t PlatformNVGPU::GetGPUThreadStatus(
+    Process &process, Stream &strm, bool only_threads_with_stop_reason,
+    std::optional<lldb::StopReason> stop_reason_filter) {
+  return RenderAggregated(process, strm, only_threads_with_stop_reason,
+                          stop_reason_filter);
 }
 
 bool PlatformNVGPU::ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
