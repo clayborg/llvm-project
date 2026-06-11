@@ -1053,11 +1053,17 @@ public:
   /// \param[in] only_threads_with_stop_reason
   ///     If true, only threads with a valid stop reason will be displayed.
   ///
+  /// \param[in] stop_reason_filter
+  ///     If set, only show threads whose stop reason equals this value;
+  ///     threads that do not match are folded into a single summary row. If
+  ///     std::nullopt, all threads are shown.
+  ///
   /// \returns
   ///     The number of threads whose status was printed, or 0 if this
   ///     platform does not provide custom GPU thread status handling.
-  virtual size_t GetGPUThreadStatus(Process &process, Stream &strm,
-                                    bool only_threads_with_stop_reason) {
+  virtual size_t GetGPUThreadStatus(
+      Process &process, Stream &strm, bool only_threads_with_stop_reason,
+      std::optional<lldb::StopReason> stop_reason_filter = std::nullopt) {
     return 0;
   }
 
