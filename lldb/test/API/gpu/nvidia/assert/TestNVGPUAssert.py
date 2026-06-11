@@ -19,12 +19,12 @@ class TestNVGPUAssert(NVGPUTestCaseBase):
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
-        self.assertIn("CUDA Exception(12): Warp - Assert", str(self.gpu_process.thread[0]))
+        self.assertIn("CUDA Exception(12): Warp Assert", str(self.gpu_process.thread[0]))
 
         frame = self.gpu_process.thread[0].frame[0]
 
         # We don't expect to see an errorpc set
-        self.assertNotIn("CUDA Exception(12): Warp - Assert at 0x", str(self.gpu_process.thread[0]))
+        self.assertNotIn("CUDA Exception(12): Warp Assert at 0x", str(self.gpu_process.thread[0]))
         errorpc = frame.FindRegister("errorpc").GetValueAsAddress()
         self.assertEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
 
