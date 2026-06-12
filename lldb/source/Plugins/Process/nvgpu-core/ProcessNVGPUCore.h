@@ -13,7 +13,8 @@
 /// contain GPU execution state. It walks the synthetic GPU hierarchy that
 /// `ObjectFileELF::CreateSections` builds for NVGPU corefiles
 /// (`nvgpucore` root -> `dev0` -> `sm0` -> `cta0` -> `warp0` -> `lane0` ->
-/// per-lane leaves) and creates one `ThreadNVGPUCore` per active GPU lane.
+/// per-lane leaves, plus a sibling `dev0` -> `grid0` branch) and creates one
+/// `ThreadNVGPUCore` per active GPU lane.
 ///
 //===----------------------------------------------------------------------===//
 
