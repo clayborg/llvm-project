@@ -811,16 +811,19 @@ enum SectionType {
   eSectionTypeNVGPUConstBankTable,
   eSectionTypeNVGPUMetadata,
   eSectionTypeNVGPUConvergenceBarrier,
-  // [NVIDIA] Synthetic per-row container section types for the NVGPU corefile
+  // [NVIDIA] Synthetic per-row section types for the NVGPU corefile
   // hierarchy built by ObjectFileELF when e_machine == EM_CUDA &&
-  // GetType() == eTypeCoreFile. Each container's data window is its row in
-  // the parent table section.
+  // GetType() == eTypeCoreFile. Each section's data window is its row in the
+  // parent table section. Root through Lane are containers (they parent
+  // further rows/leaves); ConstBank is a terminal leaf (one constant bank).
   eSectionTypeNVGPURoot,
   eSectionTypeNVGPUDevice,
   eSectionTypeNVGPUSm,
+  eSectionTypeNVGPUGrid,
   eSectionTypeNVGPUCta,
   eSectionTypeNVGPUWarp,
   eSectionTypeNVGPULane,
+  eSectionTypeNVGPUConstBank,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){

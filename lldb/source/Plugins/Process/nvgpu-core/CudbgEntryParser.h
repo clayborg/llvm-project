@@ -77,6 +77,13 @@ struct SMEntry : CudbgSmTableEntry {
                                         uint64_t entry_size);
 };
 
+/// One row of a nvgpu-grid-table.
+struct GridEntry : CudbgGridTableEntry {
+  static llvm::Expected<GridEntry> Decode(const DataExtractor &data,
+                                          lldb::offset_t *offset_ptr,
+                                          uint64_t entry_size);
+};
+
 /// One row of a nvgpu-cta-table.
 struct CTAEntry : CudbgCTATableEntry {
   static llvm::Expected<CTAEntry> Decode(const DataExtractor &data,
@@ -111,6 +118,19 @@ struct LaneEntry : CudbgThreadTableEntry {
   static llvm::Expected<LaneEntry> Decode(const DataExtractor &data,
                                           lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
+};
+
+/// One row of a nvgpu-constbank-table: a single constant bank's global
+/// address, size, and bank id.
+struct ConstBankEntry : CudbgConstBankTableEntry {
+  static llvm::Expected<ConstBankEntry> Decode(const DataExtractor &data,
+                                               lldb::offset_t *offset_ptr,
+                                               uint64_t entry_size);
+
+  /// True if `addr` falls within this bank's [addr, addr + size) range.
+  bool Contains(lldb::addr_t query_addr) const {
+    return query_addr >= addr && query_addr - addr < size;
+  }
 };
 
 /// Decode the producer version from the raw bytes of the coredump metadata

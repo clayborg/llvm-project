@@ -1239,9 +1239,11 @@ AddressClass ObjectFileMachO::GetAddressClass(lldb::addr_t file_addr) {
         case eSectionTypeNVGPURoot:
         case eSectionTypeNVGPUDevice:
         case eSectionTypeNVGPUSm:
+        case eSectionTypeNVGPUGrid:
         case eSectionTypeNVGPUCta:
         case eSectionTypeNVGPUWarp:
         case eSectionTypeNVGPULane:
+        case eSectionTypeNVGPUConstBank:
         case eSectionTypeOther:
           return AddressClass::eUnknown;
         }
