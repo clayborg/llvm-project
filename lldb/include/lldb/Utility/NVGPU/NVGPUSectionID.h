@@ -44,10 +44,11 @@ enum class SectionKind : uint8_t {
   Root = 0xC0,   ///< nvgpu-root container
   Device = 0xC1, ///< per-device nvgpu-device container
   Sm = 0xC2,     ///< per-SM nvgpu-sm container
-  Cta = 0xC3,    ///< per-CTA nvgpu-cta container
-  Warp = 0xC4,   ///< per-warp nvgpu-warp container
-  Lane = 0xC5,   ///< per-lane nvgpu-lane container
-  Leaf = 0xC6,   ///< all other leaves (uregs/upreds/cbarrier per warp,
+  Grid = 0xC3,   ///< per-grid nvgpu-grid container
+  Cta = 0xC4,    ///< per-CTA nvgpu-cta container
+  Warp = 0xC5,   ///< per-warp nvgpu-warp container
+  Lane = 0xC6,   ///< per-lane nvgpu-lane container
+  Leaf = 0xC7,   ///< all other leaves (uregs/upreds/cbarrier per warp,
                  ///< shared per CTA, regs/preds/local per lane,
                  ///< global/managed memory, cubin images)
 };
