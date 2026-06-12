@@ -372,6 +372,64 @@ static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
   return data.CopyData(offset, bytes_to_read, buf);
 }
 
+/// Locate the grid container that `gpu_thread` is part of by matching the
+/// thread's CTA `gridId64` against the device's grid children (the grid
+/// subtree is a sibling of the SM subtree under each device). Returns null
+/// if the grid can't be resolved -- callers treat that as "unverifiable"
+/// rather than an error.
+static SectionSP FindGridSection(ThreadNVGPUCore &gpu_thread,
+                                 ObjectFile *core) {
+  Log *log = GetLog(LLDBLog::Process);
+  SectionSP cta_sp = gpu_thread.GetCTASection();
+  SectionSP dev_sp = gpu_thread.GetDeviceSection();
+  if (!cta_sp || !dev_sp)
+    return nullptr;
+
+  llvm::Expected<nvgpu_core::CTAEntry> cta_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(cta_sp, core);
+  if (!cta_or) {
+    LLDB_LOG_ERROR(log, cta_or.takeError(),
+                   "grid lookup: failed to decode CTA row: {0}");
+    return nullptr;
+  }
+
+  for (const SectionSP &grid_sp :
+       nvgpu_core::FindChildrenByType(*dev_sp, eSectionTypeNVGPUGrid)) {
+    llvm::Expected<nvgpu_core::GridEntry> grid_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::GridEntry>(grid_sp, core);
+    if (!grid_or) {
+      LLDB_LOG_ERROR(log, grid_or.takeError(),
+                     "grid lookup: failed to decode grid row: {0}");
+      continue;
+    }
+    if (grid_or->gridId64 == cta_or->gridId64)
+      return grid_sp;
+  }
+  return nullptr;
+}
+
+/// Test whether `addr` falls within one of the grid's constant banks. Each
+/// constbank table row is its own `eSectionTypeNVGPUConstBank` leaf (fanned
+/// out by `ObjectFileELF::BuildNVGPUSectionList`), so the row stride is the
+/// producer's sh_entsize rather than a hardcoded size.
+static bool AddressInGridConstBanks(const Section &grid, ObjectFile *core,
+                                    addr_t addr) {
+  Log *log = GetLog(LLDBLog::Process);
+  for (const SectionSP &cb :
+       nvgpu_core::FindChildrenByType(grid, eSectionTypeNVGPUConstBank)) {
+    llvm::Expected<nvgpu_core::ConstBankEntry> entry_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::ConstBankEntry>(cb, core);
+    if (!entry_or) {
+      LLDB_LOG_ERROR(log, entry_or.takeError(),
+                     "constbank scan: failed to decode row: {0}");
+      continue;
+    }
+    if (entry_or->Contains(addr))
+      return true;
+  }
+  return false;
+}
+
 size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
                                       const AddressSpaceInfo &info, void *buf,
                                       size_t size, Status &error) {
@@ -399,13 +457,24 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
 
   if (!thread_sp)
     thread_sp = GetThreadList().GetSelectedThread();
-
   if (!thread_sp) {
     error = Status::FromErrorString("no thread for address space read");
     return 0;
   }
 
   auto *gpu_thread = static_cast<ThreadNVGPUCore *>(thread_sp.get());
+
+  if (info.value == nvgpu::ConstStorage) {
+    if (SectionSP grid_sp = FindGridSection(*gpu_thread, core)) {
+      if (!AddressInGridConstBanks(*grid_sp, core, addr)) {
+        error = Status::FromErrorStringWithFormat(
+            "address 0x%" PRIx64 " is not within any constant bank", addr);
+        return 0;
+      }
+    }
+    return DoReadMemory(addr, buf, size, error);
+  }
+
   SectionSP lane_sp = gpu_thread->GetLaneSection();
   SectionSP cta_sp = gpu_thread->GetCTASection();
 

@@ -67,6 +67,45 @@ llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
   return out;
 }
 
+llvm::Expected<GridEntry> GridEntry::Decode(const DataExtractor &data,
+                                            offset_t *offset_ptr,
+                                            uint64_t entry_size) {
+  if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
+    return llvm::createStringError("truncated grid table entry");
+  GridEntry out{};
+  out.gridId64 = data.GetAddress(offset_ptr);
+  out.contextId = data.GetAddress(offset_ptr);
+  out.function = data.GetAddress(offset_ptr);
+  out.functionEntry = data.GetAddress(offset_ptr);
+  out.moduleHandle = data.GetAddress(offset_ptr);
+  // Deprecated since CUDA 13.4 (formerly parentGridId64); kept for ABI.
+  out.reserved0 = data.GetAddress(offset_ptr);
+  out.paramsOffset = data.GetAddress(offset_ptr);
+  out.kernelType = data.GetU32(offset_ptr);
+  out.origin = data.GetU32(offset_ptr);
+  out.gridStatus = data.GetU32(offset_ptr);
+  out.numRegs = data.GetU32(offset_ptr);
+  out.gridDimX = data.GetU32(offset_ptr);
+  out.gridDimY = data.GetU32(offset_ptr);
+  out.gridDimZ = data.GetU32(offset_ptr);
+  out.blockDimX = data.GetU32(offset_ptr);
+  out.blockDimY = data.GetU32(offset_ptr);
+  out.blockDimZ = data.GetU32(offset_ptr);
+  out.attrLaunchBlocking = data.GetU32(offset_ptr);
+  out.attrHostTid = data.GetU32(offset_ptr);
+  // Since CUDA driver r525.
+  out.clusterDimX = data.GetU32(offset_ptr);
+  out.clusterDimY = data.GetU32(offset_ptr);
+  out.clusterDimZ = data.GetU32(offset_ptr);
+  out.padding0 = data.GetU32(offset_ptr);
+  // Since CUDA driver r565.
+  out.preferredClusterDimX = data.GetU32(offset_ptr);
+  out.preferredClusterDimY = data.GetU32(offset_ptr);
+  out.preferredClusterDimZ = data.GetU32(offset_ptr);
+  out.padding1 = data.GetU32(offset_ptr);
+  return out;
+}
+
 llvm::Expected<CTAEntry> CTAEntry::Decode(const DataExtractor &data,
                                           offset_t *offset_ptr,
                                           uint64_t entry_size) {
@@ -149,6 +188,18 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   out.rpcLo = data.GetU32(offset_ptr);
   out.rpcHi = data.GetU32(offset_ptr);
 #endif
+  return out;
+}
+
+llvm::Expected<ConstBankEntry> ConstBankEntry::Decode(const DataExtractor &data,
+                                                      offset_t *offset_ptr,
+                                                      uint64_t entry_size) {
+  if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
+    return llvm::createStringError("truncated constbank table entry");
+  ConstBankEntry out{};
+  out.addr = data.GetAddress(offset_ptr);
+  out.size = data.GetU32(offset_ptr);
+  out.bankId = data.GetU32(offset_ptr);
   return out;
 }
 

@@ -1724,6 +1724,9 @@ bool ObjectFileELF::IsNVGPUCoreFile() const {
 //
 //   nvgpucore
 //     devN
+//       gridN
+//         param (per-grid parameter memory)
+//         constbank (per-grid constbank table)
 //       smN
 //         ctaN
 //           shared (per-cta memory)
@@ -1797,6 +1800,7 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
   uint32_t leaf_seq = 0;
   uint32_t dev_seq = 0;
   uint32_t sm_seq = 0;
+  uint32_t grid_seq = 0;
   uint32_t cta_seq = 0;
   uint32_t warp_seq = 0;
   uint32_t lane_seq = 0;
@@ -1891,6 +1895,14 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       seq = &sm_seq;
       parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
       break;
+    case eSectionTypeNVGPUGridTable:
+      kind = nvgpu::SectionKind::Grid;
+      child_type = eSectionTypeNVGPUGrid;
+      expected_parent_type = eSectionTypeNVGPUDevice;
+      name = "grid" + std::to_string(row_idx);
+      seq = &grid_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
     case eSectionTypeNVGPUCtaTable:
       kind = nvgpu::SectionKind::Cta;
       child_type = eSectionTypeNVGPUCta;
@@ -1913,6 +1925,14 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       expected_parent_type = eSectionTypeNVGPUWarp;
       name = "lane" + std::to_string(row_idx);
       seq = &lane_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
+    case eSectionTypeNVGPUConstBankTable:
+      kind = nvgpu::SectionKind::Leaf;
+      child_type = eSectionTypeNVGPUConstBank;
+      expected_parent_type = eSectionTypeNVGPUGrid;
+      name = "constbank" + std::to_string(row_idx);
+      seq = &leaf_seq;
       parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
       break;
     default:
@@ -2004,17 +2024,18 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
 
   // Single forward pass over the ELF section headers.
   //
-  //   * SM / CTA / warp tables: fan out every row into a container under
-  //     the parent that `sh_link`/`sh_info` resolves to (parent and any
-  //     missing ancestors created on-demand by `GetOrCreateAncestor`).
+  //   * SM / grid / CTA / warp tables: fan out every row into a container
+  //     under the parent that `sh_link`/`sh_info` resolves to (parent and any
+  //     missing ancestors created on-demand by `GetOrCreateAncestor`). Grids
+  //     are a sibling branch of the SM subtree under each device.
   //
   //   * Lane table: skipped here. Lanes are materialized below by per-lane
   //     leaves (regs/preds/local) so invalid lanes -- which the producer
   //     intentionally omits per-lane sections for -- never appear.
   //
-  //   * Per-lane / per-warp / per-CTA leaves: attach to their parent on-
-  //     demand. The lane case is the only one that may *create* its parent
-  //     container; warp/CTA parents are guaranteed to already exist from
+  //   * Per-lane / per-warp / per-CTA / per-grid leaves: attach to their
+  //     parent on-demand. The lane case is the only one that may *create* its
+  //     container; warp/CTA/grid parents are guaranteed to already exist from
   //     the table fan-outs above (or get cascaded into existence anyway
   //     if section order is unusual).
   //
@@ -2022,17 +2043,19 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
   //     images): attach directly to the nvgpu-root.
   //
   //   * Device-table, lane-table, and unrelated metadata sections
-  //     (context table, grid table, module table, ...) are not surfaced;
-  //     the device table is consulted lazily by `GetOrCreateAncestor` when
-  //     SM-table fan-out walks up the parent chain.
+  //     (context table, module table, ...) are not surfaced; the device
+  //     table is consulted lazily by `GetOrCreateAncestor` when SM-table and
+  //     grid-table fan-out walk up the parent chain.
   for (size_t i = 1; i < m_section_headers.size(); ++i) {
     if (malformed)
       return;
     const ELFSectionHeaderInfo &h = m_section_headers[i];
     switch (GetSectionType(h)) {
     case eSectionTypeNVGPUSmTable:
+    case eSectionTypeNVGPUGridTable:
     case eSectionTypeNVGPUCtaTable:
-    case eSectionTypeNVGPUWarpTable: {
+    case eSectionTypeNVGPUWarpTable:
+    case eSectionTypeNVGPUConstBankTable: {
       if (h.sh_entsize == 0) {
         LLDB_LOG(log,
                  "BuildNVGPUSectionList: container table {0} has zero "
@@ -2073,6 +2096,9 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
     case eSectionTypeNVGPUSharedMemory:
       AttachLeaf(i, "shared", eSectionTypeNVGPUSharedMemory,
                  /*is_memory=*/true);
+      break;
+    case eSectionTypeNVGPUParamMemory:
+      AttachLeaf(i, "param", eSectionTypeNVGPUParamMemory, /*is_memory=*/false);
       break;
     case eSectionTypeNVGPUGlobalMemory:
     case eSectionTypeNVGPUManagedMemory: {
@@ -2118,10 +2144,10 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       metadata_section_idx = i;
       break;
     default:
-      // Device table, lane table, and unrelated context / grid / module /
-      // param-memory sections fall through. The device and lane tables are
-      // consulted lazily via `GetOrCreateAncestor` for row data windows;
-      // everything else is intentionally not surfaced in the synthetic tree.
+      // Device table, lane table, and unrelated context / module sections
+      // fall through. The device and lane tables are consulted lazily via
+      // `GetOrCreateAncestor` for row data windows; everything else is
+      // intentionally not surfaced in the synthetic tree.
       break;
     }
   }
@@ -2185,8 +2211,8 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
 
   LLDB_LOG(log,
            "BuildNVGPUSectionList: built tree with {0} devices, {1} SMs, "
-           "{2} CTAs, {3} warps, {4} lanes",
-           dev_seq, sm_seq, cta_seq, warp_seq, lane_seq);
+           "{2} grids, {3} CTAs, {4} warps, {5} lanes",
+           dev_seq, sm_seq, grid_seq, cta_seq, warp_seq, lane_seq);
 }
 
 static SectionType GetSectionTypeFromName(llvm::StringRef Name) {

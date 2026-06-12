@@ -9,6 +9,8 @@ Tree shape produced by the corefile plugin:
     nvgpucore
       global, managed, cubin, ucubin   (root-level leaves)
       devN
+        gridN
+          param, constbank             (per-grid leaves)
         smN
           ctaN
             shared                     (per-CTA leaf)
@@ -51,9 +53,11 @@ def _build_type_names():
         ("eSectionTypeNVGPURoot", "nvgpu-root"),
         ("eSectionTypeNVGPUDevice", "nvgpu-device"),
         ("eSectionTypeNVGPUSm", "nvgpu-sm"),
+        ("eSectionTypeNVGPUGrid", "nvgpu-grid"),
         ("eSectionTypeNVGPUCta", "nvgpu-cta"),
         ("eSectionTypeNVGPUWarp", "nvgpu-warp"),
         ("eSectionTypeNVGPULane", "nvgpu-lane"),
+        ("eSectionTypeNVGPUConstBank", "nvgpu-constbank"),
         ("eSectionTypeNVGPUGlobalMemory", "nvgpu-global-memory"),
         ("eSectionTypeNVGPUManagedMemory", "nvgpu-managed-memory"),
         ("eSectionTypeNVGPULocalMemory", "nvgpu-local-memory"),
@@ -296,11 +300,12 @@ def nvgpu_stats(debugger, command, exe_ctx, result, _):
         _count_subtree(mod.GetSectionAtIndex(i), counts)
 
     interesting_order = [
-        "nvgpu-root", "nvgpu-device", "nvgpu-sm", "nvgpu-cta", "nvgpu-warp",
-        "nvgpu-lane", "nvgpu-registers", "nvgpu-predicates",
+        "nvgpu-root", "nvgpu-device", "nvgpu-grid", "nvgpu-sm", "nvgpu-cta",
+        "nvgpu-warp", "nvgpu-lane", "nvgpu-registers", "nvgpu-predicates",
         "nvgpu-local-memory", "nvgpu-uniform-registers",
         "nvgpu-uniform-predicates", "nvgpu-convergence-barrier",
-        "nvgpu-shared-memory", "nvgpu-global-memory", "nvgpu-managed-memory",
+        "nvgpu-shared-memory", "nvgpu-param-memory", "nvgpu-constbank-table",
+        "nvgpu-global-memory", "nvgpu-managed-memory",
         "nvgpu-relocated-image", "nvgpu-unrelocated-image",
     ]
     out = [f"# module: {mod.GetFileSpec().GetFilename()}",
