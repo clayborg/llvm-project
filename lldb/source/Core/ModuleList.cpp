@@ -263,11 +263,16 @@ void ModuleList::ReplaceEquivalent(
     std::lock_guard<std::recursive_mutex> guard(m_modules_mutex);
 
     // First remove any equivalent modules. Equivalent modules are modules
-    // whose path, platform path and architecture match.
+    // whose path, platform path, architecture and object slice match. Matching
+    // the object slice (name/offset/size) keeps code-object slices that share
+    // one container file path from collapsing into each other.
     ModuleSpec equivalent_module_spec(module_sp->GetFileSpec(),
                                       module_sp->GetArchitecture());
     equivalent_module_spec.GetPlatformFileSpec() =
         module_sp->GetPlatformFileSpec();
+    equivalent_module_spec.GetObjectName() = module_sp->GetObjectName();
+    equivalent_module_spec.SetObjectOffset(module_sp->GetObjectOffset());
+    equivalent_module_spec.SetObjectSize(module_sp->GetObjectSize());
 
     size_t idx = 0;
     while (idx < m_modules.size()) {
@@ -929,11 +934,16 @@ private:
       return;
 
     // First remove any equivalent modules. Equivalent modules are modules
-    // whose path, platform path and architecture match.
+    // whose path, platform path, architecture and object slice match. Matching
+    // the object slice (name/offset/size) keeps code-object slices that share
+    // one container file path from collapsing into each other.
     ModuleSpec equivalent_module_spec(module_sp->GetFileSpec(),
                                       module_sp->GetArchitecture());
     equivalent_module_spec.GetPlatformFileSpec() =
         module_sp->GetPlatformFileSpec();
+    equivalent_module_spec.GetObjectName() = module_sp->GetObjectName();
+    equivalent_module_spec.SetObjectOffset(module_sp->GetObjectOffset());
+    equivalent_module_spec.SetObjectSize(module_sp->GetObjectSize());
 
     llvm::SmallVectorImpl<ModuleSP> &vec = it->second;
     llvm::erase_if(vec, [&equivalent_module_spec](ModuleSP &element) {
