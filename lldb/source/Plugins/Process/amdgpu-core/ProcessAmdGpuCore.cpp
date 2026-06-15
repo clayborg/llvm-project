@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cinttypes>
 #include <memory>
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
@@ -14,6 +15,7 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Utility/AmdDbgApiUtils.h"
 #include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
 #include "lldb/Utility/DataBufferHeap.h"
@@ -317,6 +319,20 @@ static amd_dbgapi_callbacks_t s_dbgapi_callbacks = {
     amd_dbgapi_log_message_callback,
 };
 
+static llvm::Expected<amd_dbgapi_architecture_id_t>
+GetArchitectureForWave(amd_dbgapi_wave_id_t wave_id) {
+  amd_dbgapi_architecture_id_t architecture_id;
+  amd_dbgapi_status_t status =
+      amd_dbgapi_wave_get_info(wave_id, AMD_DBGAPI_WAVE_INFO_ARCHITECTURE,
+                               sizeof(architecture_id), &architecture_id);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS)
+    return llvm::createStringError(
+        "amd_dbgapi_wave_get_info(ARCHITECTURE) failed for wave %" PRIu64
+        ": %s",
+        wave_id.handle, AmdDbgApiStatusToString(status));
+  return architecture_id;
+}
+
 bool ProcessAmdGpuCore::initRocm() {
   // Set the dbgapi log level before initialize so that log messages during
   // initialization are captured. Environment variable takes precedence,
@@ -347,15 +363,15 @@ bool ProcessAmdGpuCore::initRocm() {
     return false;
   }
 
-  amd_dbgapi_architecture_id_t architecture_id;
-  // TODO: do not hardcode the device id
-  status = amd_dbgapi_get_architecture(0x04C, &architecture_id);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    // Handle error
-    LLDB_LOGF(GetLog(LLDBLog::Process), "amd_dbgapi_get_architecture failed");
+  llvm::Expected<amd_dbgapi_architecture_id_t> architecture_id =
+      QueryAmdGpuArchitectureFromFirstAgent(
+          m_gpu_pid, s_dbgapi_callbacks.deallocate_memory);
+  if (!architecture_id) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Process), architecture_id.takeError(),
+                   "Failed to query AMD GPU architecture: {0}");
     return false;
   }
-  m_architecture_id = architecture_id;
+  m_architecture_id = *architecture_id;
 
   m_address_spaces.push_back({"generic", (uint64_t)DW_ASPACE_AMDGPU::generic,
                               /*is_thread_specific=*/true});
@@ -649,15 +665,14 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
   return llvm::Error::success();
 }
 
-bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
+bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &,
                                            ThreadList &new_thread_list) {
   bool ret = true;
   size_t count;
   amd_dbgapi_wave_id_t *wave_list;
-  amd_dbgapi_changed_t changed;
 
   amd_dbgapi_status_t status =
-      amd_dbgapi_process_wave_list(m_gpu_pid, &count, &wave_list, &changed);
+      amd_dbgapi_process_wave_list(m_gpu_pid, &count, &wave_list, nullptr);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
     LLDB_LOGF(GetLog(LLDBLog::Process),
               "amd_dbgapi_process_wave_list failed with status %d", status);
@@ -668,12 +683,20 @@ bool ProcessAmdGpuCore::DoUpdateThreadList(ThreadList &old_thread_list,
   auto wave_list_cleanup =
       llvm::make_scope_exit([wave_list]() { free(wave_list); });
 
-  if (changed == AMD_DBGAPI_CHANGED_NO)
-    return ret;
-
   for (size_t i = 0; i < count; ++i) {
+    amd_dbgapi_architecture_id_t architecture_id = m_architecture_id;
+    llvm::Expected<amd_dbgapi_architecture_id_t> wave_architecture_id =
+        GetArchitectureForWave(wave_list[i]);
+    if (wave_architecture_id)
+      architecture_id = *wave_architecture_id;
+    else
+      LLDB_LOG_ERROR(GetLog(LLDBLog::Process), wave_architecture_id.takeError(),
+                     "Failed to query AMD GPU wave architecture for wave {1}: "
+                     "{0}; falling back to process architecture",
+                     wave_list[i].handle);
+
     auto thread = std::make_unique<ThreadAMDGPU>(
-        *this, m_architecture_id, wave_list[i].handle, wave_list[i]);
+        *this, architecture_id, wave_list[i].handle, wave_list[i]);
     new_thread_list.AddThread(std::move(thread));
   }
 
