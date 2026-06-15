@@ -2,7 +2,10 @@
 Result comparator for comparing GDB and LLDB debugging outputs.
 """
 
+from collections import Counter
 from dataclasses import dataclass, field
+import os
+import re
 from typing import List, Dict, Any, Optional, Set, Tuple
 from .debugger_interface import (
     DebuggerResult,
@@ -321,25 +324,101 @@ class ResultComparator:
         """Compare loaded modules from GDB and LLDB."""
         result = ComparisonResult()
 
-        gdb_modules = {m.name: m for m in gdb_result.modules}
-        lldb_modules = {m.name: m for m in lldb_result.modules}
+        gdb_modules = Counter(
+            key
+            for m in gdb_result.modules
+            if (key := self._normalize_module_key(m)) is not None
+        )
+        lldb_modules = Counter(
+            key
+            for m in lldb_result.modules
+            if (key := self._normalize_module_key(m)) is not None
+        )
 
         all_names = set(gdb_modules.keys()) | set(lldb_modules.keys())
 
         for name in sorted(all_names):
-            gdb_mod = gdb_modules.get(name)
-            lldb_mod = lldb_modules.get(name)
+            gdb_count = gdb_modules.get(name, 0)
+            lldb_count = lldb_modules.get(name, 0)
 
-            if gdb_mod is None:
+            if gdb_count == 0:
                 result.add_lldb_only("modules", name)
+                result.add_difference(
+                    "modules",
+                    name,
+                    0,
+                    lldb_count,
+                    f"Module '{name}' only in LLDB",
+                )
                 continue
 
-            if lldb_mod is None:
+            if lldb_count == 0:
                 result.add_gdb_only("modules", name)
+                result.add_difference(
+                    "modules",
+                    name,
+                    gdb_count,
+                    0,
+                    f"Module '{name}' only in GDB",
+                )
                 continue
+
+            if gdb_count != lldb_count:
+                result.add_difference(
+                    "modules",
+                    name,
+                    gdb_count,
+                    lldb_count,
+                    f"Module '{name}' count differs: GDB={gdb_count}, LLDB={lldb_count}",
+                )
 
         result.summary = result.get_summary()
         return result
+
+    def _normalize_module_key(self, module: ModuleInfo) -> str | None:
+        """Normalize debugger-specific module names into comparable keys."""
+        raw_path = module.path or ""
+        name = module.name or os.path.basename(raw_path) or "<unknown>"
+
+        # GDB exposes .gnu_debugdata as a synthetic objfile. It is debug info
+        # for the following module, not a separately loaded module.
+        if raw_path.startswith(".gnu_debugdata for "):
+            return None
+
+        if name == "[vdso]" or raw_path.startswith("system-supplied DSO"):
+            return "vdso"
+
+        # ROCgdb memory code objects look like:
+        #   4377#offset=0x7c...&size=43392
+        #   memory://4377#offset=0x7c...&size=43392
+        offset_match = re.search(
+            r"#offset=(0x[0-9a-fA-F]+|\d+)&size=(0x[0-9a-fA-F]+|\d+)",
+            raw_path or name,
+        )
+        if offset_match and (
+            (raw_path or name).startswith("memory://")
+            or (name.split("#", 1)[0].isdigit())
+        ):
+            start = int(offset_match.group(1), 0)
+            size = int(offset_match.group(2), 0)
+            return f"memory:{start:x}-{start + size:x}"
+
+        # ROCLLDB memory code objects look like:
+        #   amd_memory_kernel[0x7c..., 0x7c...)
+        kernel_match = re.search(
+            r"amd_memory_kernel\[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)\)",
+            name,
+        )
+        if kernel_match:
+            start = int(kernel_match.group(1), 16)
+            end = int(kernel_match.group(2), 16)
+            return f"memory:{start:x}-{end:x}"
+
+        # File-backed GPU code objects may have #offset/#size suffixes on one
+        # side. Keep the backing file basename as the module identity.
+        path = (raw_path or name).removeprefix("file://")
+        path = path.split("#offset=", 1)[0]
+        return os.path.basename(path) or name
 
     def _normalize_function_name(self, name: str) -> str:
         """Normalize function name for comparison."""

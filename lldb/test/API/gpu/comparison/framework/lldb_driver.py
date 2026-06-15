@@ -6,6 +6,8 @@ launching LLDB as a subprocess. This is more efficient and provides
 direct access to LLDB's SB API.
 """
 
+import os
+
 import lldb
 from typing import List, Optional, Dict, Any
 
@@ -128,9 +130,15 @@ class LldbDriver(DebuggerInterface):
         return self._process.GetNumThreads()
 
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file using the in-process LLDB API."""
+        if auto_load_debuginfo:
+            return self._load_core_auto_debuginfo(core_path)
+
         self._core_path = core_path
 
         try:
@@ -184,6 +192,61 @@ class LldbDriver(DebuggerInterface):
 
         except Exception as e:
             return DebuggerResult(success=False, error_message=str(e))
+
+    def _load_core_auto_debuginfo(self, core_path: str) -> DebuggerResult:
+        self._core_path = os.path.realpath(core_path)
+        output = []
+
+        fbcode_path = os.environ.get("GPU_COMPARISON_FBCODE_PATH")
+        if fbcode_path:
+            result = self.execute_command(
+                f"script import sys; sys.path.insert(0, {fbcode_path!r})"
+            )
+            output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command(
+            "script import os; os.environ['LD_LIBRARY_PATH'] = "
+            "os.environ.get('LLDB_SYMBOL_STORAGE_LD_LIBRARY_PATH', '')"
+        )
+        output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command("command script import fblldb")
+        output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command(f"auto-load-debuginfo {self._core_path}")
+        output.append(result.raw_output or result.error_message)
+        if not result.success:
+            return DebuggerResult(
+                success=False,
+                error_message=result.error_message,
+                raw_output=result.raw_output,
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        self._target = self._debugger.GetSelectedTarget()
+        if not self._target or not self._target.IsValid():
+            return DebuggerResult(
+                success=False,
+                error_message="auto-load-debuginfo did not create a valid target",
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        self._process = self._target.GetProcess()
+        if not self._process or not self._process.IsValid():
+            return DebuggerResult(
+                success=False,
+                error_message="auto-load-debuginfo did not create a valid process",
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        return DebuggerResult(
+            success=True,
+            extra_data={
+                "thread_count": self._process.GetNumThreads(),
+                "target_triple": self._target.GetTriple(),
+                "auto_load_output": "\n".join(output),
+            },
+        )
 
     def get_all_threads(self) -> DebuggerResult:
         """Get list of all threads from all targets (CPU + GPU).
