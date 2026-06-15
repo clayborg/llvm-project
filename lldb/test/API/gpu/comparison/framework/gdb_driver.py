@@ -270,10 +270,16 @@ print("{self.END_MARKER}")
         return self._wait_for_prompt(timeout)
 
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file into the persistent GDB process."""
         self._start_gdb()
+
+        if auto_load_debuginfo:
+            core_path = os.path.realpath(core_path)
 
         self._core_path = core_path
         self._executable_path = executable_path
@@ -285,6 +291,9 @@ print("{self.END_MARKER}")
         # Load the core file
         self._send_command(f"core-file {core_path}")
         self._core_loaded = True
+        auto_load_output = ""
+        if auto_load_debuginfo:
+            auto_load_output = self._auto_load_debuginfo()
 
         # Get thread info to verify core loaded
         script = """
@@ -309,8 +318,29 @@ print("RESULT_JSON:" + json.dumps(result))
             success=data.get("success", False),
             error_message=data.get("error", ""),
             raw_output=data.get("raw_output", ""),
-            extra_data={"thread_count": data.get("thread_count", 0)},
+            extra_data={
+                "thread_count": data.get("thread_count", 0),
+                "auto_load_output": auto_load_output,
+            },
         )
+
+    def _auto_load_debuginfo(self) -> str:
+        fbcode_path = os.environ.get("GPU_COMPARISON_FBCODE_PATH")
+        if not fbcode_path:
+            return "GPU_COMPARISON_FBCODE_PATH is not set; skipped auto-load-debuginfo\n"
+
+        fbload_path = os.path.join(fbcode_path, "gdb", "scripts", "fbload.py")
+        output = []
+        output.append(self._send_command(f"source {fbload_path}"))
+        output.append(self._send_command("fbload auto_debuginfo"))
+        output.append(
+            self._send_command(
+                "python import os; os.environ['LD_LIBRARY_PATH'] = "
+                "os.environ.get('LLDB_SYMBOL_STORAGE_LD_LIBRARY_PATH', '')"
+            )
+        )
+        output.append(self._send_command("auto-load-debuginfo", timeout=600.0))
+        return "".join(output)
 
     def get_all_threads(self) -> DebuggerResult:
         """Get list of all threads (CPU + GPU in flat view).
