@@ -95,3 +95,62 @@ class TestAmdGpuCoreException(AmdGpuCoreTestBase):
             f"Exception description should contain 'Memory access violation', "
             f"got: '{stop_description}'",
         )
+
+    @skipIfRemote
+    def test_selected_thread_is_memory_violation(self):
+        """Verify core loading selects the GPU exception thread."""
+        gpu_target, gpu_process = self.load_core()
+
+        first_thread = gpu_process.GetThreadAtIndex(0)
+        self.assertTrue(first_thread.IsValid(), "First GPU thread should be valid")
+        self.assertNotEqual(
+            first_thread.GetStopReason(),
+            lldb.eStopReasonException,
+            "Test fixture should list a non-exception GPU thread first; "
+            "otherwise this test can pass without exercising selected-thread "
+            "behavior",
+        )
+
+        selected_thread = gpu_process.GetSelectedThread()
+        self.assertTrue(
+            selected_thread.IsValid(), "Selected GPU thread should be valid"
+        )
+        self.assertNotEqual(
+            selected_thread.GetThreadID(),
+            first_thread.GetThreadID(),
+            "Selected GPU thread should not be the first listed non-exception "
+            "thread",
+        )
+        self.assertEqual(
+            selected_thread.GetStopReason(),
+            lldb.eStopReasonException,
+            "Selected GPU thread should have an exception stop reason",
+        )
+
+        stop_description = selected_thread.GetStopDescription(256)
+        self.assertIn(
+            "Memory access violation",
+            stop_description,
+            f"Selected GPU thread should report 'Memory access violation', "
+            f"got: '{stop_description}'",
+        )
+
+    @skipIfRemote
+    def test_non_stopped_wave_has_no_stop_reason(self):
+        """Verify a wave without a stop event does not report signal 0."""
+        gpu_target, gpu_process = self.load_core()
+
+        first_thread = gpu_process.GetThreadAtIndex(0)
+        self.assertTrue(first_thread.IsValid(), "First GPU thread should be valid")
+        self.assertEqual(
+            first_thread.GetStopReason(),
+            lldb.eStopReasonNone,
+            "Non-stopped GPU thread should not report a stop reason",
+        )
+
+        stop_description = first_thread.GetStopDescription(256)
+        self.assertTrue(
+            stop_description is None or stop_description == "",
+            f"Non-stopped GPU thread should not report a stop description, "
+            f"got: '{stop_description}'",
+        )

@@ -96,6 +96,8 @@ bool ThreadAMDGPU::CalculateStopInfo() {
   case lldb::eStopReasonInterrupt:
     SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, SIGSTOP));
     break;
+  case lldb::eStopReasonNone:
+    return false;
   default:
     // No recognized stop reason — match rocgdb's GDB_SIGNAL_0 fallback.
     SetStopInfo(StopInfo::CreateStopReasonWithSignal(*this, 0));

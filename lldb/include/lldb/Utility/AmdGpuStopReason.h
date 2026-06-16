@@ -46,10 +46,9 @@ GetLldbStopReasonForDbgApiStopReason(amd_dbgapi_wave_stop_reasons_t reason,
     return lldb::StopReason::eStopReasonException;
   };
 
-  // If none of the bits are set, then we explicitly stopped the wave with
-  // a call to `amd_dbgapi_wave_stop`.
+  // If none of the bits are set, the wave has no actionable stop reason.
   if (reason == AMD_DBGAPI_WAVE_STOP_REASON_NONE)
-    return lldb::StopReason::eStopReasonInterrupt;
+    return lldb::StopReason::eStopReasonNone;
 
   if (reason & AMD_DBGAPI_WAVE_STOP_REASON_FP_INPUT_DENORMAL)
     return make_exception("Floating-point input denormal");
