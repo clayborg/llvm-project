@@ -13,13 +13,6 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
     def setUp(self):
         NVGPUTestCaseBase.setUp(self)
         self._generated_cores = {}
-        self.build()
-
-        build_dir = self.getBuildDir()
-        if os.path.isdir(build_dir):
-            for name in os.listdir(build_dir):
-                if name.endswith(".nvcudmp"):
-                    os.remove(os.path.join(build_dir, name))
 
     def generate_core(self, flags="", args=None):
         """Generate a core file if needed and return its path.
@@ -50,6 +43,10 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         env["CUDA_ENABLE_COREDUMP_ON_EXCEPTION"] = "1"
         env["CUDA_COREDUMP_FILE"] = core_path
         env["CUDA_COREDUMP_GENERATION_FLAGS"] = flags
+
+        if not getattr(self, "_built_core", False):
+            self.build()
+            self._built_core = True
 
         try:
             result = subprocess.run(
@@ -100,3 +97,22 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
     def generate_and_load_core(self, flags="", args=None):
         """Generate a core file (if needed) and load it in LLDB."""
         return self.load_core(self.generate_core(flags, args))
+
+    def generate_artificial_core(self, builder, name="artificial.nvcudmp"):
+        """Serialize an NVGPUCoreBuilder to a .nvcudmp via yaml2obj.
+
+        Returns the generated core file path.
+        """
+        yaml_path = self.getBuildArtifact(name + ".yaml")
+        core_path = self.getBuildArtifact(name)
+        builder.write_yaml(yaml_path)
+        self.yaml2obj(yaml_path, core_path)
+        return core_path
+
+    def generate_and_load_artificial_core(self, builder,
+                                          name="artificial.nvcudmp"):
+        """Build an artificial core from an NVGPUCoreBuilder and load it.
+
+        Returns (gpu_target, gpu_process).
+        """
+        return self.load_core(self.generate_artificial_core(builder, name))
