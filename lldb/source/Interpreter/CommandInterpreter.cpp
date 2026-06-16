@@ -2608,6 +2608,17 @@ void CommandInterpreter::SourceInitFileHome(CommandReturnObject &result,
     return;
   }
 
+#if !defined(_WIN32)
+  // Facebook only:
+  //
+  // The 'fblldbinit' module will set up the python support specific to FB.
+  // Skipped automatically when .lldbinit support is disabled (handled above).
+  HandleCommand("script import sys, importlib; "
+                "importlib.reload(sys.modules['fblldb']) if 'fblldb' "
+                "in sys.modules else __import__('fblldbinit')",
+                eLazyBoolNo, result);
+#endif
+
   FileSpec init_file;
 
   if (is_repl)
