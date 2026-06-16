@@ -14,7 +14,7 @@
 #ifndef LLDB_TOOLS_LLDB_SERVER_AMDDBGAPIHELPERS_H
 #define LLDB_TOOLS_LLDB_SERVER_AMDDBGAPIHELPERS_H
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "lldb/Utility/AmdGpuAddressSpaces.h"
+#include "lldb/Utility/AmdDbgApiUtils.h"
 #include "lldb/Utility/Log.h"
 #include "llvm/Support/Error.h"
 #include <algorithm>
@@ -29,10 +29,7 @@
 namespace lldb_private {
 namespace lldb_server {
 
-// Use the shared AmdDbgApiStatusToString from AmdGpuAddressSpaces.h
 using lldb_private::AmdDbgApiStatusToString;
-
-// Use the shared RunAmdDbgApiCommand from AmdGpuAddressSpaces.h
 using lldb_private::RunAmdDbgApiCommand;
 
 #define ENUM_TO_CSTR(e)                                                        \

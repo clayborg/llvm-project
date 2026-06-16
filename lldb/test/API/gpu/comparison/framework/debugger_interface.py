@@ -28,6 +28,13 @@ class RegisterValue:
     value: int
     size: int = 0
 
+    def __post_init__(self):
+        if self.size > 0:
+            # Compare scalar registers as fixed-width bit patterns so signed
+            # GDB values match LLDB's unsigned representation. For example,
+            # GDB=-1 and LLDB=0xffffffff are the same 32-bit register bits.
+            self.value &= (1 << (self.size * 8)) - 1
+
     def __eq__(self, other):
         if not isinstance(other, RegisterValue):
             return False

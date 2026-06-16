@@ -223,30 +223,14 @@ Status LLDBServerPluginAMDGPU::AttachAmdDbgApi() {
   }
 
   // Query the architecture from the first attached GPU agent.
-  amd_dbgapi_architecture_id_t architecture_id;
-  size_t agent_count = 0;
-  amd_dbgapi_agent_id_t *agents = nullptr;
-  status = amd_dbgapi_process_agent_list(m_gpu_pid, &agent_count, &agents,
-                                         nullptr);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS || agent_count == 0) {
-    if (agents)
-      s_dbgapi_callbacks.deallocate_memory(agents);
-    return HandleAmdDbgApiAttachError(
-        agent_count == 0 ? "No GPU agents found"
-                         : "Failed to enumerate GPU agents",
-        status == AMD_DBGAPI_STATUS_SUCCESS ? AMD_DBGAPI_STATUS_ERROR
-                                            : status);
+  llvm::Expected<amd_dbgapi_architecture_id_t> architecture_id =
+      QueryAmdGpuArchitectureFromFirstAgent(
+          m_gpu_pid, s_dbgapi_callbacks.deallocate_memory);
+  if (!architecture_id) {
+    std::string error = llvm::toString(architecture_id.takeError());
+    return HandleAmdDbgApiAttachError(error.c_str(), AMD_DBGAPI_STATUS_ERROR);
   }
-
-  status = amd_dbgapi_agent_get_info(
-      agents[0], AMD_DBGAPI_AGENT_INFO_ARCHITECTURE,
-      sizeof(architecture_id), &architecture_id);
-  s_dbgapi_callbacks.deallocate_memory(agents);
-  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
-    return HandleAmdDbgApiAttachError("Failed to get agent architecture",
-                                      status);
-  }
-  m_architecture_id = architecture_id;
+  m_architecture_id = *architecture_id;
 
   // The process from LLDB’s PoV is the entire portion of logical GPU bound to
   // the CPU host process. It does not represent a real process on the GPU. The
@@ -306,7 +290,8 @@ LLDBServerPluginAMDGPU::HandleAmdDbgApiAttachError(llvm::StringRef error_msg,
 
   // Return a status with the error message and additional context
   return Status::FromErrorStringWithFormat(
-      "AMD Debug API attach failed: %s (status: %d)", error_msg.data(), status);
+      "AMD Debug API attach failed: %s (status: %s)", error_msg.data(),
+      AmdDbgApiStatusToString(status));
 }
 
 Status LLDBServerPluginAMDGPU::DetachAmdDbgApi() {

@@ -13,6 +13,7 @@
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/UUID.h"
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
@@ -175,4 +176,70 @@ Sections:
       }
     }
   }
+}
+
+TEST(ModuleListTest, ReplaceEquivalentKeepsDifferentObjectSlices) {
+  SubsystemRAII<FileSystem, ObjectFileELF> subsystems;
+
+  auto DummyFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_DYN
+  Machine:         EM_X86_64
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign:    0x0000000000000010
+...
+)");
+  ASSERT_THAT_EXPECTED(DummyFile, llvm::Succeeded());
+
+  auto SliceFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_DYN
+  Machine:         EM_X86_64
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign:    0x0000000000000010
+...
+)");
+  ASSERT_THAT_EXPECTED(SliceFile, llvm::Succeeded());
+
+  ModuleSP dummy_module;
+  bool did_create = false;
+  Status error = ModuleList::GetSharedModule(
+      DummyFile->moduleSpec(), dummy_module, nullptr, &did_create, false);
+  ASSERT_TRUE(error.Success());
+  ASSERT_NE(dummy_module, nullptr);
+  ASSERT_NE(dummy_module->GetObjectFile(), nullptr);
+
+  ModuleSpec slice_spec = SliceFile->moduleSpec();
+  const llvm::sys::TimePoint<> object_mod_time;
+  ModuleSP first_module = std::make_shared<Module>(
+      slice_spec.GetFileSpec(), slice_spec.GetArchitecture(),
+      ConstString("libwithslices.so[0x1000-0x1200)"), 0x1000, object_mod_time);
+  ModuleSP second_module = std::make_shared<Module>(
+      slice_spec.GetFileSpec(), slice_spec.GetArchitecture(),
+      ConstString("libwithslices.so[0x2000-0x2300)"), 0x2000, object_mod_time);
+
+  ASSERT_NE(first_module->GetObjectName(), second_module->GetObjectName());
+  ASSERT_NE(first_module->GetObjectOffset(), second_module->GetObjectOffset());
+
+  ModuleList module_list;
+  module_list.Append(dummy_module);
+  module_list.Append(first_module);
+  module_list.ReplaceEquivalent(second_module);
+
+  EXPECT_EQ(module_list.GetSize(), 3u);
+  EXPECT_EQ(module_list.GetModuleAtIndex(0), dummy_module);
+  EXPECT_EQ(module_list.GetModuleAtIndex(1), first_module);
+  EXPECT_EQ(module_list.GetModuleAtIndex(2), second_module);
 }

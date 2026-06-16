@@ -494,16 +494,18 @@ try:
         try:
             val = frame.read_register(reg)
             try:
+                size = int(val.type.sizeof)
+            except:
+                size = 0
+            try:
                 int_val = int(val)
                 result["registers"][reg.name] = {{
                     "name": reg.name,
-                    "value": int_val
+                    "value": int_val,
+                    "size": size
                 }}
             except:
-                result["registers"][reg.name] = {{
-                    "name": reg.name,
-                    "value_str": str(val)
-                }}
+                pass
         except:
             pass
 
@@ -518,7 +520,11 @@ print("RESULT_JSON:" + json.dumps(result))
         registers = {}
         for name, reg_data in data.get("registers", {}).items():
             if "value" in reg_data:
-                registers[name] = RegisterValue(name=name, value=reg_data["value"])
+                registers[name] = RegisterValue(
+                    name=name,
+                    value=reg_data["value"],
+                    size=reg_data.get("size", 0),
+                )
 
         return DebuggerResult(
             success=data.get("success", False),

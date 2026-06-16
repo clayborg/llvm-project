@@ -6,7 +6,7 @@ This test verifies that both debuggers produce equivalent results for
 GPU debugging scenarios.
 
 TEST STRUCTURE:
-- TestAmdGpuCoreFileComparison inherits from GpuTestCaseBase and contains
+- TestAmdGpuCoreFileComparison inherits from TestBase and contains
   helper methods for loading core files, comparing variables, etc.
 - For each *.core file in the Inputs/ subdirectory, test methods are
   dynamically generated:
@@ -33,11 +33,8 @@ import glob
 import os
 import shutil
 
-import lldb
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
-from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
-import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test import configuration
 
 # Add parent directory to path to import the shared comparison framework
@@ -74,7 +71,7 @@ def _get_core_files():
     return sorted(glob.glob(pattern))
 
 
-class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
+class TestAmdGpuCoreFileComparison(TestBase):
     """Compares LLDB and ROCgdb behavior on AMD GPU core files.
 
     For each *.core file in Inputs/, test methods are dynamically added
@@ -82,8 +79,8 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
     test_local_variables__mycore).  Each method loads the core file in both
     debuggers, runs the comparison, and tears down.
 
-    Inherits target selection helpers (cpu_target, gpu_target, select_cpu,
-    select_gpu, cpu_process, gpu_process) from GpuTestCaseBase.
+    LLDB access is routed through LldbDriver only; the test does not use
+    inherited GPU target helpers so debugger state stays in one adapter.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
@@ -144,22 +141,6 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
     # Comparison helpers
     # ------------------------------------------------------------------
 
-    def _get_lldb_gpu_local_variables(self, frame):
-        """Get local variables from an LLDB frame as a dict.
-
-        Returns:
-            dict mapping variable name -> {"value": str, "type": str}
-        """
-        lldb_vars = {}
-        vars_list = frame.GetVariables(True, True, False, True)
-        for i in range(vars_list.GetSize()):
-            var = vars_list.GetValueAtIndex(i)
-            lldb_vars[var.GetName()] = {
-                "value": var.GetValue(),
-                "type": var.GetTypeName(),
-            }
-        return lldb_vars
-
     def _compare_variable_sets(self, comparator, gdb_vars, lldb_vars):
         """Compare variable sets between GDB and LLDB.
 
@@ -167,7 +148,8 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
             Tuple of (only_in_gdb, only_in_lldb, read_failures, value_mismatches)
         """
         gdb_var_names = {v.name for v in gdb_vars.variables}
-        lldb_var_names = set(lldb_vars.keys())
+        lldb_var_map = {v.name: v for v in lldb_vars.variables}
+        lldb_var_names = set(lldb_var_map.keys())
 
         only_in_gdb = gdb_var_names - lldb_var_names
         only_in_lldb = lldb_var_names - gdb_var_names
@@ -177,7 +159,7 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
         value_mismatches = []
         for name in common:
             gdb_var = next(v for v in gdb_vars.variables if v.name == name)
-            lldb_value = lldb_vars[name]["value"]
+            lldb_value = lldb_var_map[name].value
             gdb_value = gdb_var.value
 
             if lldb_value is None or lldb_value == "":
@@ -215,46 +197,90 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
         gdb_driver, lldb_driver, comparator = self._load_core(core_path)
 
         gdb_result = gdb_driver.get_all_threads()
+        lldb_cpu = lldb_driver.select_cpu()
+        if not lldb_cpu.success:
+            self.skipTest(lldb_cpu.error_message)
+        cpu_thread_count = lldb_driver.get_thread_count()
 
-        self.select_cpu()
-        cpu_proc = self.cpu_process
-        if not cpu_proc or not cpu_proc.IsValid():
-            self.skipTest("LLDB CPU target not found")
-
-        lldb_cpu_thread_count = cpu_proc.GetNumThreads()
+        lldb_gpu = lldb_driver.select_gpu()
+        if not lldb_gpu.success:
+            self.skipTest(lldb_gpu.error_message)
+        gpu_thread_count = lldb_driver.get_thread_count()
+        lldb_total = cpu_thread_count + gpu_thread_count
 
         self.trace(f"GDB total threads (flat view): {len(gdb_result.threads)}")
-        self.trace(f"LLDB CPU threads: {lldb_cpu_thread_count}")
+        self.trace(f"LLDB CPU threads: {cpu_thread_count}")
+        self.trace(f"LLDB GPU threads: {gpu_thread_count}")
+        self.trace(f"LLDB total (CPU + GPU): {lldb_total}")
 
-        self.select_gpu()
-        gpu_proc = self.gpu_process
-        if gpu_proc and gpu_proc.IsValid():
-            self.trace(f"LLDB GPU threads: {gpu_proc.GetNumThreads()}")
-            lldb_total = lldb_cpu_thread_count + gpu_proc.GetNumThreads()
-            self.trace(f"LLDB total (CPU + GPU): {lldb_total}")
-
-            self.assertEqual(
-                len(gdb_result.threads),
-                lldb_total,
-                f"Total thread count mismatch: GDB={len(gdb_result.threads)}, LLDB={lldb_total}",
-            )
+        self.assertEqual(
+            len(gdb_result.threads),
+            lldb_total,
+            f"Total thread count mismatch: GDB={len(gdb_result.threads)}, LLDB={lldb_total}",
+        )
 
     def _run_register_comparison(self, core_path):
         """Compare register values between debuggers for a core file."""
         gdb_driver, lldb_driver, comparator = self._load_core(core_path)
 
         gdb_result = gdb_driver.get_registers()
+
+        lldb_select_result = lldb_driver.select_gpu()
+        if not lldb_select_result.success:
+            self.skipTest(lldb_select_result.error_message)
+        if lldb_driver.get_thread_count() == 0:
+            self.skipTest("No GPU threads in LLDB")
+
         lldb_result = lldb_driver.get_registers()
+        self.assertTrue(
+            lldb_result.success,
+            f"Failed to get LLDB GPU registers: {lldb_result.error_message}",
+        )
 
         self.trace(f"\nGDB registers: {len(gdb_result.registers)}")
         self.trace(f"LLDB registers: {len(lldb_result.registers)}")
 
         comparison = comparator.compare_registers(gdb_result, lldb_result)
 
-        if comparison.differences:
-            self.trace(f"\nRegister differences ({len(comparison.differences)}):")
-            for diff in comparison.differences[:10]:
+        value_mismatches = comparison.differences
+        gdb_only_registers = comparison.gdb_only.get("registers", [])
+        lldb_only_registers = comparison.lldb_only.get("registers", [])
+
+        failure_lines = []
+        if value_mismatches:
+            self.trace(f"\nRegister value mismatches ({len(value_mismatches)}):")
+            failure_lines.append(
+                f"Register value mismatches: {len(value_mismatches)}; first 10:"
+            )
+            for diff in value_mismatches[:10]:
                 self.trace(f"  {diff.description}")
+                failure_lines.append(f"  {diff.description}")
+
+        if gdb_only_registers or lldb_only_registers:
+            self.trace(
+                "\nRegister presence mismatches: "
+                f"GDB-only={len(gdb_only_registers)}, "
+                f"LLDB-only={len(lldb_only_registers)}"
+            )
+
+        if gdb_only_registers:
+            preview = ", ".join(gdb_only_registers[:10])
+            self.trace(f"  GDB-only registers: {preview}")
+            failure_lines.append(
+                f"GDB-only registers: {len(gdb_only_registers)}; first 10: "
+                f"{preview}"
+            )
+
+        if lldb_only_registers:
+            preview = ", ".join(lldb_only_registers[:10])
+            self.trace(f"  LLDB-only registers: {preview}")
+            failure_lines.append(
+                f"LLDB-only registers: {len(lldb_only_registers)}; first 10: "
+                f"{preview}"
+            )
+
+        if failure_lines:
+            self.fail("Register comparison failed:\n" + "\n".join(failure_lines))
 
     def _run_local_variables_comparison(self, core_path):
         """Compare GPU local variables between debuggers for a core file.
@@ -265,41 +291,30 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
         """
         gdb_driver, lldb_driver, comparator = self._load_core(core_path)
 
-        self.select_gpu()
-        gpu_proc = self.gpu_process
-        if not gpu_proc or not gpu_proc.IsValid():
-            self.skipTest("LLDB GPU target not found")
-
-        if gpu_proc.GetNumThreads() == 0:
+        lldb_select_result = lldb_driver.select_gpu()
+        if not lldb_select_result.success:
+            self.skipTest(lldb_select_result.error_message)
+        if lldb_driver.get_thread_count() == 0:
             self.skipTest("No GPU threads in LLDB")
-
-        lldb_gpu_thread = gpu_proc.GetSelectedThread()
-        if not lldb_gpu_thread.IsValid():
-            lldb_gpu_thread = gpu_proc.GetThreadAtIndex(0)
-
-        lldb_frame = lldb_gpu_thread.GetFrameAtIndex(0)
-        self.trace(
-            f"\nLLDB selected GPU thread: id={lldb_gpu_thread.GetThreadID()}, "
-            f"PC={hex(lldb_frame.GetPC())}, "
-            f"func={lldb_frame.GetFunctionName() or '<unknown>'}"
-        )
 
         # Get local variables from GDB using the default selected thread.
         # IMPORTANT: Do NOT call get_all_threads() here as it changes GDB's
         # selected thread!
         gdb_vars = gdb_driver.get_local_variables()
 
-        # Get local variables from LLDB
-        lldb_vars = self._get_lldb_gpu_local_variables(lldb_frame)
+        # Get local variables from LLDB through the LLDB adapter only.
+        lldb_vars = lldb_driver.get_local_variables()
+        if not lldb_vars.success:
+            self.fail(f"LLDB failed to get local variables: {lldb_vars.error_message}")
 
         self.trace(f"\n=== Local Variables Comparison ===")
         self.trace(f"GDB variables: {len(gdb_vars.variables)}")
-        self.trace(f"LLDB variables: {len(lldb_vars)}")
+        self.trace(f"LLDB variables: {len(lldb_vars.variables)}")
 
         for v in gdb_vars.variables:
             self.trace(f"  GDB: {v.name} ({v.type_name}) = {v.value}")
-        for name, info in lldb_vars.items():
-            self.trace(f"  LLDB: {name} ({info['type']}) = {info['value']}")
+        for v in lldb_vars.variables:
+            self.trace(f"  LLDB: {v.name} ({v.type_name}) = {v.value}")
 
         # Compare
         only_in_gdb, only_in_lldb, read_failures, value_mismatches = (
@@ -325,12 +340,13 @@ class TestAmdGpuCoreFileComparison(GpuTestCaseBase):
 
         # Log per-variable match status
         gdb_var_names = {v.name for v in gdb_vars.variables}
-        common = gdb_var_names & set(lldb_vars.keys())
+        lldb_var_map = {v.name: v for v in lldb_vars.variables}
+        common = gdb_var_names & set(lldb_var_map.keys())
         self.trace(f"\nValue comparison:")
         for name in common:
             gdb_var = next(v for v in gdb_vars.variables if v.name == name)
             gdb_val = gdb_var.value
-            lldb_val = lldb_vars[name]["value"]
+            lldb_val = lldb_var_map[name].value
             normalized_gdb = comparator.normalize_pointer_value(gdb_val)
             normalized_lldb = comparator.normalize_pointer_value(lldb_val)
             match = "MATCH" if normalized_gdb == normalized_lldb else "MISMATCH"

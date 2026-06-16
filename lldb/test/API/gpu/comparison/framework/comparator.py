@@ -8,7 +8,6 @@ from .debugger_interface import (
     DebuggerResult,
     ThreadInfo,
     FrameInfo,
-    RegisterValue,
     VariableValue,
     ModuleInfo,
 )
@@ -258,7 +257,6 @@ class ResultComparator:
                 result.add_gdb_only("registers", name)
                 continue
 
-            # Compare values
             if gdb_reg.value != lldb_reg.value:
                 result.add_difference(
                     "registers",

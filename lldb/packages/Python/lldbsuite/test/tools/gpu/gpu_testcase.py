@@ -2,10 +2,20 @@ from lldbsuite.test.lldbtest import TestBase
 import lldb
 
 # Triple substrings that identify GPU targets.
-_GPU_TRIPLE_PATTERNS = ("amdgcn", "r600", "nvptx", "mockgpu")
+GPU_TRIPLE_PATTERNS = ("amdgcn", "r600", "nvptx", "mockgpu")
 
 # Triple substrings that identify CPU targets.
-_CPU_TRIPLE_PATTERNS = ("x86_64", "aarch64", "arm")
+CPU_TRIPLE_PATTERNS = ("x86_64", "aarch64", "arm")
+
+
+def find_target_by_triple(debugger, patterns):
+    """Find the first target whose triple contains one of the given patterns."""
+    for i in range(debugger.GetNumTargets()):
+        target = debugger.GetTargetAtIndex(i)
+        triple = target.GetTriple()
+        if any(p in triple for p in patterns):
+            return target
+    return None
 
 
 class GpuTestCaseBase(TestBase):
@@ -16,22 +26,17 @@ class GpuTestCaseBase(TestBase):
 
     def _find_target_by_triple(self, patterns):
         """Find the first target whose triple contains one of the given patterns."""
-        for i in range(self.dbg.GetNumTargets()):
-            target = self.dbg.GetTargetAtIndex(i)
-            triple = target.GetTriple()
-            if any(p in triple for p in patterns):
-                return target
-        return None
+        return find_target_by_triple(self.dbg, patterns)
 
     @property
     def cpu_target(self):
         """Return the CPU target by searching for a CPU triple."""
-        return self._find_target_by_triple(_CPU_TRIPLE_PATTERNS)
+        return self._find_target_by_triple(CPU_TRIPLE_PATTERNS)
 
     @property
     def gpu_target(self):
         """Return the GPU target by searching for a GPU triple."""
-        return self._find_target_by_triple(_GPU_TRIPLE_PATTERNS)
+        return self._find_target_by_triple(GPU_TRIPLE_PATTERNS)
 
     @property
     def cpu_process(self):
