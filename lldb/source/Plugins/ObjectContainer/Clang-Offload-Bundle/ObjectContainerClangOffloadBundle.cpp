@@ -14,9 +14,13 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/DataBuffer.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/OffloadBundle.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
+#include <mutex>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -77,36 +81,63 @@ bool ObjectContainerClangOffloadBundle::FindBundleEntries(
   if (path.empty())
     return false;
 
-  auto obj_or_err = llvm::object::ObjectFile::createObjectFile(path);
-  if (!obj_or_err) {
-    llvm::consumeError(obj_or_err.takeError());
-    return false;
+  // A bundle can hold many code objects that each load as a separate module,
+  // so cache the parse per file to avoid rescanning it once per object. Keyed
+  // by path + size + mtime so a changed file re-parses; locked because modules
+  // may load concurrently.
+  static std::mutex cache_mutex;
+  static llvm::StringMap<std::vector<Entry>> cache;
+
+  std::string key = path;
+  llvm::sys::fs::file_status status;
+  if (!llvm::sys::fs::status(path, status)) {
+    llvm::raw_string_ostream(key)
+        << ':' << status.getSize() << ':'
+        << llvm::sys::toTimeT(status.getLastModificationTime());
   }
 
-  llvm::SmallVector<llvm::object::OffloadBundleFatBin> bundles;
-  if (auto err = llvm::object::extractOffloadBundleFatBinary(
-          *obj_or_err->getBinary(), bundles)) {
-    llvm::consumeError(std::move(err));
-    return false;
-  }
-
-  if (bundles.empty())
-    return false;
-
-  for (auto &bundle : bundles) {
-    for (auto &bundle_entry : bundle.getEntries()) {
-      if (bundle_entry.Size == 0)
-        continue;
-      Entry entry;
-      entry.arch = ParseArchFromBundleEntryID(bundle_entry.ID);
-      entry.offset = bundle_entry.Offset;
-      entry.size = bundle_entry.Size;
-      entry.id = bundle_entry.ID;
-      if (entry.arch.IsValid())
-        entries.push_back(std::move(entry));
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      entries = it->second;
+      return !entries.empty();
     }
   }
 
+  std::vector<Entry> parsed;
+  auto obj_or_err = llvm::object::ObjectFile::createObjectFile(path);
+  if (obj_or_err) {
+    llvm::SmallVector<llvm::object::OffloadBundleFatBin> bundles;
+    if (auto err = llvm::object::extractOffloadBundleFatBinary(
+            *obj_or_err->getBinary(), bundles)) {
+      llvm::consumeError(std::move(err));
+    } else {
+      for (auto &bundle : bundles) {
+        for (auto &bundle_entry : bundle.getEntries()) {
+          if (bundle_entry.Size == 0)
+            continue;
+          Entry entry;
+          entry.arch = ParseArchFromBundleEntryID(bundle_entry.ID);
+          entry.offset = bundle_entry.Offset;
+          entry.size = bundle_entry.Size;
+          entry.id = bundle_entry.ID;
+          if (entry.arch.IsValid())
+            parsed.push_back(std::move(entry));
+        }
+      }
+    }
+  } else {
+    llvm::consumeError(obj_or_err.takeError());
+  }
+
+  // Cache even an empty result so non-bundle files are not re-parsed.
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    cache[key] = parsed;
+  }
+
+  entries = std::move(parsed);
   return !entries.empty();
 }
 
