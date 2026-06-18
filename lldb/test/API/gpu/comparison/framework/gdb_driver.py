@@ -431,6 +431,83 @@ print("RESULT_JSON:" + json.dumps(result))
             success=data.get("success", False), error_message=data.get("error", "")
         )
 
+    def get_selected_thread(self) -> DebuggerResult:
+        """Return ROCgDB's current selected thread without changing selection.
+
+        ROCgDB's flat GPU thread number does not match LLDB's GPU thread id.
+        For AMDGPU waves, the useful cross-debugger key is the wave id embedded
+        in names like: AMDGPU Lane 3:5:1:8192/0 (...).
+        """
+        script = r"""
+import gdb
+import json
+import re
+
+result = {"success": True, "error": ""}
+
+try:
+    thread = gdb.selected_thread()
+    frame = gdb.selected_frame()
+    current_thread_output = ""
+    try:
+        current_thread_output = gdb.execute("thread", to_string=True)
+    except:
+        pass
+
+    thread_name = thread.name or ""
+    selected_line = current_thread_output.strip()
+    thread_text = " ".join([thread_name, selected_line])
+    wave_match = re.search(
+        r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+        thread_text,
+    )
+    if not wave_match:
+        info_threads = gdb.execute("info threads", to_string=True)
+        for line in info_threads.splitlines():
+            if line.lstrip().startswith("*"):
+                selected_line = line.strip()
+                break
+        wave_match = re.search(
+            r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+            selected_line,
+        )
+
+    result.update({
+        "id": thread.global_num,
+        "name": thread_name,
+        "selected_line": selected_line,
+        "pc": frame.pc(),
+        "function": frame.name() or "<unknown>",
+        "architecture": frame.architecture().name(),
+    })
+
+    if wave_match:
+        result["amdgpu_wave_id"] = int(wave_match.group(1))
+        result["amdgpu_lane_id"] = int(wave_match.group(2))
+
+except Exception as e:
+    result["success"] = False
+    result["error"] = str(e)
+
+print("RESULT_JSON:" + json.dumps(result))
+"""
+        data = self._run_python_script(script)
+
+        return DebuggerResult(
+            success=data.get("success", False),
+            error_message=data.get("error", ""),
+            extra_data={
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "selected_line": data.get("selected_line"),
+                "pc": data.get("pc"),
+                "function": data.get("function"),
+                "architecture": data.get("architecture"),
+                "amdgpu_wave_id": data.get("amdgpu_wave_id"),
+                "amdgpu_lane_id": data.get("amdgpu_lane_id"),
+            },
+        )
+
     def get_backtrace(self, thread_id: Optional[int] = None) -> DebuggerResult:
         """Get backtrace for current or specified thread."""
         thread_select = f'gdb.execute("thread {thread_id}")' if thread_id else ""
