@@ -325,7 +325,27 @@ class LldbDriver(DebuggerInterface):
             if not self._process or not self._process.IsValid():
                 return DebuggerResult(success=False, error_message="No valid process")
 
-            # Search in all targets
+            # Prefer the currently selected target/process. The comparison test
+            # selects the GPU target first, and ROCgDB's AMDGPU wave id maps to
+            # LLDB's GPU thread id. Searching CPU targets first can accidentally
+            # match an unrelated host thread with the same numeric id.
+            for i in range(self._process.GetNumThreads()):
+                thread = self._process.GetThreadAtIndex(i)
+                if thread.GetThreadID() == thread_id:
+                    self._process.SetSelectedThread(thread)
+                    return DebuggerResult(
+                        success=True,
+                        extra_data={
+                            "selected_thread": thread.GetThreadID(),
+                            "selected_index_id": thread.GetIndexID(),
+                            "selected_name": thread.GetName(),
+                            "target_triple": self._target.GetTriple()
+                            if self._target and self._target.IsValid()
+                            else None,
+                        },
+                    )
+
+            # Fallback for callers that have not selected the target first.
             for target_idx in range(self._debugger.GetNumTargets()):
                 target = self._debugger.GetTargetAtIndex(target_idx)
                 process = target.GetProcess()
@@ -343,7 +363,12 @@ class LldbDriver(DebuggerInterface):
                             self._process = process
                             return DebuggerResult(
                                 success=True,
-                                extra_data={"selected_thread": thread.GetThreadID()},
+                                extra_data={
+                                    "selected_thread": thread.GetThreadID(),
+                                    "selected_index_id": thread.GetIndexID(),
+                                    "selected_name": thread.GetName(),
+                                    "target_triple": target.GetTriple(),
+                                },
                             )
 
             return DebuggerResult(
@@ -581,6 +606,64 @@ class LldbDriver(DebuggerInterface):
 
         except Exception as e:
             return DebuggerResult(success=False, error_message=str(e))
+
+    def get_combined_modules(self) -> DebuggerResult:
+        """Get modules from all LLDB targets as one flat module list."""
+        modules = []
+        errors = []
+        targets = []
+
+        for target_name, select in (
+            ("CPU", self.select_cpu),
+            ("GPU", self.select_gpu),
+        ):
+            select_result = select()
+            if not select_result.success:
+                targets.append(
+                    {
+                        "name": target_name,
+                        "skipped": True,
+                        "error": select_result.error_message,
+                    }
+                )
+                continue
+
+            result = self.get_modules()
+            if not result.success:
+                errors.append(
+                    f"LLDB failed to list {target_name} target modules: "
+                    f"{result.error_message}"
+                )
+                targets.append(
+                    {
+                        "name": target_name,
+                        "error": result.error_message,
+                        "modules": [],
+                    }
+                )
+                continue
+
+            modules.extend(result.modules)
+            targets.append(
+                {
+                    "name": target_name,
+                    "modules": result.modules,
+                }
+            )
+
+        if errors:
+            return DebuggerResult(
+                success=False,
+                error_message="\n".join(errors),
+                modules=modules,
+                extra_data={"targets": targets},
+            )
+
+        return DebuggerResult(
+            success=True,
+            modules=modules,
+            extra_data={"targets": targets},
+        )
 
     def select_frame(self, frame_index: int) -> DebuggerResult:
         """Select a frame by index."""
