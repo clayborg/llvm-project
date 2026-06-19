@@ -2,7 +2,7 @@ from lldbsuite.test.lldbtest import TestBase
 import lldb
 
 # Triple substrings that identify GPU targets.
-GPU_TRIPLE_PATTERNS = ("amdgcn", "r600", "nvptx", "mockgpu")
+GPU_TRIPLE_PATTERNS = ("amdgcn", "r600", "nvptx", "mockgpu", "spirv")
 
 # Triple substrings that identify CPU targets.
 CPU_TRIPLE_PATTERNS = ("x86_64", "aarch64", "arm")
