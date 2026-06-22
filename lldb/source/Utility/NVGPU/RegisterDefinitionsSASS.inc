@@ -9,7 +9,7 @@
    R_REG_OFFSET(regnum),                                                       \
    eEncodingUint,                                                              \
    eFormatHex,                                                                 \
-   {EH_FRAME_R##regnum, DWARF_R##regnum, LLDB_INVALID_REGNUM, LLDB_R##regnum,  \
+   {LLDB_INVALID_REGNUM, DWARF_R##regnum, LLDB_INVALID_REGNUM, LLDB_R##regnum, \
     LLDB_R##regnum},                                                           \
    nullptr,                                                                    \
    nullptr,                                                                    \
@@ -23,7 +23,7 @@
    UR_REG_OFFSET(regnum),                                                      \
    eEncodingUint,                                                              \
    eFormatHex,                                                                 \
-   {EH_FRAME_UR##regnum, DWARF_UR##regnum, LLDB_INVALID_REGNUM,                \
+   {LLDB_INVALID_REGNUM, DWARF_UR##regnum, LLDB_INVALID_REGNUM,                \
     LLDB_UR##regnum, LLDB_UR##regnum},                                         \
    nullptr,                                                                    \
    nullptr,                                                                    \
@@ -37,7 +37,7 @@
    P_REG_OFFSET(regnum),                                                       \
    eEncodingUint,                                                              \
    eFormatBinary,                                                              \
-   {EH_FRAME_P##regnum, DWARF_P##regnum, LLDB_INVALID_REGNUM, LLDB_P##regnum,  \
+   {LLDB_INVALID_REGNUM, DWARF_P##regnum, LLDB_INVALID_REGNUM, LLDB_P##regnum, \
     LLDB_P##regnum},                                                           \
    nullptr,                                                                    \
    nullptr,                                                                    \
@@ -51,7 +51,7 @@
    UP_REG_OFFSET(regnum),                                                      \
    eEncodingUint,                                                              \
    eFormatBinary,                                                              \
-   {EH_FRAME_UP##regnum, DWARF_UP##regnum, LLDB_INVALID_REGNUM,                \
+   {LLDB_INVALID_REGNUM, DWARF_UP##regnum, LLDB_INVALID_REGNUM,                \
     LLDB_UP##regnum, LLDB_UP##regnum},                                         \
    nullptr,                                                                    \
    nullptr,                                                                    \
@@ -1168,6 +1168,7 @@
       GENERATE_UNIFORM_PREDICATE_REGISTER_INFO(6),                             \
       GENERATE_UNIFORM_PREDICATE_REGISTER_INFO(7)
 
-// Note: Zero register constants (DWARF_RZ, DWARF_URZ, EH_FRAME_RZ,
-// EH_FRAME_URZ) are defined directly in RegisterContextNVGPU.cpp enums LLDB_RZ
-// and LLDB_URZ are defined in the enum LLDBRegNum
+// Note: Zero register constants (DWARF_RZ, DWARF_URZ) are defined directly in
+// SASSRegisterInfo.cpp. LLDB_RZ and LLDB_URZ are defined in the enum
+// LLDBRegNum. NVGPU has no .eh_frame, so the eh_frame slot is always
+// LLDB_INVALID_REGNUM.

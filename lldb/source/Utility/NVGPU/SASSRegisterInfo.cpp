@@ -80,21 +80,6 @@ enum DWARFRegNum : uint32_t {
   GENERATE_DWARF_UNIFORM_PREDICATE_DEFS()
 };
 
-// EH_FRAME register numbers for .eh_frame unwind info.
-enum CompilerRegNum : uint32_t {
-  EH_FRAME_PC = 1000,
-  EH_FRAME_ERROR_PC,
-  EH_FRAME_SP,
-  EH_FRAME_FP,
-  EH_FRAME_RA,
-  EXPAND_REGULAR_REGISTERS(EH_FRAME),
-  EH_FRAME_RZ = 2500,
-  EXPAND_PREDICATE_REGISTERS(EH_FRAME),
-  EXPAND_UNIFORM_REGISTERS(EH_FRAME),
-  EH_FRAME_URZ = 2501,
-  EXPAND_UNIFORM_PREDICATE_REGISTERS(EH_FRAME),
-};
-
 static uint32_t g_gpr_regnums[] = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
                                    LLDB_RA};
 static uint32_t g_regular_regnums[] = {EXPAND_REGULAR_REGISTERS(LLDB), LLDB_RZ};
@@ -118,46 +103,94 @@ static uint32_t g_ra_value_regs[] = {LLDB_R20, LLDB_R21, LLDB_INVALID_REGNUM};
 
 static const lldb_private::RegisterInfo g_reg_infos[LLDBRegNum::kNumRegs] = {
     // PC
-    {"PC", nullptr, 8, REG_OFFSET(PC), eEncodingUint, eFormatAddressInfo,
-     {EH_FRAME_PC, DWARF_PC, LLDB_REGNUM_GENERIC_PC, LLDB_PC, LLDB_PC},
-     nullptr, nullptr, nullptr},
-    // errorPC
-    {"errorPC", nullptr, 8, REG_OFFSET(errorPC), eEncodingUint,
+    {"PC",
+     nullptr,
+     8,
+     REG_OFFSET(PC),
+     eEncodingUint,
      eFormatAddressInfo,
-     {EH_FRAME_ERROR_PC, DWARF_ERROR_PC, LLDB_INVALID_REGNUM, LLDB_ERROR_PC,
+     {LLDB_INVALID_REGNUM, DWARF_PC, LLDB_REGNUM_GENERIC_PC, LLDB_PC, LLDB_PC},
+     nullptr,
+     nullptr,
+     nullptr},
+    // errorPC
+    {"errorPC",
+     nullptr,
+     8,
+     REG_OFFSET(errorPC),
+     eEncodingUint,
+     eFormatAddressInfo,
+     {LLDB_INVALID_REGNUM, DWARF_ERROR_PC, LLDB_INVALID_REGNUM, LLDB_ERROR_PC,
       LLDB_ERROR_PC},
-     nullptr, nullptr, nullptr},
+     nullptr,
+     nullptr,
+     nullptr},
     // SP (alias for R1)
-    {"SP", "R[1]", 4, R_REG_OFFSET(1), eEncodingUint, eFormatAddressInfo,
-     {EH_FRAME_SP, DWARF_R1, LLDB_REGNUM_GENERIC_SP, LLDB_SP, LLDB_SP},
-     nullptr, nullptr, nullptr},
+    {"SP",
+     "R[1]",
+     4,
+     R_REG_OFFSET(1),
+     eEncodingUint,
+     eFormatAddressInfo,
+     {LLDB_INVALID_REGNUM, DWARF_R1, LLDB_REGNUM_GENERIC_SP, LLDB_SP, LLDB_SP},
+     nullptr,
+     nullptr,
+     nullptr},
     // FP (alias for R2)
-    {"FP", "R[2]", 4, R_REG_OFFSET(2), eEncodingUint, eFormatAddressInfo,
-     {EH_FRAME_FP, DWARF_R2, LLDB_REGNUM_GENERIC_FP, LLDB_FP, LLDB_FP},
-     nullptr, nullptr, nullptr},
+    {"FP",
+     "R[2]",
+     4,
+     R_REG_OFFSET(2),
+     eEncodingUint,
+     eFormatAddressInfo,
+     {LLDB_INVALID_REGNUM, DWARF_R2, LLDB_REGNUM_GENERIC_FP, LLDB_FP, LLDB_FP},
+     nullptr,
+     nullptr,
+     nullptr},
     // RA (composite of R20-R21)
-    {"RA", "R[20-21]", 8, R_REG_OFFSET(20), eEncodingUint, eFormatAddressInfo,
-     {EH_FRAME_RA, LLDB_INVALID_REGNUM, LLDB_REGNUM_GENERIC_RA, LLDB_RA,
+    {"RA",
+     "R[20-21]",
+     8,
+     R_REG_OFFSET(20),
+     eEncodingUint,
+     eFormatAddressInfo,
+     {LLDB_INVALID_REGNUM, LLDB_INVALID_REGNUM, LLDB_REGNUM_GENERIC_RA, LLDB_RA,
       LLDB_RA},
-     g_ra_value_regs, nullptr, nullptr},
+     g_ra_value_regs,
+     nullptr,
+     nullptr},
     // R0-R254
     GENERATE_ALL_REGULAR_REGISTER_INFO(),
     // RZ (R255 zero register)
-    {"RZ", "R255", 4, REG_OFFSET(regular_zero), eEncodingUint, eFormatHex,
-     {2500,
+    {"RZ",
+     "R255",
+     4,
+     REG_OFFSET(regular_zero),
+     eEncodingUint,
+     eFormatHex,
+     {LLDB_INVALID_REGNUM,
       sass::GetDWARFEncodedRegister(REG_CLASS_REG_FULL, sass::SASS_ZERO_REG),
       LLDB_INVALID_REGNUM, LLDB_RZ, LLDB_RZ},
-     nullptr, nullptr, nullptr},
+     nullptr,
+     nullptr,
+     nullptr},
     // P0-P7
     GENERATE_ALL_PREDICATE_REGISTER_INFO(),
     // UR0-UR254
     GENERATE_ALL_UNIFORM_REGISTER_INFO(),
     // URZ (UR255 uniform zero register)
-    {"URZ", "UR255", 4, REG_OFFSET(uniform_zero), eEncodingUint, eFormatHex,
-     {2501,
+    {"URZ",
+     "UR255",
+     4,
+     REG_OFFSET(uniform_zero),
+     eEncodingUint,
+     eFormatHex,
+     {LLDB_INVALID_REGNUM,
       sass::GetDWARFEncodedRegister(REG_CLASS_UREG_FULL, sass::SASS_ZERO_REG),
       LLDB_INVALID_REGNUM, LLDB_URZ, LLDB_URZ},
-     nullptr, nullptr, nullptr},
+     nullptr,
+     nullptr,
+     nullptr},
     // UP0-UP7
     GENERATE_ALL_UNIFORM_PREDICATE_REGISTER_INFO()};
 
