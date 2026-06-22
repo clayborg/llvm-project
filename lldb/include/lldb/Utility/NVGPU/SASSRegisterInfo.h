@@ -38,9 +38,10 @@ struct RegisterLayout {
 /// Get the canonical register info table for SASS architecture.
 ///
 /// The returned array contains all SASS registers (PC, errorPC, SP, FP, RA,
-/// R0-R254, RZ, P0-P7, UR0-UR254, URZ, UP0-UP7) with proper DWARF,
-/// EH_FRAME, and generic register kind mappings. Entries are indexed by
-/// LLDB register number as defined in SASSRegisterNumbers.h. Each entry's
+/// R0-R254, RZ, P0-P7, UR0-UR254, URZ, UP0-UP7) with proper DWARF and generic
+/// register kind mappings. NVGPU has no .eh_frame, so the eh_frame slot is
+/// always LLDB_INVALID_REGNUM. Entries are indexed by LLDB register number as
+/// defined in SASSRegisterNumbers.h. Each entry's
 /// `byte_offset` / `byte_size` describe its placement inside a
 /// `RegisterLayout` buffer.
 llvm::ArrayRef<lldb_private::RegisterInfo> GetRegisterInfos();
