@@ -19,9 +19,9 @@ llvm::Expected<DeviceEntry> DeviceEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated device table entry");
   DeviceEntry out{};
-  out.devName = data.GetU64(offset_ptr);
-  out.devType = data.GetU64(offset_ptr);
-  out.smType = data.GetU64(offset_ptr);
+  out.devName = data.GetAddress(offset_ptr);
+  out.devType = data.GetAddress(offset_ptr);
+  out.smType = data.GetAddress(offset_ptr);
   out.devId = data.GetU32(offset_ptr);
   out.pciBusId = data.GetU32(offset_ptr);
   out.pciDevId = data.GetU32(offset_ptr);
@@ -55,14 +55,14 @@ llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
   // Since CUDA driver r555.
   out.exception = data.GetU32(offset_ptr);
   out.errorPCValid = data.GetU32(offset_ptr);
-  out.errorPC = data.GetU64(offset_ptr);
+  out.errorPC = data.GetAddress(offset_ptr);
   out.clusterExceptionTargetBlockIdxValid = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxX = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxY = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxZ = data.GetU32(offset_ptr);
   // Since CUDA driver r580 (CUDBG API revision 163).
 #if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(163)
-  out.exceptionString = data.GetU64(offset_ptr);
+  out.exceptionString = data.GetAddress(offset_ptr);
 #endif
   return out;
 }
@@ -73,14 +73,14 @@ llvm::Expected<GridEntry> GridEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated grid table entry");
   GridEntry out{};
-  out.gridId64 = data.GetU64(offset_ptr);
-  out.contextId = data.GetU64(offset_ptr);
-  out.function = data.GetU64(offset_ptr);
-  out.functionEntry = data.GetU64(offset_ptr);
-  out.moduleHandle = data.GetU64(offset_ptr);
+  out.gridId64 = data.GetAddress(offset_ptr);
+  out.contextId = data.GetAddress(offset_ptr);
+  out.function = data.GetAddress(offset_ptr);
+  out.functionEntry = data.GetAddress(offset_ptr);
+  out.moduleHandle = data.GetAddress(offset_ptr);
   // Deprecated since CUDA 13.4 (formerly parentGridId64); kept for ABI.
-  out.reserved0 = data.GetU64(offset_ptr);
-  out.paramsOffset = data.GetU64(offset_ptr);
+  out.reserved0 = data.GetAddress(offset_ptr);
+  out.paramsOffset = data.GetAddress(offset_ptr);
   out.kernelType = data.GetU32(offset_ptr);
   out.origin = data.GetU32(offset_ptr);
   out.gridStatus = data.GetU32(offset_ptr);
@@ -112,7 +112,7 @@ llvm::Expected<CTAEntry> CTAEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated CTA table entry");
   CTAEntry out{};
-  out.gridId64 = data.GetU64(offset_ptr);
+  out.gridId64 = data.GetAddress(offset_ptr);
   out.blockIdxX = data.GetU32(offset_ptr);
   out.blockIdxY = data.GetU32(offset_ptr);
   out.blockIdxZ = data.GetU32(offset_ptr);
@@ -135,7 +135,7 @@ llvm::Expected<WarpEntry> WarpEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated warp table entry");
   WarpEntry out{};
-  out.errorPC = data.GetU64(offset_ptr);
+  out.errorPC = data.GetAddress(offset_ptr);
   out.warpId = data.GetU32(offset_ptr);
   out.validLanesMask = data.GetU32(offset_ptr);
   out.activeLanesMask = data.GetU32(offset_ptr);
@@ -157,7 +157,7 @@ llvm::Expected<WarpEntry> WarpEntry::Decode(const DataExtractor &data,
 #if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
   out.barrierScope = data.GetU32(offset_ptr);
   out.padding3 = data.GetU32(offset_ptr);
-  out.additionalBarrierInfo = data.GetU64(offset_ptr);
+  out.additionalBarrierInfo = data.GetAddress(offset_ptr);
 #endif
   return out;
 }
@@ -168,8 +168,8 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated lane table entry");
   LaneEntry out{};
-  out.virtualPC = data.GetU64(offset_ptr);
-  out.physPC = data.GetU64(offset_ptr);
+  out.virtualPC = data.GetAddress(offset_ptr);
+  out.physPC = data.GetAddress(offset_ptr);
   out.ln = data.GetU32(offset_ptr);
   out.threadIdxX = data.GetU32(offset_ptr);
   out.threadIdxY = data.GetU32(offset_ptr);
@@ -197,7 +197,7 @@ llvm::Expected<ConstBankEntry> ConstBankEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated constbank table entry");
   ConstBankEntry out{};
-  out.addr = data.GetU64(offset_ptr);
+  out.addr = data.GetAddress(offset_ptr);
   out.size = data.GetU32(offset_ptr);
   out.bankId = data.GetU32(offset_ptr);
   return out;
