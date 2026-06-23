@@ -200,19 +200,23 @@ Status RegisterContextNVGPU::ReadRegister(const RegisterInfo *reg_info,
       return Status("RA register is invalid");
   } else if (reg_num >= static_cast<int>(sass::kNumSASSRegs)) {
     return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
-  } else if (int up_index = reg_num - sass::LLDB_UP0; up_index >= 0) {
+  } else if (int up_index = reg_num - sass::LLDB_UP0;
+             up_index >= 0 && up_index < static_cast<int>(sass::kNumUPRegs)) {
     if (!regs.is_valid.uniform_predicate[up_index])
       return Status::FromErrorStringWithFormatv("UP{} register is invalid",
                                                 up_index);
-  } else if (int p_index = reg_num - sass::LLDB_P0; p_index >= 0) {
+  } else if (int p_index = reg_num - sass::LLDB_P0;
+             p_index >= 0 && p_index < static_cast<int>(sass::kNumPRegs)) {
     if (!regs.is_valid.predicate[p_index])
       return Status::FromErrorStringWithFormatv("P{} register is invalid",
                                                 p_index);
-  } else if (int ur_index = reg_num - sass::LLDB_UR0; ur_index >= 0) {
+  } else if (int ur_index = reg_num - sass::LLDB_UR0;
+             ur_index >= 0 && ur_index < static_cast<int>(sass::kNumURRegs)) {
     if (!regs.is_valid.uniform[ur_index])
       return Status::FromErrorStringWithFormatv("UR{} register is invalid",
                                                 ur_index);
-  } else if (int r_index = reg_num - sass::LLDB_R0; r_index >= 0) {
+  } else if (int r_index = reg_num - sass::LLDB_R0;
+             r_index >= 0 && r_index < static_cast<int>(sass::kNumRRegs)) {
     if (!regs.is_valid.regular[r_index])
       return Status::FromErrorStringWithFormatv("R{} register is invalid",
                                                 r_index);
