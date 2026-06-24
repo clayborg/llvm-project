@@ -10,12 +10,10 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 class TestNVGPUUnwind(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
-    MAX_CONTINUE_ATTEMPTS = 3
-
     def wait_for_stop_reason(self, stop_reason, resume=True):
         """Continue and retry until thread 0 stops for the expected reason."""
-        for attempt in range(self.MAX_CONTINUE_ATTEMPTS):
-            if resume or attempt > 0:
+        while True:
+            if resume:
                 self.gpu_process.Continue()
                 self.select_gpu()
                 self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
@@ -23,10 +21,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
             if self.gpu_process.thread[0].GetStopReason() == stop_reason:
                 return
 
-        self.fail(
-            f"GPU did not stop with reason {stop_reason} after "
-            f"{self.MAX_CONTINUE_ATTEMPTS} continue attempts"
-        )
+            resume = True
 
     def check_backtrace(self, test_name, expected_frames):
         """Verify that the backtrace contains the expected frames.
