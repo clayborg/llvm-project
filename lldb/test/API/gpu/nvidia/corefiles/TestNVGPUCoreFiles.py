@@ -37,7 +37,23 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
     def get_stopped_thread(self):
         return self.get_thread(13, 0)
 
-    def test_thread_list(self):
+    def test_core_files(self):
+        """Exercise all NVGPU core file behaviors within a single run directory."""
+        self._test_thread_list()
+        self._test_stop_reasons()
+        self._test_backtrace("")
+        self._test_backtrace("skip_nonrelocated_elf_images")
+        self._test_backtrace("faulted_contexts_only")
+        self._test_backtrace("no_errbar_at_exit")
+        self._test_read_global_memory()
+        self._test_read_constant_memory()
+        self._test_read_shared_memory()
+        self._test_read_local_memory()
+        self._test_frame_variables()
+        self._test_read_pc()
+        self._test_register_sanity()
+
+    def _test_thread_list(self):
         """Thread list shows block/thread coordinates from the kernel launch."""
         _, gpu_process = self.generate_and_load_core()
 
@@ -46,7 +62,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         thread = self.get_stopped_thread()
         self.assertTrue(thread.IsValid())
 
-    def test_stop_reasons(self):
+    def _test_stop_reasons(self):
         """Each exception type, selected via a command-line argument, produces
         the expected stop reason on the faulting CTA."""
         for exception_type, (expected_reason, expected_desc) in self.STOP_REASONS.items():
@@ -56,7 +72,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             self.assertIn(expected_desc, thread.GetStopDescription(256))
             self.assertEqual(thread.GetStopReason(), expected_reason)
 
-    def _test_cubin_symbols_and_backtrace_with_flags(self, flags):
+    def _test_backtrace(self, flags):
         """Cubin modules from the core file provide symbols and debug info for backtraces."""
         gpu_target, gpu_process = self.generate_and_load_core(flags=flags)
         thread = self.get_stopped_thread()
@@ -108,14 +124,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             "Backtrace should terminate without excessive frames",
         )
 
-    def test_backtrace(self):
-        """Use the backtrace test to exercise various core file generation flags."""
-        self._test_cubin_symbols_and_backtrace_with_flags("")
-        self._test_cubin_symbols_and_backtrace_with_flags("skip_nonrelocated_elf_images")
-        self._test_cubin_symbols_and_backtrace_with_flags("faulted_contexts_only")
-        self._test_cubin_symbols_and_backtrace_with_flags("no_errbar_at_exit")
-
-    def test_read_global_memory(self):
+    def _test_read_global_memory(self):
         """Global memory in global_data matches values written by the faulting CTA."""
 
         _, gpu_process = self.generate_and_load_core()
@@ -139,7 +148,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             substrs=["core file does not contain"],
         )
 
-    def test_read_constant_memory(self):
+    def _test_read_constant_memory(self):
         """Constant memory in constant_data matches the static initializer values."""
 
         _, gpu_process = self.generate_and_load_core()
@@ -161,7 +170,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             substrs=["core file does not contain"],
         )
 
-    def test_read_shared_memory(self):
+    def _test_read_shared_memory(self):
         """Shared memory in shared_data matches values written by the faulting CTA."""
 
         _, gpu_process = self.generate_and_load_core()
@@ -184,7 +193,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             substrs=["core file does not contain"],
         )
 
-    def test_read_local_memory(self):
+    def _test_read_local_memory(self):
         """Local memory at middle_scalar matches the value written by the faulting lane."""
         _, gpu_process = self.generate_and_load_core()
         thread = self.get_stopped_thread()
@@ -218,7 +227,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             substrs=["core file does not contain"],
         )
 
-    def test_frame_variables(self):
+    def _test_frame_variables(self):
         """Typed locals (scalar, array, struct) in a middle (caller) frame are
         reconstructed after unwinding and format correctly via `frame variable`."""
         _, gpu_process = self.generate_and_load_core()
@@ -244,7 +253,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             substrs=["middle_point", "x = 0x0000000d", "y = 0x00000000"],
         )
 
-    def test_read_pc(self):
+    def _test_read_pc(self):
         """PC register on the trapped lane points within the trap source line."""
         gpu_target, gpu_process = self.generate_and_load_core()
         gpu_process.SetSelectedThread(self.get_stopped_thread())
@@ -266,7 +275,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         self.assertGreaterEqual(pc, line_start)
         self.assertLessEqual(pc, line_end)
 
-    def test_register_sanity(self):
+    def _test_register_sanity(self):
         """RZ, URZ, and register groups are correct on the faulting lane."""
         _, gpu_process = self.generate_and_load_core()
         gpu_process.SetSelectedThread(self.get_stopped_thread())
