@@ -13,6 +13,7 @@
 #include "ProcessNVGPU.h"
 #include "ThreadNVGPU.h"
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
+#include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
@@ -21,6 +22,10 @@
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::lldb_server;
+
+using sass::kNumUPRegs;
+using sass::kNumURRegs;
+using namespace sass::regnum;
 
 RegisterContextNVGPU::RegisterContextNVGPU(ThreadNVGPU &thread)
     : NativeRegisterContext(thread) {}
@@ -37,7 +42,7 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
 
 static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
                                            const ThreadCoords &thread_coords,
-                                           ThreadRegistersWithValidity &regs) {
+                                           ThreadRegisterCache &regs) {
   uint32_t num_regs_read = warp_state.GetCurrentNumRegularRegisters();
   // Always call the stable 7-arg entry point. It lives at a fixed offset in
   // every in-major driver's API table, so it works regardless of the
@@ -62,10 +67,10 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
     regs.is_valid.regular[i] = true;
 }
 
-static void
-ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                 const ThreadCoords &thread_coords,
-                                 ThreadRegistersWithValidity &regs) {
+static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
+                                             CUDBGAPI api,
+                                             const ThreadCoords &thread_coords,
+                                             ThreadRegisterCache &regs) {
   size_t num_regs = device_info.GetNumPredicateRegisters();
   if (num_regs == 0)
     return;
@@ -83,13 +88,12 @@ ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
     regs.is_valid.predicate[i] = true;
 }
 
-const ThreadRegistersWithValidity &
-RegisterContextNVGPU::ReadAllRegsFromDevice() {
+const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
   if (m_regs)
     return *m_regs;
 
   m_regs.emplace();
-  ThreadRegistersWithValidity &regs = *m_regs;
+  ThreadRegisterCache &regs = *m_regs;
   ThreadNVGPU &thread = GetGPUThread();
   const ThreadState *thread_state = thread.GetThreadState();
 
@@ -124,7 +128,7 @@ RegisterContextNVGPU::ReadAllRegsFromDevice() {
   ReadRegularRegistersFromDevice(api, warp_state, thread_coords, regs);
   ReadPredicateRegistersFromDevice(device_info, api, thread_coords, regs);
 
-  const WarpRegistersWithValidity &warp_regs = warp_state.GetRegisters();
+  const WarpSharedRegisterCache &warp_regs = warp_state.GetRegisters();
 
   std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
             regs.val.uniform);
@@ -180,43 +184,43 @@ RegisterContextNVGPU::GetRegisterSet(uint32_t set_index) const {
 
 Status RegisterContextNVGPU::ReadRegister(const RegisterInfo *reg_info,
                                           RegisterValue &reg_value) {
-  const ThreadRegistersWithValidity &regs = ReadAllRegsFromDevice();
+  const ThreadRegisterCache &regs = ReadAllRegsFromDevice();
   int reg_num = reg_info->kinds[eRegisterKindLLDB];
 
-  if (reg_num == sass::LLDB_SP)
-    reg_num = sass::LLDB_R0 + sass::SASS_SP_REG;
-  if (reg_num == sass::LLDB_FP)
-    reg_num = sass::LLDB_R0 + sass::SASS_FP_REG;
+  if (reg_num == LLDB_SP)
+    reg_num = LLDB_R_BASE + SASS_SP;
+  if (reg_num == LLDB_FP)
+    reg_num = LLDB_R_BASE + SASS_FP;
 
-  if (reg_num == sass::LLDB_PC) {
+  if (reg_num == LLDB_PC) {
     if (!regs.is_valid.PC)
       return Status("PC register is invalid");
-  } else if (reg_num == sass::LLDB_ERROR_PC) {
+  } else if (reg_num == LLDB_ERROR_PC) {
     if (!regs.is_valid.errorPC)
       return Status("errorPC register is invalid");
-  } else if (reg_num == sass::LLDB_RA) {
-    if (!regs.is_valid.regular[sass::SASS_RA_REG_LO] ||
-        !regs.is_valid.regular[sass::SASS_RA_REG_HI])
+  } else if (reg_num == LLDB_RA) {
+    if (!regs.is_valid.regular[SASS_RA_LO] ||
+        !regs.is_valid.regular[SASS_RA_HI])
       return Status("RA register is invalid");
-  } else if (reg_num >= static_cast<int>(sass::kNumSASSRegs)) {
+  } else if (reg_num >= static_cast<int>(LLDB_REG_COUNT)) {
     return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
-  } else if (int up_index = reg_num - sass::LLDB_UP0;
-             up_index >= 0 && up_index < static_cast<int>(sass::kNumUPRegs)) {
+  } else if (IsUniformPredicateLLDB(reg_num)) {
+    int up_index = reg_num - LLDB_UP_BASE;
     if (!regs.is_valid.uniform_predicate[up_index])
       return Status::FromErrorStringWithFormatv("UP{} register is invalid",
                                                 up_index);
-  } else if (int p_index = reg_num - sass::LLDB_P0;
-             p_index >= 0 && p_index < static_cast<int>(sass::kNumPRegs)) {
+  } else if (IsPredicateLLDB(reg_num)) {
+    int p_index = reg_num - LLDB_P_BASE;
     if (!regs.is_valid.predicate[p_index])
       return Status::FromErrorStringWithFormatv("P{} register is invalid",
                                                 p_index);
-  } else if (int ur_index = reg_num - sass::LLDB_UR0;
-             ur_index >= 0 && ur_index < static_cast<int>(sass::kNumURRegs)) {
+  } else if (IsUniformLLDB(reg_num)) {
+    int ur_index = reg_num - LLDB_UR_BASE;
     if (!regs.is_valid.uniform[ur_index])
       return Status::FromErrorStringWithFormatv("UR{} register is invalid",
                                                 ur_index);
-  } else if (int r_index = reg_num - sass::LLDB_R0;
-             r_index >= 0 && r_index < static_cast<int>(sass::kNumRRegs)) {
+  } else if (IsRegularLLDB(reg_num)) {
+    int r_index = reg_num - LLDB_R_BASE;
     if (!regs.is_valid.regular[r_index])
       return Status::FromErrorStringWithFormatv("R{} register is invalid",
                                                 r_index);
@@ -248,42 +252,20 @@ std::vector<uint32_t>
 RegisterContextNVGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
   static std::vector<uint32_t> g_expedited_regs;
   if (g_expedited_regs.empty()) {
-    g_expedited_regs.push_back(sass::LLDB_PC);
-    g_expedited_regs.push_back(sass::LLDB_ERROR_PC);
-    g_expedited_regs.push_back(sass::LLDB_SP);
-    g_expedited_regs.push_back(sass::LLDB_FP);
-    g_expedited_regs.push_back(sass::LLDB_RA);
+    g_expedited_regs.push_back(LLDB_PC);
+    g_expedited_regs.push_back(LLDB_ERROR_PC);
+    g_expedited_regs.push_back(LLDB_SP);
+    g_expedited_regs.push_back(LLDB_FP);
+    g_expedited_regs.push_back(LLDB_RA);
     for (uint32_t i = 0; i < sass::kNumRRegs; ++i)
-      g_expedited_regs.push_back(sass::LLDB_R0 + i);
+      g_expedited_regs.push_back(LLDB_R_BASE + i);
   }
   return g_expedited_regs;
 }
 
 std::optional<uint64_t> RegisterContextNVGPU::ReadErrorPC() {
-  const ThreadRegistersWithValidity &regs = ReadAllRegsFromDevice();
+  const ThreadRegisterCache &regs = ReadAllRegsFromDevice();
   if (regs.is_valid.errorPC)
     return regs.val.errorPC;
   return std::nullopt;
-}
-
-ThreadRegisterValidity::ThreadRegisterValidity() {
-  PC = false;
-  errorPC = false;
-  for (size_t i = 0; i < kNumRRegs; ++i)
-    regular[i] = false;
-  regular_zero = false;
-  for (size_t i = 0; i < kNumPRegs; ++i)
-    predicate[i] = false;
-  for (size_t i = 0; i < kNumURRegs; ++i)
-    uniform[i] = false;
-  uniform_zero = false;
-  for (size_t i = 0; i < kNumUPRegs; ++i)
-    uniform_predicate[i] = false;
-}
-
-WarpRegisterValidity::WarpRegisterValidity() {
-  for (size_t i = 0; i < kNumURRegs; ++i)
-    uniform[i] = false;
-  for (size_t i = 0; i < kNumUPRegs; ++i)
-    uniform_predicate[i] = false;
 }

@@ -20,11 +20,11 @@ namespace sass {
 
 /// Canonical packed register buffer for SASS. Every `RegisterInfo::byte_offset`
 /// returned by `GetRegisterInfos()` is computed against this struct, so a
-/// buffer of size `sizeof(RegisterLayout)` -- indexed by `byte_offset` -- is
+/// buffer of size `sizeof(ThreadRegisters)` -- indexed by `byte_offset` -- is
 /// the format LLDB's `RegisterValue::SetFromMemoryData` /
 /// `RegisterValue::GetAsMemoryData` expect when reading or writing a register
 /// from its raw bytes.
-struct RegisterLayout {
+struct ThreadRegisters {
   uint64_t PC;
   uint64_t errorPC;
   uint32_t regular[kNumRRegs];            ///< R0..R254
@@ -35,6 +35,32 @@ struct RegisterLayout {
   uint32_t uniform_predicate[kNumUPRegs]; ///< UP0..UP7
 };
 
+// TODO: make this a bitfield
+/// Store the validity of a ThreadRegisters.
+struct ThreadRegistersValidity {
+  bool PC = false;
+  bool errorPC = false;
+  bool regular[kNumRRegs] = {};
+  bool regular_zero = false;
+  bool predicate[kNumPRegs] = {};
+  bool uniform[kNumURRegs] = {};
+  bool uniform_zero = false;
+  bool uniform_predicate[kNumUPRegs] = {};
+};
+
+/// Store the values of the shared registers for a single warp.
+/// Will be used to populate `ThreadRegisters::uniform` and
+/// `ThreadRegisters::uniform_predicate`.
+struct WarpSharedRegisters {
+  uint32_t uniform[kNumURRegs];
+  uint32_t uniform_predicate[kNumUPRegs];
+};
+
+struct WarpSharedRegistersValidity {
+  bool uniform[kNumURRegs] = {};
+  bool uniform_predicate[kNumUPRegs] = {};
+};
+
 /// Get the canonical register info table for SASS architecture.
 ///
 /// The returned array contains all SASS registers (PC, errorPC, SP, FP, RA,
@@ -43,7 +69,7 @@ struct RegisterLayout {
 /// always LLDB_INVALID_REGNUM. Entries are indexed by LLDB register number as
 /// defined in SASSRegisterNumbers.h. Each entry's
 /// `byte_offset` / `byte_size` describe its placement inside a
-/// `RegisterLayout` buffer.
+/// `ThreadRegisters` buffer.
 llvm::ArrayRef<lldb_private::RegisterInfo> GetRegisterInfos();
 
 /// Get the register sets for SASS architecture.
