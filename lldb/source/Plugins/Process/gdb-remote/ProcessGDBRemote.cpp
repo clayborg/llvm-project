@@ -1012,7 +1012,13 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   if (gpu_action.resume_gpu_process) {
     LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) "
              "gpu_action.resume_gpu_process");
-    error = gpu_process->Resume();
+    // XXX IntelGT Use case: Use PrivateResume() instead of Resume() to
+    // accomodate IntelGT flow. less intrusive approach.
+    if(GetTarget().GetArchitecture().GetTriple().isIntelGPU()) {
+      error = gpu_process->PrivateResume();
+    } else {
+      error = gpu_process->Resume();
+    }
     if (error.Fail()) {
       LLDB_LOG(log, "ProcessGDBRemote::HandleGPUActions(...) GPU process "
                "failed to resume {0}", error);
