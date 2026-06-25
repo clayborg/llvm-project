@@ -20,7 +20,7 @@ public:
   /// Construct a RegisterContext for a `ThreadNVGPUCore`. Decodes the lane,
   /// warp, and device rows and copies the lane's per-class register slices
   /// (R/P/UR/UP) into `m_register_data`, which is laid out exactly like
-  /// `sass::RegisterLayout`. After construction, `ReadRegister` /
+  /// `sass::ThreadRegisters`. After construction, `ReadRegister` /
   /// `ReadAllRegisterValues` are direct memory reads against that buffer.
   ///
   /// \pre `thread` must be a `ThreadNVGPUCore`.
@@ -57,13 +57,13 @@ public:
   bool WriteAllRegisterValues(const lldb::DataBufferSP &data_sp) override;
 
 private:
-  /// Packed register buffer matching `sass::RegisterLayout`. The constructor
+  /// Packed register buffer matching `sass::ThreadRegisters`. The constructor
   /// fills it from the corefile's lane / warp / register / predicate
   /// sections; everything not present in the corefile stays zero. Each
   /// `RegisterInfo::byte_offset` / `byte_size` from `sass::GetRegisterInfos()`
   /// indexes directly into this buffer, so register reads are a single
   /// `SetFromMemoryData` call -- no per-class dispatch.
-  sass::RegisterLayout m_register_data{};
+  sass::ThreadRegisters m_register_data{};
 };
 
 } // namespace lldb_private
