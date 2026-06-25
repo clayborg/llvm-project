@@ -130,7 +130,7 @@ bool RegisterContextNVGPUCore::ReadRegister(const RegisterInfo *reg_info,
   }
 
   // Every RegisterInfo from `sass::GetRegisterInfos()` has its `byte_offset`
-  // computed against `sass::RegisterLayout` -- which is exactly the layout
+  // computed against `sass::ThreadRegisters` -- which is exactly the layout
   // of `m_register_data`. So a register read is a `byte_offset + byte_size`
   // slice of that buffer, with no per-class dispatch.
   const uint32_t offset = reg_info->byte_offset;
