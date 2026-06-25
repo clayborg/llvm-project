@@ -285,6 +285,10 @@ public:
     return m_threads[0].GetCoords().GetWarpCoords();
   }
 
+  /// \return
+  ///     The grid ID for this warp.
+  uint64_t GetGridId() const { return m_grid_id; }
+
 private:
   /// Whether this warp is valid in the GPU.
   bool m_is_valid = false;
@@ -310,6 +314,9 @@ private:
 
   /// The streaming multiprocessor state that this warp belongs to.
   SMState *m_sm_state;
+
+  /// The grid ID for this warp.
+  uint64_t m_grid_id;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).
@@ -469,6 +476,10 @@ public:
   /// \return
   ///     A reference to the CUDA debugger API.
   CUDBGAPI &GetAPI() { return m_api; }
+
+  /// \return
+  ///     The number of threads per warp on this device.
+  uint32_t GetNumThreadsPerWarp() const { return m_num_threads_per_warp; }
 
 private:
   /// Decode device information from a buffer received from CUDA debugger API.
