@@ -294,6 +294,70 @@ static constexpr void BuildCommonRegisters(RegisterInfoTable &infos) {
                             nullptr};
 }
 
+static constexpr void BuildCUDABuiltins(RegisterInfoTable &infos) {
+  infos[regnum::LLDB_VREG_THREAD_IDX] = {
+      "threadIdx",
+      nullptr,
+      12,
+      REG_OFFSET(thread_idx),
+      lldb::eEncodingVector,
+      lldb::eFormatVectorOfUInt32,
+      {LLDB_INVALID_REGNUM, regnum::DWARF_PSEUDO_THREAD_IDX,
+       LLDB_INVALID_REGNUM, regnum::LLDB_VREG_THREAD_IDX,
+       regnum::LLDB_VREG_THREAD_IDX},
+      nullptr,
+      nullptr,
+      nullptr};
+  infos[regnum::LLDB_VREG_BLOCK_IDX] = {
+      "blockIdx",
+      nullptr,
+      12,
+      REG_OFFSET(block_idx),
+      lldb::eEncodingVector,
+      lldb::eFormatVectorOfUInt32,
+      {LLDB_INVALID_REGNUM, regnum::DWARF_PSEUDO_BLOCK_IDX, LLDB_INVALID_REGNUM,
+       regnum::LLDB_VREG_BLOCK_IDX, regnum::LLDB_VREG_BLOCK_IDX},
+      nullptr,
+      nullptr,
+      nullptr};
+  infos[regnum::LLDB_VREG_BLOCK_DIM] = {
+      "blockDim",
+      nullptr,
+      12,
+      REG_OFFSET(block_dim),
+      lldb::eEncodingVector,
+      lldb::eFormatVectorOfUInt32,
+      {LLDB_INVALID_REGNUM, regnum::DWARF_PSEUDO_BLOCK_DIM, LLDB_INVALID_REGNUM,
+       regnum::LLDB_VREG_BLOCK_DIM, regnum::LLDB_VREG_BLOCK_DIM},
+      nullptr,
+      nullptr,
+      nullptr};
+  infos[regnum::LLDB_VREG_GRID_DIM] = {
+      "gridDim",
+      nullptr,
+      12,
+      REG_OFFSET(grid_dim),
+      lldb::eEncodingVector,
+      lldb::eFormatVectorOfUInt32,
+      {LLDB_INVALID_REGNUM, regnum::DWARF_PSEUDO_GRID_DIM, LLDB_INVALID_REGNUM,
+       regnum::LLDB_VREG_GRID_DIM, regnum::LLDB_VREG_GRID_DIM},
+      nullptr,
+      nullptr,
+      nullptr};
+  infos[regnum::LLDB_VREG_WARP_SIZE] = {
+      "warpSize",
+      nullptr,
+      4,
+      REG_OFFSET(warp_size),
+      lldb::eEncodingSint,
+      lldb::eFormatDecimal,
+      {LLDB_INVALID_REGNUM, regnum::DWARF_PSEUDO_WARP_SIZE, LLDB_INVALID_REGNUM,
+       regnum::LLDB_VREG_WARP_SIZE, regnum::LLDB_VREG_WARP_SIZE},
+      nullptr,
+      nullptr,
+      nullptr};
+}
+
 // Register-set membership arrays. Each register class is a contiguous run of
 // LLDB register numbers, so the arrays are generated at compile time.
 static constexpr std::array<uint32_t, 5> g_gpr_regnums = {
@@ -329,6 +393,10 @@ static constexpr auto g_uniform_predicate_regnums = [] {
   return regs;
 }();
 
+static constexpr std::array<uint32_t, 5> g_cuda_builtins_regnums = {
+    LLDB_VREG_THREAD_IDX, LLDB_VREG_BLOCK_IDX, LLDB_VREG_BLOCK_DIM,
+    LLDB_VREG_GRID_DIM, LLDB_VREG_WARP_SIZE};
+
 static const lldb_private::RegisterSet g_reg_sets[] = {
     {"General Purpose Registers", "gpr", g_gpr_regnums.size(),
      g_gpr_regnums.data()},
@@ -339,7 +407,9 @@ static const lldb_private::RegisterSet g_reg_sets[] = {
     {"Uniform Registers", "ur", g_uniform_regnums.size(),
      g_uniform_regnums.data()},
     {"Uniform Predicate Registers", "up", g_uniform_predicate_regnums.size(),
-     g_uniform_predicate_regnums.data()}};
+     g_uniform_predicate_regnums.data()},
+    {"CUDA Builtins", "cuda_builtins", g_cuda_builtins_regnums.size(),
+     g_cuda_builtins_regnums.data()}};
 
 static constexpr auto g_reg_infos = [] {
   RegisterInfoTable infos{};
@@ -349,6 +419,7 @@ static constexpr auto g_reg_infos = [] {
   BuildPredicateRange(infos);
   BuildUniformRange(infos);
   BuildUniformPredicateRange(infos);
+  BuildCUDABuiltins(infos);
 
   return infos;
 }();

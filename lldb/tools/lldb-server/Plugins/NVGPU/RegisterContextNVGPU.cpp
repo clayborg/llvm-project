@@ -88,6 +88,47 @@ static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
     regs.is_valid.predicate[i] = true;
 }
 
+static void ReadCUDABuiltinsFromDevice(CUDBGAPI api,
+                                       const WarpState &warp_state,
+                                       const ThreadState &thread_state,
+                                       ThreadRegisterCache &regs) {
+  const CUDBGGridInfo &grid_info =
+      warp_state.GetSMState().GetDeviceState().GetGridInfo(
+          warp_state.GetGridId());
+
+  regs.val.thread_idx[0] = thread_state.GetThreadIdx().x;
+  regs.val.thread_idx[1] = thread_state.GetThreadIdx().y;
+  regs.val.thread_idx[2] = thread_state.GetThreadIdx().z;
+  regs.is_valid.thread_idx[0] = true;
+  regs.is_valid.thread_idx[1] = true;
+  regs.is_valid.thread_idx[2] = true;
+
+  regs.val.block_idx[0] = warp_state.GetBlockIdx().x;
+  regs.val.block_idx[1] = warp_state.GetBlockIdx().y;
+  regs.val.block_idx[2] = warp_state.GetBlockIdx().z;
+  regs.is_valid.block_idx[0] = true;
+  regs.is_valid.block_idx[1] = true;
+  regs.is_valid.block_idx[2] = true;
+
+  regs.val.block_dim[0] = grid_info.blockDim.x;
+  regs.val.block_dim[1] = grid_info.blockDim.y;
+  regs.val.block_dim[2] = grid_info.blockDim.z;
+  regs.is_valid.block_dim[0] = true;
+  regs.is_valid.block_dim[1] = true;
+  regs.is_valid.block_dim[2] = true;
+
+  regs.val.grid_dim[0] = grid_info.gridDim.x;
+  regs.val.grid_dim[1] = grid_info.gridDim.y;
+  regs.val.grid_dim[2] = grid_info.gridDim.z;
+  regs.is_valid.grid_dim[0] = true;
+  regs.is_valid.grid_dim[1] = true;
+  regs.is_valid.grid_dim[2] = true;
+
+  regs.val.warp_size =
+      warp_state.GetSMState().GetDeviceState().GetNumThreadsPerWarp();
+  regs.is_valid.warp_size = true;
+}
+
 const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
   if (m_regs)
     return *m_regs;
@@ -150,6 +191,8 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
     regs.val.uniform_zero = 0;
     regs.is_valid.uniform_zero = true;
   }
+
+  ReadCUDABuiltinsFromDevice(api, warp_state, *thread_state, regs);
 
   return regs;
 }
