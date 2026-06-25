@@ -24,6 +24,8 @@ constexpr uint32_t kNumRRegs = 255;  /// R0-R254
 constexpr uint32_t kNumPRegs = 8;    /// P0-P7
 constexpr uint32_t kNumURRegs = 255; /// UR0-UR254
 constexpr uint32_t kNumUPRegs = 8;   /// UP0-UP7
+/// Field count of CUDA's uint3/dim3 vectors (x, y, z).
+constexpr uint32_t kNumXYZComponents = 3;
 
 namespace regnum {
 
@@ -62,6 +64,11 @@ enum DWARFPseudoRegNum : uint32_t {
   DWARF_PSEUDO_INVALID,
   DWARF_PSEUDO_PC,
   DWARF_PSEUDO_ERROR_PC,
+  DWARF_PSEUDO_THREAD_IDX,
+  DWARF_PSEUDO_BLOCK_IDX,
+  DWARF_PSEUDO_BLOCK_DIM,
+  DWARF_PSEUDO_GRID_DIM,
+  DWARF_PSEUDO_WARP_SIZE,
 };
 
 /// Special SASS hardware register indices.
@@ -89,6 +96,11 @@ enum LLDBRegNum : uint32_t {
   SASS_REG_RANGE(LLDB_UR, kNumURRegs),
   LLDB_URZ,
   SASS_REG_RANGE(LLDB_UP, kNumUPRegs),
+  LLDB_VREG_THREAD_IDX,
+  LLDB_VREG_BLOCK_IDX,
+  LLDB_VREG_BLOCK_DIM,
+  LLDB_VREG_GRID_DIM,
+  LLDB_VREG_WARP_SIZE,
   LLDB_REG_COUNT,
 };
 
