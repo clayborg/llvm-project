@@ -57,7 +57,7 @@ void ThreadState::Dump(Stream &s) {
 WarpState::WarpState(ProcessNVGPU &gpu, uint32_t num_threads,
                      uint32_t device_id, uint32_t sm_id, uint32_t warp_id,
                      SMState &sm_state)
-    : m_sm_state(&sm_state) {
+    : m_sm_state(&sm_state), m_grid_id(0) {
   m_threads.reserve(num_threads);
   for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
     m_threads.emplace_back(
