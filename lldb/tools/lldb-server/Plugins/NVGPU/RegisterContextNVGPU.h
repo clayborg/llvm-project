@@ -11,73 +11,23 @@
 
 #include "cudadebugger.h"
 #include "lldb/Host/common/NativeRegisterContext.h"
-#include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
+#include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/lldb-forward.h"
 
 namespace lldb_private::lldb_server {
 
 class ThreadNVGPU;
 
-using sass::kNumPRegs;
-using sass::kNumRRegs;
-using sass::kNumUPRegs;
-using sass::kNumURRegs;
-
-/// Store all the registers for a single thread.
-struct ThreadRegistersValues {
-  uint64_t PC;
-  uint64_t errorPC;
-  uint32_t regular[kNumRRegs];
-  uint32_t regular_zero; // R255 - zero register
-  uint32_t
-      predicate[kNumPRegs]; // Predicate registers (1-bit each, stored in bytes)
-  uint32_t uniform[kNumURRegs];           // Uniform registers
-  uint32_t uniform_zero;                  // UR255 - uniform zero register
-  uint32_t uniform_predicate[kNumUPRegs]; // Uniform predicate registers (1-bit
-                                          // each, stored in bytes)
+/// Store the values and validity of the thread registers.
+struct ThreadRegisterCache {
+  sass::ThreadRegisters val;
+  sass::ThreadRegistersValidity is_valid;
 };
 
-/// Store the validity of the registers.
-struct ThreadRegisterValidity {
-  bool PC;
-  bool errorPC;
-  bool regular[kNumRRegs];
-  bool regular_zero;                  // R255 validity
-  bool predicate[kNumPRegs];          // Predicate register validity
-  bool uniform[kNumURRegs];           // Uniform register validity
-  bool uniform_zero;                  // UR255 validity
-  bool uniform_predicate[kNumUPRegs]; // Uniform predicate register validity
-
-  ThreadRegisterValidity();
-};
-
-struct ThreadRegistersWithValidity {
-  ThreadRegisterValidity is_valid;
-  ThreadRegistersValues val;
-
-  ThreadRegistersWithValidity() = default;
-};
-
-/// Store all the registers for a single warp.
-struct WarpRegistersValues {
-  uint32_t uniform[kNumURRegs];           // Uniform registers
-  uint32_t uniform_predicate[kNumUPRegs]; // Uniform predicate registers (1-bit
-                                          // each, stored in bytes)
-};
-
-/// Store the validity of the registers for a single warp.
-struct WarpRegisterValidity {
-  bool uniform[kNumURRegs];           // Uniform register validity
-  bool uniform_predicate[kNumUPRegs]; // Uniform predicate register validity
-
-  WarpRegisterValidity();
-};
-
-struct WarpRegistersWithValidity {
-  WarpRegisterValidity is_valid;
-  WarpRegistersValues val;
-
-  WarpRegistersWithValidity() = default;
+/// Store the values and validity of warp-wide registers.
+struct WarpSharedRegisterCache {
+  sass::WarpSharedRegisters val;
+  sass::WarpSharedRegistersValidity is_valid;
 };
 
 class RegisterContextNVGPU : public NativeRegisterContext {
@@ -117,13 +67,13 @@ private:
   /// Read the registers from the device. The results are cached. Any failures
   /// to read individual registers are signaled in invalid states of the
   /// registers.
-  const ThreadRegistersWithValidity &ReadAllRegsFromDevice();
+  const ThreadRegisterCache &ReadAllRegsFromDevice();
 
   CUDBGAPI GetDebuggerAPI();
 
   ThreadNVGPU &GetGPUThread();
 
-  std::optional<ThreadRegistersWithValidity> m_regs;
+  std::optional<ThreadRegisterCache> m_regs;
 };
 
 } // namespace lldb_private::lldb_server
