@@ -116,6 +116,7 @@ size_t WarpState::DecodeWarpInfoBuffer(
   bool thread_attributes_present = false;
 
   m_block_idx = warp_info.blockIdx;
+  m_grid_id = warp_info.gridId;
   m_regs_calculated = false;
   m_current_num_regular_registers = std::nullopt;
   m_exception = std::nullopt;

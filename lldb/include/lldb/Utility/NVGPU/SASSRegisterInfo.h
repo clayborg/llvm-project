@@ -33,6 +33,12 @@ struct ThreadRegisters {
   uint32_t uniform[kNumURRegs];           ///< UR0..UR254
   uint32_t uniform_zero;                  ///< URZ (UR255, always reads 0)
   uint32_t uniform_predicate[kNumUPRegs]; ///< UP0..UP7
+  // Virtual registers for CUDA built-ins.
+  uint32_t thread_idx[kNumXYZComponents]; ///< CUDA threadIdx{x,y,z}
+  uint32_t block_idx[kNumXYZComponents];  ///< CUDA blockIdx{x,y,z}
+  uint32_t block_dim[kNumXYZComponents];  ///< CUDA blockDim{x,y,z}
+  uint32_t grid_dim[kNumXYZComponents];   ///< CUDA gridDim{x,y,z}
+  int32_t warp_size;                      ///< CUDA warpSize
 };
 
 // TODO: make this a bitfield
@@ -46,6 +52,11 @@ struct ThreadRegistersValidity {
   bool uniform[kNumURRegs] = {};
   bool uniform_zero = false;
   bool uniform_predicate[kNumUPRegs] = {};
+  bool thread_idx[kNumXYZComponents] = {};
+  bool block_idx[kNumXYZComponents] = {};
+  bool block_dim[kNumXYZComponents] = {};
+  bool grid_dim[kNumXYZComponents] = {};
+  bool warp_size = false;
 };
 
 /// Store the values of the shared registers for a single warp.
