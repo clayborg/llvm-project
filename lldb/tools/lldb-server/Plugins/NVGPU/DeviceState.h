@@ -269,7 +269,7 @@ public:
   ///
   /// \return
   ///     A reference to the registers for this warp.
-  const WarpRegistersWithValidity &GetRegisters();
+  const WarpSharedRegisterCache &GetRegisters();
 
   const BlockIdx &GetBlockIdx() const { return m_block_idx; }
 
@@ -299,8 +299,8 @@ private:
   /// this warp.
   std::optional<uint32_t> m_current_num_regular_registers;
 
-  /// The registers for this warp.
-  WarpRegistersWithValidity m_regs;
+  /// The registers shared by all threads in this warp.
+  WarpSharedRegisterCache m_shared_registers;
 
   /// Whether the registers for this warp have been calculated.
   bool m_regs_calculated = false;
@@ -404,7 +404,8 @@ public:
   ///     The ID of the CUDA device.
   uint32_t GetDeviceId() const { return m_device_id; }
 
-  /// Get the number of R registers available on this device. This is cached for the lifetime of the device.
+  /// Get the number of R registers available on this device. This is cached for
+  /// the lifetime of the device.
   ///
   /// \return
   ///     The number of R registers for the device.
