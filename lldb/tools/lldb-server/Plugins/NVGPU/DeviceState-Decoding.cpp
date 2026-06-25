@@ -30,7 +30,7 @@ static uint64_t CalculateFlatThreadIdx(const CuDim3 &base_thread_idx,
 /// Calculate the thread index for a thread given its linearized thread index
 /// and the block dimension.
 static ThreadIdx CalculateThreadIdx(uint64_t flat_thread_idx,
-                                 const CuDim3 &block_dim) {
+                                    const CuDim3 &block_dim) {
   ThreadIdx thread_idx;
   if (block_dim.x == 0 || block_dim.y == 0 || block_dim.z == 0)
     return thread_idx;
@@ -311,9 +311,8 @@ void DeviceState::DecodeDeviceInfoBuffer(
     if (!is_active)
       continue;
 
-    bool is_updated = sm_update_mask.has_value()
-                          ?  sm_update_mask->Get(sm_index)
-                          : true;
+    bool is_updated =
+        sm_update_mask.has_value() ? sm_update_mask->Get(sm_index) : true;
     LLDB_LOGV(log, "SM {} is updated: {}", sm_index, is_updated);
     if (is_updated)
       buffer_offset += m_sms[sm_index].DecodeSMInfoBuffer(

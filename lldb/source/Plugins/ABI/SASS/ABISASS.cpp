@@ -73,8 +73,8 @@ UnwindPlanSP ABISASS::CreateFunctionEntryUnwindPlan() {
   UnwindPlan::Row row;
 
   // Use LLDB register numbers to support the virtual RA register
-  const uint32_t lldb_sp = sass::LLDB_SP;
-  const uint32_t lldb_ra = sass::LLDB_RA;
+  const uint32_t lldb_sp = sass::regnum::LLDB_SP;
+  const uint32_t lldb_ra = sass::regnum::LLDB_RA;
 
   // At function entry, CFA is the stack pointer
   row.GetCFAValue().SetIsRegisterPlusOffset(lldb_sp, 0);
@@ -115,10 +115,10 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   plan_sp->SetUnwindPlanForSignalTrap(eLazyBoolNo);
 
   UnwindPlan::Row row;
-  const uint32_t lldb_sp = sass::LLDB_SP;
-  const uint32_t lldb_pc = sass::LLDB_PC;
-  const uint32_t lldb_ra =
-      sass::LLDB_RA; // This is our composite R20/R21 register
+  const uint32_t lldb_sp = sass::regnum::LLDB_SP;
+  const uint32_t lldb_pc = sass::regnum::LLDB_PC;
+  // This is our composite R21/R21 register
+  const uint32_t lldb_ra = sass::regnum::LLDB_RA;
 
   // CFA is the stack pointer
   row.GetCFAValue().SetIsRegisterPlusOffset(lldb_sp, 0);
@@ -162,8 +162,8 @@ bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
     return true;
 
   // For CUDA-encoded registers, extract the register number.
-  const uint32_t reg_class = sass::GetDWARFRegisterClass(dwarf_regnum);
-  const uint32_t reg_num = sass::GetDWARFRegisterNumber(dwarf_regnum);
+  const uint32_t reg_class = sass::regnum::GetDWARFRegisterClass(dwarf_regnum);
+  const uint32_t reg_num = sass::regnum::GetDWARFRegisterNumber(dwarf_regnum);
 
   // Handle non-CUDA encoded special registers.
   if (reg_class == 0) {
@@ -174,12 +174,12 @@ bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
   // Handle regular registers.
   if (reg_class == REG_CLASS_REG_FULL) {
     // Special registers.
-    if (reg_num == sass::SASS_SP_REG)   // r1: Stack pointer.
-      return false;                     // Preserved
-    if (reg_num == sass::SASS_FP_REG)   // r2: Frame pointer (when used).
-      return false;                     // Preserved
-    if (reg_num == sass::SASS_ZERO_REG) // r255: Zero register.
-      return false;                     // Special, never changes
+    if (reg_num == sass::regnum::SASS_SP)   // r1: Stack pointer.
+      return false;                         // Preserved
+    if (reg_num == sass::regnum::SASS_FP)   // r2: Frame pointer (when used).
+      return false;                         // Preserved
+    if (reg_num == sass::regnum::SASS_ZERO) // r255: Zero register.
+      return false;                         // Special, never changes
 
     // Preserved (callee-save) registers.
     if (reg_num >= 16 && reg_num <= 31) // r16-r31
@@ -206,7 +206,7 @@ bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
   // Handle uniform registers.
   if (reg_class == REG_CLASS_UREG_FULL) {
     // UR255 is the uniform zero register.
-    if (reg_num == sass::SASS_ZERO_REG)
+    if (reg_num == sass::regnum::SASS_ZERO)
       return false; // Special, never changes.
 
     // All other uniform registers are considered volatile.

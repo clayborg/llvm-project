@@ -10,11 +10,13 @@
 #include "../Utils/Utils.h"
 #include "ProcessNVGPU.h"
 #include "ThreadNVGPU.h"
+#include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/Utility/StreamString.h"
 #include <numeric>
 
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
+using namespace lldb_private::sass;
 
 std::string ThreadCoords::Dump() const {
   return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} thread_id = {}",
@@ -102,7 +104,7 @@ size_t WarpState::GetCurrentNumRegularRegisters() {
 static void ReadUniformRegistersFromDevice(DeviceState &device_info,
                                            CUDBGAPI api,
                                            const WarpCoords &warp_coords,
-                                           WarpRegistersWithValidity &regs) {
+                                           WarpSharedRegisterCache &regs) {
   size_t num_regs = device_info.GetNumUniformRegisters();
   if (num_regs == 0)
     return;
@@ -123,7 +125,7 @@ static void ReadUniformRegistersFromDevice(DeviceState &device_info,
 static void
 ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                         const WarpCoords &warp_coords,
-                                        WarpRegistersWithValidity &regs) {
+                                        WarpSharedRegisterCache &regs) {
   size_t num_regs = device_info.GetNumUniformPredicateRegisters();
   if (num_regs == 0)
     return;
@@ -143,19 +145,20 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
   }
 }
 
-const WarpRegistersWithValidity &WarpState::GetRegisters() {
+const WarpSharedRegisterCache &WarpState::GetRegisters() {
   if (m_regs_calculated)
-    return m_regs;
+    return m_shared_registers;
 
   WarpCoords coords = GetWarpCoords();
   DeviceState &device_info = GetSMState().GetDeviceState();
   CUDBGAPI api = device_info.GetAPI();
 
-  ReadUniformRegistersFromDevice(device_info, api, coords, m_regs);
-  ReadUniformPredicateRegistersFromDevice(device_info, api, coords, m_regs);
+  ReadUniformRegistersFromDevice(device_info, api, coords, m_shared_registers);
+  ReadUniformPredicateRegistersFromDevice(device_info, api, coords,
+                                          m_shared_registers);
 
   m_regs_calculated = true;
-  return m_regs;
+  return m_shared_registers;
 }
 
 SMState::SMState(ProcessNVGPU &gpu, uint32_t num_warps,
