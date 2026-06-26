@@ -20,11 +20,34 @@
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/Utility/RegisterValue.h"
+#include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 
 using namespace lldb;
 using namespace lldb_private;
+
+// TODO: refactor this with constmem grid access.
+static llvm::Expected<nvgpu_core::GridEntry>
+FindThreadGrid(const SectionSP &dev_sp, uint64_t grid_id, ObjectFile *core) {
+  if (!dev_sp)
+    return llvm::createStringError("no device section for grid lookup");
+
+  for (const SectionSP &grid_sp :
+       nvgpu_core::FindChildrenByType(*dev_sp, eSectionTypeNVGPUGrid)) {
+    llvm::Expected<nvgpu_core::GridEntry> grid_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::GridEntry>(grid_sp, core);
+    if (!grid_or) {
+      llvm::consumeError(grid_or.takeError());
+      continue;
+    }
+    if (grid_or->gridId64 == grid_id)
+      return grid_or;
+  }
+  return llvm::createStringError("no grid section matched the CTA grid id");
+}
 
 RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
                                                    ObjectFile *core)
@@ -35,18 +58,22 @@ RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
   auto &gpu_thread = static_cast<ThreadNVGPUCore &>(thread);
   SectionSP lane_sp = gpu_thread.GetLaneSection();
   SectionSP warp_sp = gpu_thread.GetWarpSection();
+  SectionSP dev_sp = gpu_thread.GetDeviceSection();
+  SectionSP cta_sp = gpu_thread.GetCTASection();
 
   Log *log = GetLog(LLDBLog::Process);
 
-  // Read lane / warp / device rows.
+  // Read lane / warp / device / cta / grid rows.
   llvm::Expected<nvgpu_core::LaneEntry> lane_or =
       nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(lane_sp, core);
   llvm::Expected<nvgpu_core::WarpEntry> warp_or =
       nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp_sp, core);
   llvm::Expected<nvgpu_core::DeviceEntry> dev_or =
-      nvgpu_core::ReadAndDecode<nvgpu_core::DeviceEntry>(
-          gpu_thread.GetDeviceSection(), core);
-  if (!lane_or || !warp_or || !dev_or) {
+      nvgpu_core::ReadAndDecode<nvgpu_core::DeviceEntry>(dev_sp, core);
+  llvm::Expected<nvgpu_core::CTAEntry> cta_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(cta_sp, core);
+
+  if (!lane_or || !warp_or || !dev_or || !cta_or) {
     if (!lane_or)
       LLDB_LOG(log, "RegisterContextNVGPUCore: lane decode failed: {0}",
                llvm::toString(lane_or.takeError()));
@@ -56,6 +83,18 @@ RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
     if (!dev_or)
       LLDB_LOG(log, "RegisterContextNVGPUCore: device decode failed: {0}",
                llvm::toString(dev_or.takeError()));
+    if (!cta_or)
+      LLDB_LOG(log, "RegisterContextNVGPUCore: cta decode failed: {0}",
+               llvm::toString(cta_or.takeError()));
+    return;
+  }
+
+  llvm::Expected<nvgpu_core::GridEntry> grid_or =
+      FindThreadGrid(dev_sp, cta_or->gridId64, core);
+
+  if (!grid_or) {
+    LLDB_LOG(log, "RegisterContextNVGPUCore: grid lookup failed: {0}",
+             llvm::toString(grid_or.takeError()));
     return;
   }
 
@@ -92,6 +131,17 @@ RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
              dev_or->numUniformPredicatesPrWarp,
              nvgpu_core::FindChildByType(*warp_sp,
                                          eSectionTypeNVGPUUniformPredicates));
+
+  llvm::copy(llvm::ArrayRef(&lane_or->threadIdxX, sass::kNumXYZComponents),
+             m_register_data.thread_idx);
+  llvm::copy(llvm::ArrayRef(&cta_or->blockIdxX, sass::kNumXYZComponents),
+             m_register_data.block_idx);
+  llvm::copy(llvm::ArrayRef(&grid_or->blockDimX, sass::kNumXYZComponents),
+             m_register_data.block_dim);
+  llvm::copy(llvm::ArrayRef(&grid_or->gridDimX, sass::kNumXYZComponents),
+             m_register_data.grid_dim);
+  // cudacoredump.h reports warp size as uint32_t instead of int32_t
+  m_register_data.warp_size = dev_or->numLanesPerWarp;
 }
 
 RegisterContextNVGPUCore::~RegisterContextNVGPUCore() = default;
