@@ -667,6 +667,12 @@ Status ProcessGDBRemote::DoLaunch(lldb_private::Module *exe_module,
 
   LLDB_LOGF(log, "ProcessGDBRemote::%s() entered", __FUNCTION__);
 
+  // This is a launch, not an attach. Clear any late-attach arming left over
+  // from a prior attach on a reused ProcessGDBRemote so we never report
+  // is_attach=true to GPU plug-ins on a launch path (which would arm the late
+  // attach handshake against a freshly launched process).
+  m_gpu_is_attaching = false;
+
   uint32_t launch_flags = launch_info.GetFlags().Get();
   FileSpec stdin_file_spec{};
   FileSpec stdout_file_spec{};
@@ -1229,7 +1235,9 @@ Status ProcessGDBRemote::ConnectToDebugserver(llvm::StringRef connect_url) {
   m_gdb_comm.GetVContSupported('c');
   m_gdb_comm.GetVAttachOrWaitSupported();
   m_gdb_comm.EnableErrorStringInPacket();
-  if (auto init_actions = m_gdb_comm.GetGPUInitializeActions()) {
+  GPUPluginInitializeArgs gpu_init_args;
+  gpu_init_args.is_attach = m_gpu_is_attaching;
+  if (auto init_actions = m_gdb_comm.GetGPUInitializeActions(gpu_init_args)) {
     for (const auto &init_action : *init_actions) {
       if (Status err = HandleGPUActions(init_action); err.Fail()) {
         Debugger::ReportError(llvm::formatv(
@@ -1463,6 +1471,9 @@ Status ProcessGDBRemote::DoAttachToProcessWithID(
 
   // Clear out and clean up from any current state
   Clear();
+  // Let GPU plug-ins know (via jGPUPluginInitialize during connection setup)
+  // that we are attaching, so they can set up the late attach handshake.
+  m_gpu_is_attaching = true;
   if (attach_pid != LLDB_INVALID_PROCESS_ID) {
     error = EstablishConnectionIfNeeded(attach_info);
     if (error.Success()) {
@@ -1487,6 +1498,9 @@ Status ProcessGDBRemote::DoAttachToProcessWithName(
   Status error;
   // Clear out and clean up from any current state
   Clear();
+  // Let GPU plug-ins know (via jGPUPluginInitialize during connection setup)
+  // that we are attaching, so they can set up the late attach handshake.
+  m_gpu_is_attaching = true;
 
   if (process_name && process_name[0]) {
     error = EstablishConnectionIfNeeded(attach_info);
@@ -4006,6 +4020,10 @@ Status ProcessGDBRemote::DisableWatchpoint(WatchpointSP wp_sp, bool notify) {
 void ProcessGDBRemote::Clear() {
   m_thread_list_real.Clear();
   m_thread_list.Clear();
+  // Reset the late-attach arming on teardown so a reused ProcessGDBRemote does
+  // not carry an attach's is_attach=true into a later launch. The attach paths
+  // call Clear() and then set this true again for the new connection.
+  m_gpu_is_attaching = false;
 }
 
 Status ProcessGDBRemote::DoSignal(int signo) {

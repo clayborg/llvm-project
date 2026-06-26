@@ -249,7 +249,8 @@ LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   return response;
 }
 
-GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
+GPUActions LLDBServerPluginMockGPU::GetInitializeActions(
+    const GPUPluginInitializeArgs & /*args*/) {
   GPUActions init_actions = GetNewGPUAction();
   {
     GPUBreakpointInfo bp;

@@ -59,14 +59,25 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
 
   if (m_is_faking_a_stop_for_dyld) {
     m_is_faking_a_stop_for_dyld = false;
-    // Ack'ing here is fine because the next call to OnDebuggerAPIEvent will
-    // be triggered after the Resume packet has been fully processed.
+    // Ack the sync events read before the deferred dyld stop. Per the CUDA
+    // debugger API, acknowledgeSyncEvents acknowledges only events already read
+    // with getNextEvent; events enqueued behind the deferred
+    // CUDBG_EVENT_ELF_IMAGE_LOADED were intentionally left unread so their
+    // handlers had not run yet.
     CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
           "Failed to acknowledge CUDA Debugger API events. {}",
           cudbgGetErrorString(res));
     }
+    // The driver only fires the new-event notification for newly enqueued
+    // events, so any events still queued from the deferred batch (e.g. a
+    // CUDBG_EVENT_ATTACH_COMPLETE behind the ELF image load) would never be
+    // drained or acked on their own -- wedging the attach before the device
+    // refresh. Re-run the event-processing loop now that the dyld stop has been
+    // resumed so those already-queued events are handled.
+    if (m_sync_event_drain_notifier)
+      m_sync_event_drain_notifier();
   } else {
     for (DeviceState &device : m_devices.GetDevices()) {
       CUDBGResult res = GetCudaAPI().resumeDevice(device.GetDeviceId());
@@ -126,6 +137,18 @@ void ProcessNVGPU::ChangeStateToStopped() {
 }
 
 Status ProcessNVGPU::Detach() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::Detach()");
+  // If we initialized the debugger API (including via late attach), prepare the
+  // driver for detach. This mirrors cuda-gdb's detach sequence: clear the
+  // attach-specific state before tearing down. The API table's finalize() is
+  // invoked separately by the CUDADebuggerAPI deleter when the session ends.
+  if (m_api) {
+    CUDBGResult res = m_api->clearAttachState();
+    if (res != CUDBG_SUCCESS)
+      LLDB_LOG(log, "NVGPU::Detach(). clearAttachState failed: {0}",
+               cudbgGetErrorString(res));
+  }
   SetState(StateType::eStateDetached, true);
   return Status();
 }
@@ -134,7 +157,35 @@ Status ProcessNVGPU::Signal(int signo) {
   return Status::FromErrorString("unimplemented");
 }
 
-Status ProcessNVGPU::Interrupt() { return Status(); }
+Status ProcessNVGPU::Interrupt() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::Interrupt(). Pre-interrupt state: {}",
+           StateToString(GetState()));
+
+  // An interrupt arrives when the user halts a running GPU (e.g. "process
+  // interrupt"). Without the debugger API there are no devices to suspend, but
+  // we must still report a stop: the client issued the interrupt and will hang
+  // waiting for a stop reply otherwise (the lldb-server interrupt handler does
+  // not synthesize one itself). Report the fallback thread as stopped, which
+  // notifies the delegate and produces the stop reply.
+  if (!m_api) {
+    LLDB_LOG(log, "NVGPU::Interrupt(). No debugger API; reporting a stop "
+                  "without suspending any device.");
+    m_fallback_thread.SetStopped(lldb::eStopReasonException, "interrupted");
+    SetCurrentThreadID(m_fallback_thread.GetID());
+    ChangeStateToStopped();
+    return Status();
+  }
+
+  // Suspend every device, refresh state, and report a stop (see
+  // SuspendAllDevicesAndRefresh / OnAllDevicesSuspended). SetState(stopped)
+  // then notifies the delegate, which sends the stop reply the client's
+  // interrupt is waiting for. The lldb-server interrupt handler does not send a
+  // stop reply itself.
+  auto log_to_client_callback = [](llvm::StringRef message) {};
+  SuspendAllDevicesAndRefresh(log_to_client_callback, "interrupted");
+  return Status();
+}
 
 Status ProcessNVGPU::Kill() { return Status(); }
 
@@ -233,7 +284,15 @@ ProcessNVGPU::Manager::Launch(
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessNVGPU::Manager::Attach(
     lldb::pid_t pid, NativeProcessProtocol::NativeDelegate &native_delegate) {
-  return llvm::createStringError("Unimplemented function");
+  // The GPU "process" is virtual: GPU debugging is driven by the CUDA debugger
+  // API, not by attaching to an OS process. The client connects to this GPU
+  // gdb-server rather than attaching to a pid, so this path mirrors Launch and
+  // creates the same fake stopped process the client can connect to. Late
+  // attach to a running CUDA application is handled on the CPU side by
+  // LLDBServerPluginNVGPU, which initializes the debugger API and refreshes
+  // device state once the attach procedure completes.
+  auto gpu_up = std::make_unique<ProcessNVGPU>(pid, native_delegate);
+  return gpu_up;
 }
 
 /// Parse ELF sections from a cubin and extract load address information.
@@ -365,7 +424,8 @@ static void ReleaseAndClearThreads(
 
 void ProcessNVGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+    std::function<void(llvm::StringRef message)> log_to_client_callback,
+    llvm::StringRef forced_stop_description) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
@@ -409,9 +469,54 @@ void ProcessNVGPU::OnAllDevicesSuspended(
         std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
   }
 
-  SetCurrentThreadID(exception_thread_id.value_or(
-      breakpoint_thread_id.value_or(m_threads.front()->GetID())));
+  lldb::tid_t current_tid = exception_thread_id.value_or(
+      breakpoint_thread_id.value_or(m_threads.front()->GetID()));
+  SetCurrentThreadID(current_tid);
+
+  // For a debugger-initiated stop (late attach completing, or a user
+  // interrupt) the kernel was running freely, so no thread stopped for a
+  // breakpoint or exception (every lane reports eStopReasonNone). A stop with
+  // no actionable reason is treated as spurious by the LLDB client, which
+  // auto-resumes it -- leaving the GPU target stuck "running" and undebuggable.
+  // Report the selected thread with an exception-class stop reason and the
+  // supplied description: that is the only stop reason the client honors
+  // unconditionally for the GPU target, independent of the (non-host) GPU
+  // signal table. A signal stop does not work here -- the host SIGSTOP number
+  // maps to a non-stopping signal on the GPU target and gets auto-resumed.
+  // (We cannot gate on exception_thread_id: it tracks the first eStopReasonNone
+  // lane, not a genuine exception, so it is always set for a running kernel.)
+  if (!forced_stop_description.empty()) {
+    if (NativeThreadProtocol *thread = GetThreadByID(current_tid))
+      static_cast<ThreadNVGPU *>(thread)->SetStopped(
+          lldb::eStopReasonException, forced_stop_description);
+  }
+
   ChangeStateToStopped();
+}
+
+void ProcessNVGPU::SuspendAllDevicesAndRefresh(
+    std::function<void(llvm::StringRef message)> log_to_client_callback,
+    llvm::StringRef stop_description) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::SuspendAllDevicesAndRefresh(). {0}", stop_description);
+
+  for (DeviceState &device : m_devices.GetDevices()) {
+    CUDBGResult res = GetCudaAPI().suspendDevice(device.GetDeviceId());
+    // A device may already be suspended (e.g. as part of the attach
+    // procedure); that is not a hard error, so just log and continue.
+    if (res != CUDBG_SUCCESS)
+      LLDB_LOG(log,
+               "NVGPU::SuspendAllDevicesAndRefresh(). Failed to suspend device "
+               "{0}: {1}",
+               device.GetDeviceId(), cudbgGetErrorString(res));
+  }
+
+  // Drive the same state refresh + thread enumeration path used when the driver
+  // reports that all devices were suspended, but pass the stop description so it
+  // is reported as a debugger-forced stop and the client keeps the
+  // freely-running kernel stopped (see OnAllDevicesSuspended).
+  CUDBGEvent::cases_st::allDevicesSuspended_st event = {};
+  OnAllDevicesSuspended(event, log_to_client_callback, stop_description);
 }
 
 ProcessNVGPU::Extension ProcessNVGPU::Manager::GetSupportedExtensions() const {

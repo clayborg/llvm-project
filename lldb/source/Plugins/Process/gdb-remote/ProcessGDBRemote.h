@@ -573,6 +573,12 @@ private:
   
   //  Map to track processed GPU actions.
   std::unordered_map<std::string, uint32_t> m_processed_gpu_actions;
+
+  /// True when this process is being attached to (as opposed to launched). Used
+  /// to tell GPU plug-ins, via jGPUPluginInitialize, that they should set up the
+  /// late attach handshake. Set before the GPU initialize actions are fetched
+  /// in ConnectToDebugserver().
+  bool m_gpu_is_attaching = false;
 };
 
 } // namespace process_gdb_remote

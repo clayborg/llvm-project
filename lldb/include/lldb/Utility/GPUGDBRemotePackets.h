@@ -264,6 +264,28 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
 
 llvm::json::Value toJSON(const GPUActions &data);
 
+///-----------------------------------------------------------------------------
+/// GPUPluginInitializeArgs
+///
+/// Arguments sent by the LLDB client in the "jGPUPluginInitialize" packet. This
+/// allows the client to tell the GPU plug-ins about the context in which they
+/// are being initialized (for example, whether the native process is being
+/// attached to versus launched), so plug-ins can return the right set of
+/// initialization actions.
+///-----------------------------------------------------------------------------
+struct GPUPluginInitializeArgs {
+  /// True if the native process is being attached to, false if it is being
+  /// launched. GPU plug-ins use this to decide whether to set up the late
+  /// attach handshake instead of (or in addition to) the launch-time
+  /// initialization breakpoints.
+  bool is_attach = false;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginInitializeArgs &data);
+
 struct GPUSectionInfo {
   /// Name of the section to load. If there are multiple sections, each section
   /// will be looked up and then a child section within the previous section

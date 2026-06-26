@@ -107,6 +107,65 @@ behavior when lldb-server starts:
 These environment variables can be set in the shell environment before
 starting lldb-server.
 
+Attaching to a running CUDA application
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In addition to launching a program under the debugger, you can attach to a CUDA
+application that is already running. When you attach to a process that has an
+active CUDA context (including one with kernels currently executing), the NVGPU
+plugin transparently initializes the debugger API, brings up the GPU target,
+and exposes the in-flight kernel's threads in the ``thread list`` command.
+
+.. code-block:: bash
+
+  lldb
+  > process attach -p <pid>
+  # Resume so the driver can complete the attach procedure.
+  > continue
+
+Once the attach completes, a second (GPU) target appears alongside the CPU
+target. Select it to inspect device state:
+
+.. code-block:: bash
+
+  > target list
+  > target select <gpu-target-index>
+  > thread list
+
+How it works
+""""""""""""
+
+Because the application is already running, the ``cuInit``-style initialization
+breakpoint used by the launch path has already been passed. Instead, the plugin
+uses the driver's safe attach mechanism:
+
+#. When LLDB attaches, it tells the GPU plug-ins (via ``jGPUPluginInitialize``)
+   that this is an attach. The NVGPU plugin then sets a breakpoint on
+   ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``.
+#. On the first stop after attaching, ``lldb-server`` resolves the driver's
+   attach handshake symbols itself -- it locates ``libcuda`` in the inferior via
+   ``/proc/<pid>/maps`` and reads its dynamic symbol table -- so no extra
+   gdb-remote round-trip is needed during attach. If the running process
+   advertises a usable safe-attach handler (``CUDBG_ATTACH_HANDLER_AVAILABLE``),
+   the plugin writes the client handshake globals and a magic byte to the file
+   descriptor exported in ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD``. This
+   asks the driver to inject the debug engine at a point it determines is safe,
+   avoiding the unsafe forced function call used by the deprecated mechanism.
+#. When the driver finishes injecting the debug engine it calls
+   ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
+   it initializes the CUDA debugger API exactly like the launch path.
+#. The plugin then waits for ``CUDBG_EVENT_ATTACH_COMPLETE``, suspends all
+   devices, refreshes device state, and reports the GPU as stopped so the
+   kernel's threads appear in the thread list.
+
+LLDB supports **only** this safe late attach mechanism, which requires a CUDA
+driver that exports ``cudbgInitiateDebuggerAttachProcedureFd``. The legacy
+``cudbgApiAttach()`` injection path (which forces an unsafe dynamic function
+call in the inferior, and is error-prone when the application is stopped in a
+signal-unsafe state) is intentionally not supported. Attaching to a process
+running on a CUDA driver that is too old to provide the safe attach procedure
+is not supported; use a newer driver.
+
 Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^
 

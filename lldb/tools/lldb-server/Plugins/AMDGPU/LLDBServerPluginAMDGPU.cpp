@@ -678,7 +678,8 @@ void LLDBServerPluginAMDGPU::NativeProcessDidExit(
     gpu_process->HandleNativeProcessExit(exit_status);
 }
 
-GPUActions LLDBServerPluginAMDGPU::GetInitializeActions() {
+GPUActions LLDBServerPluginAMDGPU::GetInitializeActions(
+    const GPUPluginInitializeArgs & /*args*/) {
   GPUActions init_actions = GetNewGPUAction();
 
   if (kSetDbgApiBreakpointByName) {

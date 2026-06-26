@@ -1,4 +1,8 @@
+import glob
 import math
+import os
+import shutil
+import subprocess
 from typing import Any, Callable, List, Optional
 
 import lldb
@@ -300,3 +304,29 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
             )
         return vals
+
+    def cuda_device_available(self):
+        """Best-effort check for a usable NVIDIA GPU on this host.
+
+        NVGPU tests need real CUDA hardware; on a GPU-less CI machine the
+        inferior's first CUDA call fails and there is nothing to debug. Probing
+        for a device up front lets a test skip cleanly instead of waiting out
+        long timeouts on a host that can never satisfy it.
+        """
+        # The driver exposes a control node plus one device node per GPU.
+        if os.path.exists("/dev/nvidiactl") and glob.glob("/dev/nvidia[0-9]*"):
+            return True
+        # Fall back to nvidia-smi if the device nodes are not where we expect.
+        smi = shutil.which("nvidia-smi")
+        if smi is None:
+            return False
+        try:
+            result = subprocess.run([smi, "-L"], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0 and b"GPU 0" in result.stdout
+
+    def skip_if_no_cuda_device(self):
+        """Skip the current test unless a usable NVIDIA CUDA device is present."""
+        if not self.cuda_device_available():
+            self.skipTest("no usable NVIDIA CUDA device available on this host")

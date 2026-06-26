@@ -650,44 +650,83 @@ StructuredData::ObjectSP GDBRemoteCommunicationClient::GetGPUKernelInfos() {
 }
 
 std::optional<std::vector<GPUActions>>
-GDBRemoteCommunicationClient::GetGPUInitializeActions() {
+GDBRemoteCommunicationClient::GetGPUInitializeActions(
+    const GPUPluginInitializeArgs &args) {
   // Get JSON information containing any breakpoints and other information
   // required by any GPU plug-ins using the "jGPUPluginInitialize" packet.
   //
   // GPU plug-ins might require breakpoints to be set in the native program
   // that controls the GPUs. This packet allows the GPU plug-ins to set one or
   // more breakpoints in the native program and get a callback when those
-  // breakpoints get hit.
+  // breakpoints get hit. The arguments tell the plug-ins about the context,
+  // such as whether the native process is being attached to versus launched.
 
-  if (m_supports_gpu_plugins == eLazyBoolYes) {
-    StringExtractorGDBRemote response;
-    response.SetResponseValidatorToJSON();
-    if (SendPacketAndWaitForResponse("jGPUPluginInitialize", response) ==
-        PacketResult::Success) {
-      if (response.IsUnsupportedResponse()) {
-        m_supports_gpu_plugins = eLazyBoolNo;
-        return std::nullopt;
-      }
-      if (response.IsErrorResponse()) {
-        Debugger::ReportError(response.GetStatus().AsCString());
-        return std::nullopt;
-      }
-      if (llvm::Expected<std::vector<GPUActions>> info =
-              llvm::json::parse<std::vector<GPUActions>>(response.Peek(),
-                                                         "GPUActions")) {
-        return std::move(*info);
-      } else {
-        // We don't show JSON parsing errors to the user because they won't
-        // make sense to them.
-        llvm::consumeError(info.takeError());
-        Debugger::ReportError(
-            llvm::formatv("malformed jGPUPluginInitialize response packet. {0}",
-                          response.GetStringRef()));
-      }
+  if (m_supports_gpu_plugins != eLazyBoolYes)
+    return std::nullopt;
+
+  // Parse a successful (non-error, non-unsupported) response as a GPUActions
+  // array, reporting a user-facing error on malformed JSON.
+  auto parse_response =
+      [](StringExtractorGDBRemote &response)
+      -> std::optional<std::vector<GPUActions>> {
+    if (response.IsErrorResponse()) {
+      Debugger::ReportError(response.GetStatus().AsCString());
+      return std::nullopt;
     }
+    llvm::Expected<std::vector<GPUActions>> info =
+        llvm::json::parse<std::vector<GPUActions>>(response.Peek(),
+                                                   "GPUActions");
+    if (info)
+      return std::move(*info);
+    // We don't show JSON parsing errors to the user because they won't make
+    // sense to them.
+    llvm::consumeError(info.takeError());
+    Debugger::ReportError(
+        llvm::formatv("malformed jGPUPluginInitialize response packet. {0}",
+                      response.GetStringRef()));
+    return std::nullopt;
+  };
+
+  // Preferred form: send the arguments as JSON after a ':' separator.
+  StreamGDBRemote packet;
+  packet.PutCString("jGPUPluginInitialize:");
+  packet.PutAsJSON(args, /*hex_ascii=*/false);
+  StringExtractorGDBRemote response;
+  response.SetResponseValidatorToJSON();
+  if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
+      PacketResult::Success)
+    return std::nullopt;
+
+  if (!response.IsUnsupportedResponse())
+    return parse_response(response);
+
+  // The server did not understand the JSON-argument form. This can mean either
+  // (a) the server has no GPU plug-ins at all, or (b) it is an older server
+  // that only understands the bare "jGPUPluginInitialize" packet. We cannot
+  // tell those apart from a single unsupported reply, so fall back to the bare
+  // packet -- but only when launching. Late attach REQUIRES the server to know
+  // it is an attach (the bare packet defaults is_attach to false, which would
+  // silently disable the attach handshake), so fail loudly instead.
+  if (args.is_attach) {
+    m_supports_gpu_plugins = eLazyBoolNo;
+    Debugger::ReportError(
+        "CUDA late attach requires a newer lldb-server that supports the "
+        "jGPUPluginInitialize JSON arguments packet; the connected server only "
+        "understands the legacy packet. Update lldb-server to attach to a "
+        "running CUDA application.");
+    return std::nullopt;
   }
 
-  return std::nullopt;
+  StringExtractorGDBRemote bare_response;
+  bare_response.SetResponseValidatorToJSON();
+  if (SendPacketAndWaitForResponse("jGPUPluginInitialize", bare_response) !=
+      PacketResult::Success)
+    return std::nullopt;
+  if (bare_response.IsUnsupportedResponse()) {
+    m_supports_gpu_plugins = eLazyBoolNo;
+    return std::nullopt;
+  }
+  return parse_response(bare_response);
 }
 
 std::optional<LLDBSettings>

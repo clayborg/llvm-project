@@ -443,7 +443,8 @@ public:
 
   StructuredData::ObjectSP GetThreadsInfo();
 
-  std::optional<std::vector<GPUActions>> GetGPUInitializeActions();
+  std::optional<std::vector<GPUActions>>
+  GetGPUInitializeActions(const GPUPluginInitializeArgs &args);
 
   std::optional<LLDBSettings> GetLLDBSettings();
 

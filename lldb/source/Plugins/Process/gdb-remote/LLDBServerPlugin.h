@@ -112,7 +112,11 @@ public:
   /// gets hit. When the breakpoint is hit, the BreakpointWasHit(...) method
   /// will get called with a structure that identifies the plugin,
   /// breakpoint and it will supply any requested symbol values.
-  virtual GPUActions GetInitializeActions() = 0;
+  ///
+  /// \param[in] args
+  ///     Context for the initialization, such as whether the native process is
+  ///     being attached to versus launched.
+  virtual GPUActions GetInitializeActions(const GPUPluginInitializeArgs &args) = 0;
 
   /// Get a file descriptor to listen for in the ptrace epoll loop.
   ///

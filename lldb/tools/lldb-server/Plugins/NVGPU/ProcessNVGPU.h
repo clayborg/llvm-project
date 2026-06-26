@@ -18,6 +18,8 @@
 
 #include "cudadebugger.h"
 
+#include <functional>
+
 namespace lldb_private::lldb_server {
 
 /// Manages GPU process debugging and thread execution state.
@@ -60,6 +62,16 @@ public:
   void SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
+
+  /// Register a notifier used to re-run the debugger-API sync-event processing
+  /// loop after the deferred ack on a dyld fake-stop resume. The driver only
+  /// notifies on newly enqueued events, so events queued behind a deferred
+  /// CUDBG_EVENT_ELF_IMAGE_LOADED (e.g. CUDBG_EVENT_ATTACH_COMPLETE) need an
+  /// explicit re-trigger to be drained -- otherwise they sit unhandled and
+  /// unacked, wedging the attach.
+  void SetSyncEventDrainNotifier(std::function<void()> notifier) {
+    m_sync_event_drain_notifier = std::move(notifier);
+  }
 
   /// The API version this session runs at: the lesser of the compiled and the
   /// live driver's versions. Gate calls to entry points newer than the
@@ -288,9 +300,46 @@ public:
   ///
   /// \param[in] event
   ///     Event data containing information about the suspended devices.
+  ///
+  /// \param[in] log_to_client_callback
+  ///     Function to log messages to the client.
+  ///
+  /// \param[in] forced_stop_description
+  ///     When non-empty, this suspension was initiated by the debugger (a late
+  ///     attach completing, or a user interrupt) rather than by a
+  ///     breakpoint/exception. A freely-running kernel has no breakpoint or
+  ///     exception, so the resulting stop would have no actionable reason and
+  ///     the client would treat it as spurious and auto-resume. To keep the GPU
+  ///     stopped, the selected thread is reported with this description as an
+  ///     exception-class stop -- the only signal-table-independent stop reason
+  ///     the client honors unconditionally for the GPU target. (A signal stop
+  ///     does not work: the GPU's signal table is not the host's, so the host
+  ///     SIGSTOP number is auto-resumed.)
   void OnAllDevicesSuspended(
       const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+      std::function<void(llvm::StringRef message)> log_to_client_callback,
+      llvm::StringRef forced_stop_description = llvm::StringRef());
+
+  /// Suspend all devices and refresh device state, then enumerate threads and
+  /// report a stop.
+  ///
+  /// Used for debugger-initiated stops where the driver does not autonomously
+  /// emit a CUDBG_EVENT_ALL_DEVICES_SUSPENDED event: completing a late attach,
+  /// and servicing a user interrupt of a running kernel. It explicitly suspends
+  /// every device, runs a full state refresh so the CUDA threads of any running
+  /// kernels appear in the thread list, and reports the stop with the given
+  /// description so the client keeps the GPU stopped.
+  ///
+  /// \param[in] log_to_client_callback
+  ///     Function to log messages to the client.
+  ///
+  /// \param[in] stop_description
+  ///     Human-readable reason for the stop (e.g. "attached to running CUDA
+  ///     application" or "interrupted"), reported to the client so the GPU
+  ///     stays stopped and the user sees why.
+  void SuspendAllDevicesAndRefresh(
+      std::function<void(llvm::StringRef message)> log_to_client_callback,
+      llvm::StringRef stop_description);
 
   /// Handle the ElfImageLoaded event.
   ///
@@ -368,6 +417,10 @@ private:
   /// we stop processing more APU events until we have resumed after the dyld
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
+
+  /// Notifier registered by the plugin to re-run sync-event processing after
+  /// the deferred ack on a dyld fake-stop resume. See SetSyncEventDrainNotifier.
+  std::function<void()> m_sync_event_drain_notifier;
 
   /// Snapshot of the information of all devices. It's updated upon every stop.
   DeviceStateRegistry m_devices;
