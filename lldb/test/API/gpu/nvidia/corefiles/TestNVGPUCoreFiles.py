@@ -28,6 +28,20 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         6: (lldb.eStopReasonException, "CUDA Exception: Warp Invalid Address Space"),
     }
 
+    def read_vec3_register(self, frame, name):
+        """Read a 3-component (dim3/uint3) vector register as [x, y, z]."""
+        reg = frame.FindRegister(name)
+        self.assertTrue(reg.IsValid(), f"{name} should be a valid register")
+        data = reg.GetData()
+        vals = []
+        for i in range(3):
+            err = lldb.SBError()
+            vals.append(data.GetUnsignedInt32(err, i * 4))
+            self.assertTrue(
+                err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
+            )
+        return vals
+
     def get_thread_name(self, block, thread):
         return f"blockIdx(x={block} y=0 z=0) threadIdx(x={thread} y=0 z=0)"
 
@@ -308,3 +322,23 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         uniform_registers = frame.GetRegisters().GetFirstValueByName("Uniform Registers")
         urz = uniform_registers.GetChildAtIndex(uniform_registers.GetNumChildren() - 1)
         self.assertEqual(urz.GetName(), "URZ")
+
+        # CUDA builtin (virtual) registers
+        threadIdx = self.read_vec3_register(frame, "threadIdx")
+        self.assertEqual(threadIdx, [0, 0, 0])
+
+        blockIdx = self.read_vec3_register(frame, "blockIdx")
+        self.assertEqual(blockIdx, [13, 0, 0])
+
+        blockDim = self.read_vec3_register(frame, "blockDim")
+        self.assertEqual(blockDim, [self.THREADS_PER_BLOCK, 1, 1])
+
+        gridDim = self.read_vec3_register(frame, "gridDim")
+        self.assertEqual(gridDim, [self.NUM_BLOCKS, 1, 1])
+
+        warp_size = frame.FindRegister("warpSize")
+        self.assertTrue(warp_size.IsValid())
+        self.assertEqual(warp_size.GetValueAsUnsigned(), 32)
+
+        builtins_regset = frame.GetRegisters().GetFirstValueByName("CUDA Builtins")
+        self.assertTrue(builtins_regset.IsValid())
