@@ -7,6 +7,20 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 class TestNVGPURegisters(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
+    def read_vec3_register(self, frame, name):
+        """Read a 3-component (dim3/uint3) vector register as [x, y, z]."""
+        reg = frame.FindRegister(name)
+        self.assertTrue(reg.IsValid(), f"{name} should be a valid register")
+        data = reg.GetData()
+        vals = []
+        for i in range(3):
+            err = lldb.SBError()
+            vals.append(data.GetUnsignedInt32(err, i * 4))
+            self.assertTrue(
+                err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
+            )
+        return vals
+
     def test_gpu_showing_registers(self):
         """Test that we know when the GPU has asserted."""
         self.killCPUOnTeardown()
@@ -62,3 +76,25 @@ class TestNVGPURegisters(NVGPUTestCaseBase):
         uniform_registers = frame.GetRegisters().GetFirstValueByName("Uniform Registers")
         urz = uniform_registers.GetChildAtIndex(uniform_registers.GetNumChildren() - 1)
         self.assertEqual(urz.GetName(), "URZ")
+
+        # CUDA builtin (virtual) registers
+        threadIdx = self.read_vec3_register(frame, "threadIdx")
+        self.assertLess(threadIdx[0], 256)
+        self.assertEqual(threadIdx[1:], [0, 0])
+
+        blockIdx = self.read_vec3_register(frame, "blockIdx")
+        self.assertLess(blockIdx[0], 20)
+        self.assertEqual(blockIdx[1:], [0, 0])
+
+        blockDim = self.read_vec3_register(frame, "blockDim")
+        self.assertEqual(blockDim, [256, 1, 1])
+
+        gridDim = self.read_vec3_register(frame, "gridDim")
+        self.assertEqual(gridDim, [20, 1, 1])
+
+        warpSize = frame.FindRegister("warpSize")
+        self.assertTrue(warpSize.IsValid())
+        self.assertEqual(warpSize.GetValueAsUnsigned(), 32)
+
+        builtins_regset = frame.GetRegisters().GetFirstValueByName("CUDA Builtins")
+        self.assertTrue(builtins_regset.IsValid())
