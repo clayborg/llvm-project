@@ -828,6 +828,7 @@ enum SectionType {
   eSectionTypeNVGPUWarp,
   eSectionTypeNVGPULane,
   eSectionTypeNVGPUConstBank,
+  eSectionTypeNVGPUBacktraceEntry,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){
