@@ -9,7 +9,7 @@
 #include "ThreadNVGPUCore.h"
 #include "CudbgEntryParser.h"
 #include "ProcessNVGPUCore.h"
-#include "RegisterContextNVGPUCore.h"
+#include "UnwindNVGPUCore.h"
 
 #include "lldb/Core/Section.h"
 #include "lldb/Symbol/ObjectFile.h"
@@ -84,17 +84,15 @@ RegisterContextSP ThreadNVGPUCore::GetRegisterContext() {
   return m_reg_context_sp;
 }
 
+Unwind &ThreadNVGPUCore::GetUnwinder() {
+  if (!m_unwinder_up)
+    m_unwinder_up = std::make_unique<UnwindNVGPUCore>(*this);
+  return *m_unwinder_up;
+}
+
 RegisterContextSP
 ThreadNVGPUCore::CreateRegisterContextForFrame(StackFrame *frame) {
-  ProcessSP process_sp = GetProcess();
-  if (!process_sp) {
-    LLDB_LOG(GetLog(LLDBLog::Process),
-             "ThreadNVGPUCore: failed to get process for register context");
-    return nullptr;
-  }
-  auto *nvgpu_process = static_cast<ProcessNVGPUCore *>(process_sp.get());
-  return std::make_shared<RegisterContextNVGPUCore>(
-      *this, nvgpu_process->GetCoreObjectFile());
+  return GetUnwinder().CreateRegisterContextForFrame(frame);
 }
 
 const char *ThreadNVGPUCore::GetName() { return m_name.c_str(); }

@@ -13,7 +13,11 @@
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/lldb-forward.h"
 
+#include <optional>
+
 namespace lldb_private {
+
+class ThreadNVGPUCore;
 
 class RegisterContextNVGPUCore : public RegisterContext {
 public:
@@ -32,7 +36,25 @@ public:
   ///     ObjectFile for the corefile, used to read the lane / warp / device
   ///     section data. May be null, in which case the register buffer is
   ///     left zero-initialized.
-  RegisterContextNVGPUCore(Thread &thread, ObjectFile *core);
+  ///
+  /// \param[in] concrete_frame_idx
+  ///     The zero-based concrete frame index this register context belongs
+  ///     to. Forwarded to the base `RegisterContext` so generic LLDB APIs
+  ///     (`BehavesLikeZerothFrame`, `CalculateStackFrame`, symbolication)
+  ///     treat caller frames correctly instead of as frame 0. Pass `0`
+  ///     (the default) for the live frame.
+  ///
+  /// \param[in] pc_override
+  ///     When set, this address is written into `m_register_data.PC` at
+  ///     construction, so it is the value reported by both `ReadRegister`
+  ///     and `ReadAllRegisterValues` for the PC register. Used by
+  ///     `UnwindNVGPUCore` for caller frames when unwinding from the per-lane
+  ///     backtrace table (local memory absent in the corefile). Other
+  ///     registers still come from the single frame-0 snapshot in
+  ///     `m_register_data`. Omit or pass `std::nullopt` for frame 0.
+  RegisterContextNVGPUCore(Thread &thread, ObjectFile *core,
+                           uint32_t concrete_frame_idx = 0,
+                           std::optional<lldb::addr_t> pc_override = {});
 
   ~RegisterContextNVGPUCore() override;
 
@@ -57,7 +79,12 @@ public:
   bool WriteAllRegisterValues(const lldb::DataBufferSP &data_sp) override;
 
 private:
-  /// Packed register buffer matching `sass::ThreadRegisters`. The constructor
+  /// Decode the lane / warp / device rows and copy the lane's per-class
+  /// register slices (R/P/UR/UP) into `m_register_data`. Leaves the buffer
+  /// zero-initialized when `core` is null or any row fails to decode.
+  void LoadFromCore(ThreadNVGPUCore &thread, ObjectFile *core);
+
+  /// Packed register buffer matching `sass::RegisterLayout`. The constructor
   /// fills it from the corefile's lane / warp / register / predicate
   /// sections; everything not present in the corefile stays zero. Each
   /// `RegisterInfo::byte_offset` / `byte_size` from `sass::GetRegisterInfos()`

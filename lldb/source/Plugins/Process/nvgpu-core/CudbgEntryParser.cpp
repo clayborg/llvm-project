@@ -8,6 +8,8 @@
 
 #include "CudbgEntryParser.h"
 
+#include "llvm/Support/Error.h"
+
 using namespace lldb;
 using namespace lldb_private;
 
@@ -219,6 +221,19 @@ std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data) {
   info.cuda_major = data.GetU32(&offset);
   info.cuda_minor = data.GetU32(&offset);
   return info;
+}
+
+llvm::Expected<BacktraceEntry>
+BacktraceEntry::Decode(const DataExtractor &data, offset_t *offset_ptr,
+                       uint64_t entry_size) {
+  if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
+    return llvm::createStringError("truncated backtrace table entry");
+  BacktraceEntry out{};
+  out.returnAddress = data.GetU64(offset_ptr);
+  out.virtualReturnAddress = data.GetU64(offset_ptr);
+  out.level = data.GetU32(offset_ptr);
+  out.pad = data.GetU32(offset_ptr);
+  return out;
 }
 
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
