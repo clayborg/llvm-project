@@ -1735,6 +1735,7 @@ bool ObjectFileELF::IsNVGPUCoreFile() const {
 //             laneN
 //               regs / preds (per-lane register state)
 //               local (per-lane memory)
+//               backtrace (per-lane call stack table)
 //     global / managed (root VA memory)
 //     cubin / ucubin (root module images)
 //
@@ -1935,6 +1936,14 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       seq = &leaf_seq;
       parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
       break;
+    case eSectionTypeNVGPUBacktrace:
+      kind = nvgpu::SectionKind::Leaf;
+      child_type = eSectionTypeNVGPUBacktraceEntry;
+      expected_parent_type = eSectionTypeNVGPULane;
+      name = "backtrace" + std::to_string(row_idx);
+      seq = &leaf_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
+      break;
     default:
       LLDB_LOG(log,
                "BuildNVGPUSectionList: section {0} referenced as a parent "
@@ -2055,7 +2064,8 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
     case eSectionTypeNVGPUGridTable:
     case eSectionTypeNVGPUCtaTable:
     case eSectionTypeNVGPUWarpTable:
-    case eSectionTypeNVGPUConstBankTable: {
+    case eSectionTypeNVGPUConstBankTable:
+    case eSectionTypeNVGPUBacktrace: {
       if (h.sh_entsize == 0) {
         LLDB_LOG(log,
                  "BuildNVGPUSectionList: container table {0} has zero "
