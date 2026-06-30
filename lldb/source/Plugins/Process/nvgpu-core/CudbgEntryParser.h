@@ -137,6 +137,13 @@ struct ConstBankEntry : CudbgConstBankTableEntry {
 /// section. Returns std::nullopt if `data` is empty (no metadata section).
 std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data);
 
+/// One row of a per-lane nvgpu-backtrace section.
+struct BacktraceEntry : CudbgBacktraceTableEntry {
+  static llvm::Expected<BacktraceEntry> Decode(const DataExtractor &data,
+                                               lldb::offset_t *offset_ptr,
+                                               uint64_t entry_size);
+};
+
 /// Read `section_sp`'s data window from `core` and decode it into an
 /// `EntryT` (one of the wrapper structs above). Returns the parse error if
 /// either input is missing or `EntryT::Decode` fails.

@@ -218,6 +218,8 @@ const char *Section::GetTypeAsCString() const {
     return "nvgpu-lane";
   case eSectionTypeNVGPUConstBank:
     return "nvgpu-constbank";
+  case eSectionTypeNVGPUBacktraceEntry:
+    return "nvgpu-backtrace-entry";
   case eSectionTypeOther:
     return "regular";
   }
@@ -513,6 +515,7 @@ bool Section::ContainsOnlyDebugInfo() const {
   case eSectionTypeNVGPUWarp:
   case eSectionTypeNVGPULane:
   case eSectionTypeNVGPUConstBank:
+  case eSectionTypeNVGPUBacktraceEntry:
   case eSectionTypeOther:
   // Used for "__dof_cache" in mach-o or ".debug" for COFF which isn't debug
   // information that we parse at all. This was causing system files with no
