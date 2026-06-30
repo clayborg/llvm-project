@@ -49,13 +49,24 @@ FindThreadGrid(const SectionSP &dev_sp, uint64_t grid_id, ObjectFile *core) {
   return llvm::createStringError("no grid section matched the CTA grid id");
 }
 
-RegisterContextNVGPUCore::RegisterContextNVGPUCore(Thread &thread,
-                                                   ObjectFile *core)
-    : RegisterContext(thread, 0) {
+RegisterContextNVGPUCore::RegisterContextNVGPUCore(
+    Thread &thread, ObjectFile *core, uint32_t concrete_frame_idx,
+    std::optional<lldb::addr_t> pc_override)
+    : RegisterContext(thread, concrete_frame_idx) {
+  LoadFromCore(static_cast<ThreadNVGPUCore &>(thread), core);
+
+  // A caller-frame override is the authoritative PC for this frame and must
+  // win over the frame-0 snapshot, so bake it into the buffer that backs both
+  // ReadRegister and ReadAllRegisterValues.
+  if (pc_override)
+    m_register_data.PC = *pc_override;
+}
+
+void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
+                                            ObjectFile *core) {
   if (!core)
     return;
 
-  auto &gpu_thread = static_cast<ThreadNVGPUCore &>(thread);
   SectionSP lane_sp = gpu_thread.GetLaneSection();
   SectionSP warp_sp = gpu_thread.GetWarpSection();
   SectionSP dev_sp = gpu_thread.GetDeviceSection();
@@ -179,6 +190,11 @@ bool RegisterContextNVGPUCore::ReadRegister(const RegisterInfo *reg_info,
     return false;
   }
 
+  // Caller frames only recover a PC; other registers hold stale frame 0 values.
+  if (!BehavesLikeZerothFrame() &&
+      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_PC)
+    return false;
+
   // Every RegisterInfo from `sass::GetRegisterInfos()` has its `byte_offset`
   // computed against `sass::ThreadRegisters` -- which is exactly the layout
   // of `m_register_data`. So a register read is a `byte_offset + byte_size`
@@ -201,6 +217,10 @@ bool RegisterContextNVGPUCore::WriteRegister(const RegisterInfo *reg_info,
 
 bool RegisterContextNVGPUCore::ReadAllRegisterValues(
     WritableDataBufferSP &data_sp) {
+  // Caller frames only have a valid PC, so don't snapshot stale frame 0 values.
+  if (!BehavesLikeZerothFrame())
+    return false;
+
   // The canonical layout IS our internal representation, so the snapshot is
   // a single copy of the whole buffer.
   data_sp = std::make_shared<DataBufferHeap>(&m_register_data,

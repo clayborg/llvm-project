@@ -59,6 +59,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         self._test_backtrace("skip_nonrelocated_elf_images")
         self._test_backtrace("faulted_contexts_only")
         self._test_backtrace("no_errbar_at_exit")
+        self._test_backtrace("skip_local_memory")
         self._test_read_global_memory()
         self._test_read_constant_memory()
         self._test_read_shared_memory()
