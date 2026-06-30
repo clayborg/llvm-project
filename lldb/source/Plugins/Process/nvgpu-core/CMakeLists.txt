@@ -6,6 +6,7 @@ add_lldb_library(lldbPluginProcessNVGPUCore PLUGIN
   RegisterContextNVGPUCore.cpp
   SectionUtils.cpp
   ThreadNVGPUCore.cpp
+  UnwindNVGPUCore.cpp
 
   LINK_COMPONENTS
     BinaryFormat

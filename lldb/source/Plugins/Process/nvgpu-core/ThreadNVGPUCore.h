@@ -75,6 +75,8 @@ public:
   }
 
 protected:
+  Unwind &GetUnwinder() override;
+
   bool CalculateStopInfo() override;
 
 private:
