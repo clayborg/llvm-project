@@ -1715,8 +1715,8 @@ public:
   ReadMemoryRanges(llvm::ArrayRef<Range<lldb::addr_t, size_t>> ranges,
                    llvm::MutableArrayRef<uint8_t> buffer);
 
-  virtual size_t ReadMemory(const AddressSpec &addr_spec, void *buf, 
-                            size_t size, Status &error);
+  size_t ReadMemory(const AddressSpec &addr_spec, void *buf, size_t size,
+                    Status &error);
 
   /// Read of memory from a process.
   ///
