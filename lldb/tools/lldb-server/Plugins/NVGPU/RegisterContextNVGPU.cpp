@@ -44,6 +44,11 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
                                            const ThreadCoords &thread_coords,
                                            ThreadRegisterCache &regs) {
   uint32_t num_regs_read = warp_state.GetCurrentNumRegularRegisters();
+  if (num_regs_read > sass::kNumRRegs)
+    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
+                           "device reported {} regular registers, but only {} "
+                           "are supported",
+                           num_regs_read, sass::kNumRRegs);
   // Always call the stable 7-arg entry point. It lives at a fixed offset in
   // every in-major driver's API table, so it works regardless of the
   // (possibly older) driver we attached to -- no runtime version check is
@@ -74,6 +79,12 @@ static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
   size_t num_regs = device_info.GetNumPredicateRegisters();
   if (num_regs == 0)
     return;
+
+  if (num_regs > sass::kNumPRegs)
+    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
+                           "device reported {} predicate registers, but only "
+                           "{} are supported",
+                           num_regs, sass::kNumPRegs);
 
   CUDBGResult res = api->readPredicates(
       thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
