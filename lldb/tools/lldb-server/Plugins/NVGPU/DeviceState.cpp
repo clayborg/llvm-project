@@ -109,6 +109,11 @@ static void ReadUniformRegistersFromDevice(DeviceState &device_info,
   if (num_regs == 0)
     return;
 
+  if (num_regs > kNumURRegs)
+    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
+                           "uniform registers, but only {} are supported",
+                           num_regs, kNumURRegs);
+
   CUDBGResult res = api->readUniformRegisterRange(
       warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, 0, num_regs,
       regs.val.uniform);
@@ -129,6 +134,12 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
   size_t num_regs = device_info.GetNumUniformPredicateRegisters();
   if (num_regs == 0)
     return;
+
+  if (num_regs > kNumUPRegs)
+    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
+                           "uniform predicate registers, but only {} are "
+                           "supported",
+                           num_regs, kNumUPRegs);
 
   CUDBGResult res = api->readUniformPredicates(
       warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, num_regs,
