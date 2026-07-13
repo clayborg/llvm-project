@@ -58,6 +58,8 @@ protected:
   // run' plan, then just single step.
   bool SetNextBranchBreakpoint();
 
+  bool ShouldContinueForThreadActivity();
+
   // Whether the input stop info is caused by the next branch breakpoint.
   // Note: this does not check if branch breakpoint site is shared by other
   // breakpoints or not.

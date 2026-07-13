@@ -54,6 +54,13 @@ __global__ void helloworld_kernel(char *str, size_t size) {
   unsigned int block_idx = blockIdx.x;
   unsigned int idx = thread_idx + block_idx * blockDim.x;
 
+  volatile unsigned int branch_value;
+  if (idx == 0) { // DIVERGENT STEP
+    branch_value = 0; // LANE ZERO BRANCH
+  } else {
+    branch_value = 1; // NONZERO LANE BRANCH
+  }
+
   char c = 'x';
   switch (idx) {
     case  0: c = 'H'; break;
