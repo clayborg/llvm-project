@@ -72,7 +72,8 @@ __global__ void helloworld_kernel(char *str, size_t size) {
   }
 
   if (idx < size) { // GPU BREAKPOINT
-    str[idx] = c;
+    str[idx] = c; // GPU STEP OVER
+    c = str[idx]; // GPU BREAKPOINT AFTER
   }
 }
 

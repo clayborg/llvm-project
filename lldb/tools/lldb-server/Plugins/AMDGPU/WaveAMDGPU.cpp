@@ -134,3 +134,17 @@ void WaveAMDGPU::UpdateStopReasonFromWaveInfo() {
   assert(reason != lldb::StopReason::eStopReasonInvalid);
   SetStopReason(reason, description);
 }
+
+Status WaveAMDGPU::Resume(bool single_step) {
+  // TODO: Handle forwarding or suppressing pending GPU exceptions on resume.
+  amd_dbgapi_exceptions_t exception = AMD_DBGAPI_EXCEPTION_NONE;
+  llvm::Error err = RunAmdDbgApiCommand([&] {
+    return amd_dbgapi_wave_resume(m_wave_id,
+                                  single_step
+                                      ? AMD_DBGAPI_RESUME_MODE_SINGLE_STEP
+                                      : AMD_DBGAPI_RESUME_MODE_NORMAL,
+                                  exception);
+  });
+  Status status = Status::FromError(std::move(err));
+  return status;
+}

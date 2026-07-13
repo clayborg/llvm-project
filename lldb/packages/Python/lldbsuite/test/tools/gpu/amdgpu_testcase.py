@@ -90,6 +90,65 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
             self.gpu_process, gpu_bkpt_id
         )
 
+    def stop_cpu_if_running(self, listener: lldb.SBListener):
+        if self.cpu_process.GetState() != lldb.eStateRunning:
+            return
+
+        error = self.cpu_process.Stop()
+        self.assertSuccess(error, "interrupt CPU process")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateStopped]
+        )
+
+    def continue_gpu_to_breakpoint(self, gpu_bkpt_id: int) -> List[lldb.SBThread]:
+        """Continue the GPU process until it hits the requested breakpoint."""
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+        self.stop_cpu_if_running(listener)
+
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        error = self.gpu_process.Continue()
+        self.assertSuccess(error, "continue GPU process")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        return lldbutil.get_threads_stopped_at_breakpoint_id(
+            self.gpu_process, gpu_bkpt_id
+        )
+
+    def step_over_gpu_thread(self, thread: lldb.SBThread, expected_line: int):
+        """Step over one GPU thread and verify that the step plan completes."""
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+
+        self.stop_cpu_if_running(listener)
+
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        self.assertTrue(self.gpu_process.SetSelectedThread(thread), "select GPU thread")
+        thread_id = thread.GetThreadID()
+        before_pc = thread.GetFrameAtIndex(0).GetPC()
+
+        error = lldb.SBError()
+        thread.StepOver(lldb.eOnlyDuringStepping, error)
+        self.assertSuccess(error, "step over GPU thread")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+
+        selected_thread = self.gpu_process.GetSelectedThread()
+        self.assertEqual(thread_id, selected_thread.GetThreadID())
+        self.assertEqual(lldb.eStopReasonPlanComplete, selected_thread.GetStopReason())
+        self.assertNotEqual(before_pc, selected_thread.GetFrameAtIndex(0).GetPC())
+        self.assertEqual(
+            expected_line, selected_thread.GetFrameAtIndex(0).GetLineEntry().GetLine()
+        )
+
     def continue_to_gpu_source_breakpoint(
         self, source: str, gpu_bkpt_pattern: str
     ) -> List[lldb.SBThread]:

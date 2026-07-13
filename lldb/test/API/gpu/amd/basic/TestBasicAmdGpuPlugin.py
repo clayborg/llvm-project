@@ -44,6 +44,40 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
+    def test_gpu_basic_step_over(self):
+        """Test that a GPU thread can step over a source line."""
+        self.build()
+
+        source = "hello_world.hip"
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
+        self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
+        self.step_over_gpu_thread(
+            gpu_threads[0], line_number(source, "// GPU STEP OVER")
+        )
+
+    def test_gpu_resume_to_next_breakpoint(self):
+        """Test that resuming GPU threads can hit a later breakpoint."""
+        self.build()
+
+        source = "hello_world.hip"
+        target = lldbutil.run_to_breakpoint_make_target(self)
+        launch_info = target.GetLaunchInfo()
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        process = target.Launch(launch_info, error)
+        self.assertTrue(process, "Could not create a valid process")
+        self.assertFalse(error.Fail(), "Process launch failed: %s" % error.GetCString())
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be created")
+
+        first_bkpt_id = self.set_gpu_source_breakpoint(source, "// GPU BREAKPOINT")
+        next_bkpt_id = self.set_gpu_source_breakpoint(source, "// GPU BREAKPOINT AFTER")
+
+        gpu_threads = self.continue_to_gpu_breakpoint(first_bkpt_id)
+        self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
+
+        gpu_threads = self.continue_gpu_to_breakpoint(next_bkpt_id)
+        self.assertNotEqual(None, gpu_threads, "GPU should hit next breakpoint")
+
     def test_gpu_breakpoint_delete(self):
         """Test that deleting a GPU breakpoint removes the trap opcode."""
         self.build()

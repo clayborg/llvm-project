@@ -36,3 +36,13 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # stopped at the breakpoint. With wave size of 64, this means we should
         # have at least 56 threads (120 = 64 + 56) hitting the breakpoint.
         self.assertGreaterEqual(len(gpu_threads_at_breakpoint), 56)
+
+    def test_step_over_from_multi_wave_breakpoint(self):
+        """Test stepping when multiple GPU waves are stopped at a breakpoint."""
+        self.build()
+
+        source = "multi-wave.hip"
+        gpu_threads_at_breakpoint = self.run_to_breakpoint()
+        self.step_over_gpu_thread(
+            gpu_threads_at_breakpoint[0], line_number(source, "// GPU STEP OVER")
+        )

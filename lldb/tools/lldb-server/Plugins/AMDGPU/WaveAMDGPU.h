@@ -75,9 +75,11 @@ public:
     m_stop_info.signo = signo;
   }
 
-private:
+  Status Resume(bool single_step);
+
   void UpdateStopReasonFromWaveInfo();
 
+private:
   amd_dbgapi_wave_id_t m_wave_id;
   DbgApiWaveInfo m_wave_info;
   ThreadStopInfo m_stop_info;

@@ -97,7 +97,7 @@ public:
   // Custom accessors
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   /// Called when the native process exits to exit the GPU process

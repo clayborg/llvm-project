@@ -32,6 +32,7 @@
 #include <cinttypes>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace lldb;
@@ -48,9 +49,118 @@ ProcessAMDGPU::ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate,
 }
 
 Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
-  SetState(StateType::eStateRunning, true);
-  ThreadAMDGPU *thread = (ThreadAMDGPU *)GetCurrentThread();
-  thread->GetRegisterContext().InvalidateAllRegisters();
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "pid {0}", GetID());
+
+  NotifyTracersProcessWillResume();
+
+  struct WaveResumeAction {
+    lldb::StateType resume_state = eStateInvalid;
+    std::vector<ThreadAMDGPU *> lanes;
+  };
+
+  std::unordered_map<WaveAMDGPU *, WaveResumeAction> wave_actions;
+  wave_actions.reserve(m_threads.size());
+  bool had_resume_action = false;
+
+  // LLDB models every GPU lane as a thread because that is the granularity the
+  // user selects, inspects, and steps in the UI. The dbgapi control operation
+  // is coarser: a resume request applies to the whole wave. Build one physical
+  // resume request per wave from the logical lane requests before calling into
+  // dbgapi.
+  for (const auto &thread : m_threads) {
+    assert(thread && "thread list should not contain NULL threads");
+    ThreadAMDGPU *gpu_thread = static_cast<ThreadAMDGPU *>(thread.get());
+
+    const ResumeAction *const action =
+        resume_actions.GetActionForThread(thread->GetID(), true);
+
+    // The shadow thread is LLDB's placeholder before real GPU lanes are
+    // materialized. It has no backing wave to resume, but a resume action for
+    // it still means the GPU process should transition to running below.
+    if (gpu_thread->IsShadowThread()) {
+      had_resume_action = action && (action->state == eStateRunning ||
+                                     action->state == eStateStepping);
+      continue;
+    }
+
+    WaveResumeAction &wave_action = wave_actions[gpu_thread->GetWave()];
+    wave_action.lanes.push_back(gpu_thread);
+
+    if (action == nullptr) {
+      LLDB_LOG(log, "no action specified for pid {0} tid {1}", GetID(),
+               thread->GetID());
+      continue;
+    }
+
+    LLDB_LOG(log, "processing resume action state {0} for pid {1} tid {2}",
+             action->state, GetID(), thread->GetID());
+
+    switch (action->state) {
+    case eStateStepping:
+    case eStateRunning: {
+      had_resume_action = true;
+
+      // Several lane threads can map to the same wave. If LLDB asks to step one
+      // lane while continuing another lane in that wave, the physical operation
+      // must be single-step: issuing a normal resume would overrun the user's
+      // selected step.
+      if (wave_action.resume_state == eStateInvalid) {
+        wave_action.resume_state = action->state;
+      } else if (wave_action.resume_state != action->state) {
+        LLDB_LOG(log,
+                 "coalescing conflicting resume actions for wave {0}: "
+                 "existing state {1}, new state {2}",
+                 gpu_thread->GetWaveID().handle,
+                 StateAsCString(wave_action.resume_state),
+                 StateAsCString(action->state));
+
+        if (action->state == eStateStepping)
+          wave_action.resume_state = eStateStepping;
+      }
+      break;
+    }
+
+    case eStateSuspended:
+    case eStateStopped:
+      // These lane states do not request execution. Other lanes in the same
+      // wave may still cause the wave to resume.
+      break;
+
+    default:
+      return Status::FromErrorStringWithFormat(
+          "NativeProcessLinux::%s (): unexpected state %s specified "
+          "for pid %" PRIu64 ", tid %" PRIu64,
+          __FUNCTION__, StateAsCString(action->state), GetID(),
+          thread->GetID());
+    }
+  }
+
+  // Apply the coalesced actions to each physical wave once. Register values for
+  // all lanes in a resumed wave are invalidated because any lane-visible state
+  // may have changed after the wave executes.
+  for (auto &item : wave_actions) {
+    WaveAMDGPU *wave = item.first;
+    WaveResumeAction &wave_action = item.second;
+    if (wave_action.resume_state != eStateStepping &&
+        wave_action.resume_state != eStateRunning)
+      continue;
+
+    const bool single_step = wave_action.resume_state == eStateStepping;
+    Status resume_result = wave->Resume(single_step);
+    if (resume_result.Fail())
+      return Status::FromErrorStringWithFormat(
+          "NativeProcessLinux::%s: failed to resume wave "
+          "for pid %" PRIu64 ", tid %" PRIu64 ", error = %s",
+          __FUNCTION__, GetID(), wave->GetWaveID().handle,
+          resume_result.AsCString());
+
+    for (ThreadAMDGPU *lane : wave_action.lanes)
+      lane->GetRegisterContext().InvalidateAllRegisters();
+  }
+
+  if (had_resume_action)
+    SetState(StateType::eStateRunning, true);
   return Status();
 }
 
@@ -388,6 +498,7 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
               status);
     return false;
   }
+
   if ((stop_reason & AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT) != 0) {
     uint64_t pc;
     status = amd_dbgapi_wave_get_info(wave_id, AMD_DBGAPI_WAVE_INFO_PC,
@@ -725,9 +836,10 @@ WaveIdList ProcessAMDGPU::UpdateWavesAndReturnNew() {
       m_waves.at(wave_id)->SetDbgApiInfo(*wave_info);
     } else {
       // We failed to get wave info for this wave.
-      LLDB_LOG_ERROR(log, wave_info.takeError(),
-                     "Failed to get wave info for wave {1}. {0}. Marking wave as dead.",
-                     wave_id.handle);
+      LLDB_LOG_ERROR(
+          log, wave_info.takeError(),
+          "Failed to get wave info for wave {1}. {0}. Marking wave as dead.",
+          wave_id.handle);
     }
   }
 
