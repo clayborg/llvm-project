@@ -44,6 +44,44 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
+    def test_gpu_breakpoint_delete(self):
+        """Test that deleting a GPU breakpoint removes the trap opcode."""
+        self.build()
+
+        target = self.createTestTarget()
+        process = target.LaunchSimple(None, None, self.get_process_working_directory())
+        self.assertTrue(process.IsValid(), "Process is valid")
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be created")
+
+        source = "hello_world.hip"
+        gpu_bkpt_id = self.set_gpu_source_breakpoint(source, "// GPU BREAKPOINT")
+        self.assertTrue(
+            self.gpu_target.BreakpointDelete(gpu_bkpt_id),
+            "GPU breakpoint should be deleted",
+        )
+
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+
+        self.select_gpu()
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateRunning]
+        )
+
+        self.select_cpu()
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateRunning]
+        )
+
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateExited]
+        )
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateExited]
+        )
+
     def test_num_threads(self):
         """Test that we get the expected number of threads."""
         self.build()

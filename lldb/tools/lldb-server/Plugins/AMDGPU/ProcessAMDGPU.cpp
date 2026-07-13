@@ -30,6 +30,9 @@
 
 #include <amd-dbgapi/amd-dbgapi.h>
 #include <cinttypes>
+#include <optional>
+#include <string>
+#include <vector>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -37,8 +40,10 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
 ProcessAMDGPU::ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate,
-                             LLDBServerPluginAMDGPU *plugin)
-    : NativeProcessProtocol(pid, -1, delegate), m_debugger(plugin) {
+                             LLDBServerPluginAMDGPU *plugin,
+                             amd_dbgapi_architecture_id_t architecture_id)
+    : NativeProcessProtocol(pid, -1, delegate), m_debugger(plugin),
+      m_architecture_id(architecture_id) {
   m_state = eStateStopped;
 }
 
@@ -81,12 +86,18 @@ Status ProcessAMDGPU::Kill() { return Status(); }
 
 Status ProcessAMDGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                  size_t &bytes_read) {
-  return Status::FromErrorString("unimplemented");
+  NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
+  if (!native_process)
+    return Status::FromErrorString("native process is unavailable");
+  return native_process->ReadMemory(addr, buf, size, bytes_read);
 }
 
 Status ProcessAMDGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                   size_t size, size_t &bytes_written) {
-  return Status::FromErrorString("unimplemented");
+  NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
+  if (!native_process)
+    return Status::FromErrorString("native process is unavailable");
+  return native_process->WriteMemory(addr, buf, size, bytes_written);
 }
 
 std::vector<AddressSpaceInfo> ProcessAMDGPU::GetAddressSpaces() {
@@ -117,7 +128,7 @@ Status ProcessAMDGPU::ReadMemoryWithSpace(lldb::addr_t addr,
   amd_dbgapi_address_space_id_t address_space_id;
   if (llvm::Error err = RunAmdDbgApiCommand([&] {
         return amd_dbgapi_dwarf_address_space_to_address_space(
-            m_debugger->m_architecture_id, addr_space, &address_space_id);
+            m_architecture_id, addr_space, &address_space_id);
       }))
     return Status::FromError(std::move(err));
 
@@ -213,9 +224,8 @@ const ArchSpec &ProcessAMDGPU::GetArchitecture() const {
   // Query the subtype from the dbgapi.
   uint32_t cpu_subtype = 0;
   amd_dbgapi_status_t status = amd_dbgapi_architecture_get_info(
-      m_debugger->m_architecture_id,
-      AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE, sizeof(cpu_subtype),
-      &cpu_subtype);
+      m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_ELF_AMDGPU_MACHINE,
+      sizeof(cpu_subtype), &cpu_subtype);
   if (status != AMD_DBGAPI_STATUS_SUCCESS) {
     LLDB_LOGF(GetLog(GDBRLog::Plugin),
               "amd_dbgapi_architecture_get_info failed: %d", status);
@@ -229,11 +239,40 @@ const ArchSpec &ProcessAMDGPU::GetArchitecture() const {
 // Breakpoint functions
 Status ProcessAMDGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                     bool hardware) {
-  bool success = m_debugger->CreateGPUBreakpoint(addr);
-  if (!success) {
-    return Status::FromErrorString("CreateGPUBreakpoint failed");
-  }
-  return Status();
+  if (hardware)
+    return Status::FromErrorString("hardware breakpoints are not supported");
+
+  return SetSoftwareBreakpoint(addr, size);
+}
+
+Status ProcessAMDGPU::RemoveBreakpoint(lldb::addr_t addr, bool hardware) {
+  return NativeProcessProtocol::RemoveBreakpoint(addr, hardware);
+}
+
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+ProcessAMDGPU::GetSoftwareBreakpointTrapOpcode(size_t) {
+  if (!m_breakpoint_trap_opcode.empty())
+    return llvm::ArrayRef<uint8_t>(m_breakpoint_trap_opcode);
+
+  const uint8_t *bp_instruction = nullptr;
+  amd_dbgapi_status_t status = amd_dbgapi_architecture_get_info(
+      m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_BREAKPOINT_INSTRUCTION,
+      sizeof(bp_instruction), &bp_instruction);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS)
+    return llvm::createStringError(
+        "AMD_DBGAPI_ARCHITECTURE_INFO_BREAKPOINT_INSTRUCTION failed");
+
+  size_t bp_size = 0;
+  status = amd_dbgapi_architecture_get_info(
+      m_architecture_id,
+      AMD_DBGAPI_ARCHITECTURE_INFO_BREAKPOINT_INSTRUCTION_SIZE, sizeof(bp_size),
+      &bp_size);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS)
+    return llvm::createStringError(
+        "AMD_DBGAPI_ARCHITECTURE_INFO_BREAKPOINT_INSTRUCTION_SIZE failed");
+
+  m_breakpoint_trap_opcode.assign(bp_instruction, bp_instruction + bp_size);
+  return llvm::ArrayRef<uint8_t>(m_breakpoint_trap_opcode);
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
@@ -320,8 +359,8 @@ ProcessManagerAMDGPU::Launch(
     ProcessLaunchInfo &launch_info,
     NativeProcessProtocol::NativeDelegate &native_delegate) {
   lldb::pid_t pid = launch_info.GetProcessID();
-  auto proc_up =
-      std::make_unique<ProcessAMDGPU>(pid, native_delegate, m_debugger);
+  auto proc_up = std::make_unique<ProcessAMDGPU>(pid, native_delegate,
+                                                 m_debugger, m_architecture_id);
   proc_up->SetLaunchInfo(launch_info);
   return proc_up;
 }
@@ -358,10 +397,18 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
                 status);
       exit(-1);
     }
-    pc -= 4;
+    llvm::Expected<llvm::ArrayRef<uint8_t>> breakpoint_opcode =
+        GetSoftwareBreakpointTrapOpcode(/*size_hint=*/0);
+    if (!breakpoint_opcode) {
+      std::string error = llvm::toString(breakpoint_opcode.takeError());
+      LLDB_LOGF(GetLog(GDBRLog::Plugin),
+                "GetSoftwareBreakpointTrapOpcode failed: %s", error.c_str());
+      exit(-1);
+    }
+    pc -= breakpoint_opcode->size();
     amd_dbgapi_register_id_t pc_register_id;
     status = amd_dbgapi_architecture_get_info(
-        m_debugger->m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_PC_REGISTER,
+        m_architecture_id, AMD_DBGAPI_ARCHITECTURE_INFO_PC_REGISTER,
         sizeof(pc_register_id), &pc_register_id);
     if (status != AMD_DBGAPI_STATUS_SUCCESS) {
       LLDB_LOGF(GetLog(GDBRLog::Plugin),

@@ -8,7 +8,6 @@
 
 #include "RegisterContextAmdGpu.h"
 
-#include "LLDBServerPluginAMDGPU.h"
 #include "ProcessAMDGPU.h"
 #include "ThreadAMDGPU.h"
 #include "lldb/Utility/DataBufferHeap.h"
@@ -23,7 +22,7 @@ RegisterContextAmdGpu::RegisterContextAmdGpu(
     : NativeRegisterContext(native_thread) {
   ThreadAMDGPU *thread = static_cast<ThreadAMDGPU *>(&native_thread);
   amd_dbgapi_architecture_id_t architecture_id =
-      thread->GetProcess().m_debugger->m_architecture_id;
+      thread->GetProcess().GetDbgApiArchitectureID();
 
   m_impl = std::make_unique<RegisterContextAmdGpuImpl>(
       architecture_id, /*is_shawdow_thread=*/thread->IsShadowThread());

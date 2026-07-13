@@ -16,6 +16,8 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include <amd-dbgapi/amd-dbgapi.h>
+#include <optional>
+#include <vector>
 
 namespace lldb_private {
 namespace lldb_server {
@@ -30,8 +32,9 @@ class ProcessAMDGPU : public NativeProcessProtocol {
   ProcessInstanceInfo m_process_info;
 
 public:
-  ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate, 
-                LLDBServerPluginAMDGPU *plugin);
+  ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate,
+                LLDBServerPluginAMDGPU *plugin,
+                amd_dbgapi_architecture_id_t architecture_id);
 
   Status Resume(const ResumeActionList &resume_actions) override;
 
@@ -78,6 +81,7 @@ public:
   // Breakpoint functions
   Status SetBreakpoint(lldb::addr_t addr, uint32_t size,
                        bool hardware) override;
+  Status RemoveBreakpoint(lldb::addr_t addr, bool hardware = false) override;
 
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   GetAuxvData() const override;
@@ -112,7 +116,11 @@ public:
     return amd_dbgapi_process_id_t{m_pid};
   }
 
-  LLDBServerPluginAMDGPU* m_debugger = nullptr;
+  amd_dbgapi_architecture_id_t GetDbgApiArchitectureID() const {
+    return m_architecture_id;
+  }
+
+  LLDBServerPluginAMDGPU *m_debugger = nullptr;
   GpuModuleManager m_gpu_module_manager;
 
   enum class State {
@@ -132,7 +140,13 @@ public:
       std::function<lldb_private::IterationAction(ThreadAMDGPU &)> const
           &callback);
 
+protected:
+  llvm::Expected<llvm::ArrayRef<uint8_t>>
+  GetSoftwareBreakpointTrapOpcode(size_t size_hint) override;
+
 private:
+  amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
+  std::vector<uint8_t> m_breakpoint_trap_opcode;
   WaveIdMap<std::shared_ptr<WaveAMDGPU>> m_waves;
   WaveIdList UpdateWavesAndReturnNew();
   llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>>
@@ -162,7 +176,8 @@ public:
   Attach(lldb::pid_t pid,
          NativeProcessProtocol::NativeDelegate &native_delegate) override;
 
-    LLDBServerPluginAMDGPU* m_debugger = nullptr;
+  LLDBServerPluginAMDGPU *m_debugger = nullptr;
+  amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
 };
 
 } // namespace lldb_server

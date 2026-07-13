@@ -83,7 +83,6 @@ public:
   // Free the memory using the matching callback provided to the debug library.
   static void FreeDbgApiClientMemory(void *mem);
 
-  bool CreateGPUBreakpoint(uint64_t addr);
   llvm::StringRef GetSessionName();
 
   void GpuRuntimeDidLoad();
@@ -99,14 +98,13 @@ public:
   // This is required synchronize setting the GPU internal breakpoint before
   // further actions can be taken.
   bool m_wait_for_gpu_internal_bp_stop = false;
-  amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
 
 private:
   Status InitializeAmdDbgApi();
   Status AttachAmdDbgApi();
   Status DetachAmdDbgApi();
   Status InstallAmdDbgApiNotifierOnMainLoop();
-  Status CreateGpuProcess();
+  Status CreateGpuProcess(amd_dbgapi_architecture_id_t architecture_id);
   std::optional<GPUPluginConnectionInfo> CreateConnection();
   GPUActions SetGpuLoaderBreakpointByAddress();
   GPUActions SetConnectionInfo();
@@ -125,8 +123,6 @@ private:
   process_event_queue(amd_dbgapi_event_kind_t until_event_kind,
                       EventBoundaryType boundary_type = ProcessEventInclusive);
   void HandleNotifierDataReady();
-  bool SetGPUBreakpoint(uint64_t addr, const uint8_t *bp_instruction,
-                        size_t size);
   bool ReadyToAttachDebugLibrary();
   bool ReadyToSetGpuLoaderBreakpointByAddress();
   ProcessAMDGPU *GetGPUProcess() const;
