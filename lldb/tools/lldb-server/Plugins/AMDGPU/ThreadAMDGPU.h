@@ -64,6 +64,8 @@ public:
 
   Status RemoveHardwareBreakpoint(lldb::addr_t addr) override;
 
+  bool GetIsActive() const override;
+
   ProcessAMDGPU &GetProcess();
 
   const ProcessAMDGPU &GetProcess() const;

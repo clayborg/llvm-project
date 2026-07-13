@@ -84,6 +84,9 @@ public:
 
   void ClearStopReason() { SetStopReason(lldb::eStopReasonNone); }
 
+  uint64_t GetExecMask() const { return m_wave_info.exec_mask; }
+  void SetExecMask(uint64_t exec_mask) { m_wave_info.exec_mask = exec_mask; }
+
   void UpdateStopReason(amd_dbgapi_wave_stop_reasons_t stop_reason);
 
 private:

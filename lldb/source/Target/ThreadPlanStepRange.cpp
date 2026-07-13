@@ -562,3 +562,7 @@ bool ThreadPlanStepRange::IsPlanStale() {
   }
   return false;
 }
+
+bool ThreadPlanStepRange::ShouldContinueForThreadActivity() {
+  return !GetThread().GetIsActive();
+}
