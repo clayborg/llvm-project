@@ -164,9 +164,6 @@ using WaveIdSet = std::unordered_set<amd_dbgapi_wave_id_t, WaveIdHash>;
 template <typename T>
 using WaveIdMap = std::unordered_map<amd_dbgapi_wave_id_t, T, WaveIdHash>;
 
-// Convenient typedef for vector of wave IDs.
-using WaveIdList = std::vector<amd_dbgapi_wave_id_t>;
-
 } // namespace lldb_server
 } // namespace lldb_private
 

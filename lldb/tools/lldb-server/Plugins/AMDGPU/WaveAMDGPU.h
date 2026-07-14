@@ -44,7 +44,7 @@ class WaveAMDGPU : public std::enable_shared_from_this<WaveAMDGPU> {
 public:
   explicit WaveAMDGPU(amd_dbgapi_wave_id_t wave_id)
       : m_wave_id(wave_id), m_stop_info{} {
-    SetStopReason(lldb::eStopReasonSignal, SIGTRAP);
+    ClearStopReason();
   }
 
   void
@@ -61,23 +61,30 @@ public:
     return true;
   }
 
-  void SetStopReason(lldb::StopReason reason) { 
+  void SetStopReason(lldb::StopReason reason) {
+    m_stop_info = {};
     m_stop_info.reason = reason;
+    m_stop_description.clear();
   }
 
-  void SetStopReason(lldb::StopReason reason, std::string description) { 
-    m_stop_info.reason = reason; 
+  void SetStopReason(lldb::StopReason reason, std::string description) {
+    m_stop_info = {};
+    m_stop_info.reason = reason;
     m_stop_description = description;
   }
 
   void SetStopReason(lldb::StopReason reason, uint32_t signo) {
+    m_stop_info = {};
     m_stop_info.reason = reason;
     m_stop_info.signo = signo;
+    m_stop_description.clear();
   }
 
   Status Resume(bool single_step);
 
-  void UpdateStopReasonFromWaveInfo();
+  void ClearStopReason() { SetStopReason(lldb::eStopReasonNone); }
+
+  void UpdateStopReason(amd_dbgapi_wave_stop_reasons_t stop_reason);
 
 private:
   amd_dbgapi_wave_id_t m_wave_id;

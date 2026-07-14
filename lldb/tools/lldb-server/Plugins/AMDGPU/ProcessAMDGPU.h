@@ -148,7 +148,8 @@ private:
   amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
   std::vector<uint8_t> m_breakpoint_trap_opcode;
   WaveIdMap<std::shared_ptr<WaveAMDGPU>> m_waves;
-  WaveIdList UpdateWavesAndReturnNew();
+  WaveAMDGPU &GetOrCreateWave(amd_dbgapi_wave_id_t wave_id);
+  void UpdateWaveList();
   llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>>
   GetWaveList(size_t *count, amd_dbgapi_changed_t *changed);
   llvm::Expected<DbgApiWaveInfo> GetWaveInfo(amd_dbgapi_wave_id_t wave_id);

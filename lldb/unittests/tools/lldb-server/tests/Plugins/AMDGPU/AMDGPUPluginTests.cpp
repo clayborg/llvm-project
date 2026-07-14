@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "GpuModuleManager.h"
+#include "WaveAMDGPU.h"
 #include "lldb/Utility/AmdGpuStopReason.h"
 #include "gtest/gtest.h"
 
@@ -310,4 +311,25 @@ TEST(AmdGpuStopReasonTest, NonExceptionStopReasonsClearDescriptions) {
                 AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT, &description),
             lldb::eStopReasonBreakpoint);
   EXPECT_TRUE(description.empty());
+}
+
+TEST(WaveAMDGPUTest, StopReasonChangesOnlyWhenExplicitlyUpdated) {
+  WaveAMDGPU wave({1});
+
+  ThreadStopInfo stop_info;
+  std::string description;
+  EXPECT_TRUE(wave.GetStopReason(stop_info, description));
+  EXPECT_EQ(lldb::eStopReasonNone, stop_info.reason);
+
+  DbgApiWaveInfo wave_info;
+  wave_info.state = AMD_DBGAPI_WAVE_STATE_STOP;
+  wave_info.stop_reason = AMD_DBGAPI_WAVE_STOP_REASON_BREAKPOINT;
+  wave.SetDbgApiInfo(wave_info);
+
+  EXPECT_TRUE(wave.GetStopReason(stop_info, description));
+  EXPECT_EQ(lldb::eStopReasonNone, stop_info.reason);
+
+  wave.UpdateStopReason(wave_info.stop_reason);
+  EXPECT_TRUE(wave.GetStopReason(stop_info, description));
+  EXPECT_EQ(lldb::eStopReasonBreakpoint, stop_info.reason);
 }

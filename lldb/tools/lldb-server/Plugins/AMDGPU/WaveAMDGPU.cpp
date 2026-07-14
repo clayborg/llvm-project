@@ -114,24 +114,12 @@ void WaveAMDGPU::AddThreadsToList(
 
 void WaveAMDGPU::SetDbgApiInfo(const DbgApiWaveInfo &wave_info) {
   m_wave_info = wave_info;
-  UpdateStopReasonFromWaveInfo();
 }
 
-void WaveAMDGPU::UpdateStopReasonFromWaveInfo() {
-  lldb::StopReason reason = lldb::StopReason::eStopReasonInvalid;
+void WaveAMDGPU::UpdateStopReason(amd_dbgapi_wave_stop_reasons_t stop_reason) {
   std::string description;
-  switch (m_wave_info.state) {
-  case AMD_DBGAPI_WAVE_STATE_RUN:
-  case AMD_DBGAPI_WAVE_STATE_SINGLE_STEP:
-    reason = lldb::StopReason::eStopReasonNone;
-    break;
-  case AMD_DBGAPI_WAVE_STATE_STOP:
-    reason = GetLldbStopReasonForDbgApiStopReason(m_wave_info.stop_reason,
-                                                  &description);
-    break;
-  }
-
-  assert(reason != lldb::StopReason::eStopReasonInvalid);
+  lldb::StopReason reason =
+      GetLldbStopReasonForDbgApiStopReason(stop_reason, &description);
   SetStopReason(reason, description);
 }
 
@@ -146,5 +134,7 @@ Status WaveAMDGPU::Resume(bool single_step) {
                                   exception);
   });
   Status status = Status::FromError(std::move(err));
+  if (status.Success())
+    ClearStopReason();
   return status;
 }
