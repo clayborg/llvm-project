@@ -1285,6 +1285,21 @@ class LinuxCoreTestCase(TestBase):
         self.assertEqual(exe_module.GetFileSpec().fullpath, "/path/nt_file_foo")
         self.dbg.DeleteTarget(target)
 
+    def test_memory_region_name_from_nt_file(self):
+        # GetMemoryRegionInfo reports the mapped-file name from the NT_FILE note,
+        # even for file-backed bytes not dumped as a PT_LOAD. 0x55BB04288000 is
+        # the NT_FILE mapping for '/path/nt_file_foo' in this core.
+        yaml_path = self.getSourcePath("elf-NT_FILE-NT_PRPSINFO-AT_EXECFN.yaml")
+        core_path = self.getBuildArtifact("elf-NT_FILE-region-name.core")
+        self.yaml2obj(yaml_path, core_path)
+        target = self.dbg.CreateTarget(None)
+        process = target.LoadCore(core_path)
+        region = lldb.SBMemoryRegionInfo()
+        self.assertTrue(
+            process.GetMemoryRegionInfo(0x55BB04288000, region).Success())
+        self.assertEqual(region.GetName(), "/path/nt_file_foo")
+        self.dbg.DeleteTarget(target)
+
     def test_exe_name_extraction_at_execfn(self):
         # This core file has:
         # - AT_EXECFN that points to "/path/execfn_foo"
