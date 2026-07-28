@@ -12,9 +12,11 @@
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/ObjectFile/Placeholder/ObjectFilePlaceholder.h"
+#include "Plugins/Process/elf-core/ProcessElfCore.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Target/MemoryRegionInfo.h"
 #include "lldb/Utility/AmdDbgApiUtils.h"
 #include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
@@ -593,9 +595,28 @@ llvm::Error ProcessAmdGpuCore::LoadModules() {
       }
     }
 
+    // Name a memory:// code object from its NT_FILE backing file (e.g. an
+    // AOTInductor .hsaco) instead of the synthetic "amd_memory_kernel[...]" --
+    // even if the file is absent here, so the placeholder keeps a real name.
+    FileSpec module_file(lib_info->pathname);
+    if (lib_info->native_memory_address.has_value()) {
+      if (std::shared_ptr<ProcessElfCore> cpu_core = GetCpuProcess()) {
+        MemoryRegionInfo region_info;
+        if (cpu_core
+                ->GetMemoryRegionInfo(lib_info->native_memory_address.value(),
+                                      region_info)
+                .Success() &&
+            region_info.GetName()) {
+          module_file = FileSpec(region_info.GetName().GetStringRef());
+          LLDB_LOG(log, "Named \"{0}\" from backing file: {1}",
+                   lib_info->pathname, module_file.GetPath());
+        }
+      }
+    }
+
     // Create a module specification from the info we got.
     UUID uuid;
-    ModuleSpec module_spec(FileSpec(lib_info->pathname), uuid, data_sp);
+    ModuleSpec module_spec(module_file, uuid, data_sp);
 
     // Set file offset and size if available
     if (lib_info->file_offset.has_value())

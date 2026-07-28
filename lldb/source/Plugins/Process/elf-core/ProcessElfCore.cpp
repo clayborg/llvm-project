@@ -579,6 +579,13 @@ size_t ProcessElfCore::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
 Status ProcessElfCore::DoGetMemoryRegionInfo(lldb::addr_t load_addr,
                                              MemoryRegionInfo &region_info) {
   region_info.Clear();
+
+  // Report the backing file (from the NT_FILE note) like a live process --
+  // works even for file-backed bytes not dumped in the core (no PT_LOAD)
+  if (std::optional<NT_FILE_Entry> file_entry =
+          GetNTFileEntryContainingAddress(load_addr))
+    region_info.SetName(file_entry->path.c_str());
+
   const VMRangeToPermissions::Entry *permission_entry =
       m_core_range_infos.FindEntryThatContainsOrFollows(load_addr);
   if (permission_entry) {
