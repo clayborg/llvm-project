@@ -104,7 +104,7 @@ private:
   TypeSP MakeType(user_id_t, ConstString, std::optional<uint64_t>,
                   SymbolContextScope *, user_id_t, Type::EncodingDataType,
                   const Declaration &, const CompilerType &, Type::ResolveState,
-                  uint32_t) override {
+                  std::optional<lldb::addr_space_t>, uint32_t) override {
     return nullptr;
   }
   TypeSP CopyType(const TypeSP &) override { return nullptr; }

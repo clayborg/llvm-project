@@ -292,6 +292,7 @@ static llvm::Expected<Value> Evaluate(llvm::ArrayRef<uint8_t> expr,
 
   return DWARFExpression::Evaluate(exe_ctx, reg_ctx, module_sp, extractor, unit,
                                    lldb::eRegisterKindLLDB,
+                                   /*addr_space=*/0,
                                    /*initial_value_ptr=*/nullptr,
                                    /*object_address_ptr=*/nullptr);
 }
@@ -807,6 +808,7 @@ DWARF:
     return DWARFExpression::Evaluate(&exe_ctx, /*reg_ctx*/ nullptr,
                                      /*module_sp*/ {}, extractor, dwarf_cu,
                                      lldb::eRegisterKindLLDB,
+                                     /*addr_space=*/0,
                                      /*initial_value_ptr*/ nullptr,
                                      /*object_address_ptr*/ nullptr);
   };
