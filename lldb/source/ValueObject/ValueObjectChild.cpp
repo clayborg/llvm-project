@@ -159,7 +159,9 @@ bool ValueObjectChild::UpdateValue() {
         std::optional<uint64_t> address_space = parent->GetValue().GetAddressSpaceId();
         if (addr == LLDB_INVALID_ADDRESS) {
           m_error = Status::FromErrorString("parent address is invalid.");
-        } else if (addr == 0 && !address_space) {
+        } else if (addr == 0 &&
+                   (!address_space ||
+                    *address_space == LLDB_DEFAULT_ADDRESS_SPACE)) {
           m_error = Status::FromErrorString("parent is NULL");
         } else {
           // If a bitfield doesn't fit into the child_byte_size'd window at
