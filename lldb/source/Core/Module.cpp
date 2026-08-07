@@ -154,12 +154,14 @@ Module::Module(const ModuleSpec &module_spec)
   if (data_sp)
     file_size = data_sp->GetByteSize();
 
-  // Slice-backed callers already describe the exact subobject they want. Plain
-  // file lookups still need whole-file enumeration so container plugins can
-  // contribute every member or slice before we pick the matching spec.
+  // Slice-backed callers already describe the exact subobject they want,
+  // whether the bytes come from memory or from a slice of a file on disk. A
+  // named object is an archive member: its offset points into the archive,
+  // which only parses from the start, so those still enumerate the whole file
+  // and are picked out by name below.
   ModuleSpecList modules_specs;
   const bool use_explicit_bounds =
-      data_sp && module_spec.HasObjectFileBounds();
+      module_spec.HasObjectFileBounds() && !module_spec.GetObjectName();
   const auto module_offset =
       use_explicit_bounds ? module_spec.GetObjectOffset() : 0;
   const auto module_size =
