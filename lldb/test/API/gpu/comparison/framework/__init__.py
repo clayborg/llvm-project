@@ -10,9 +10,10 @@
 #   │   ├── gdb_driver.py          # Generic GDB driver (can be extended)
 #   │   ├── lldb_driver.py         # LLDB driver
 #   │   └── comparator.py          # Result comparison utilities
-#   ├── amd/                # AMD-specific tests
+#   ├── amd/                # AMD-specific tests (ROCgdb)
 #   │   └── TestAmdGpuCoreFileComparison.py
-#   └── nvidia/             # Future: NVIDIA-specific tests
+#   └── nvidia/             # NVIDIA-specific tests (cuda-gdb)
+#       └── TestNVGPUCoreFileComparison.py
 #
 
 from .debugger_interface import DebuggerInterface, DebuggerResult
