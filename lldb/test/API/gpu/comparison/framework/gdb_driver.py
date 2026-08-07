@@ -54,11 +54,16 @@ class GdbDriver(DebuggerInterface):
     END_MARKER = "<<<GDB_SCRIPT_COMPLETE_12345>>>"
 
     def __init__(
-        self, gdb_path: str = "gdb", ld_preload: str = None, ld_library_path: str = None
+        self,
+        gdb_path: str = "gdb",
+        ld_preload: str = None,
+        ld_library_path: str = None,
+        prompt: str = "(gdb)",
     ):
         self.gdb_path = gdb_path
         self.ld_preload = ld_preload
         self.ld_library_path = ld_library_path
+        self._prompt = prompt
         self._process: Optional[subprocess.Popen] = None
         self._core_loaded = False
         self._core_path = None
@@ -125,7 +130,7 @@ class GdbDriver(DebuggerInterface):
                     buffer += char
 
                     # When we see a newline or a complete prompt, emit the line
-                    if char == "\n" or buffer.endswith("(gdb) "):
+                    if char == "\n" or buffer.endswith(f"{self._prompt} "):
                         self._output_queue.put(buffer)
                         buffer = ""
                 except Exception:
@@ -149,8 +154,8 @@ class GdbDriver(DebuggerInterface):
                 line = self._output_queue.get(timeout=0.05)
                 lines.append(line)
 
-                # Check if this line contains the (gdb) prompt
-                if "(gdb)" in line:
+                # Check if this line contains the prompt.
+                if self._prompt in line:
                     # Drain any immediately available output
                     while True:
                         try:
@@ -185,7 +190,7 @@ class GdbDriver(DebuggerInterface):
                         while time.time() < prompt_deadline:
                             extra = self._output_queue.get(timeout=0.05)
                             lines.append(extra)
-                            if "(gdb)" in extra:
+                            if self._prompt in extra:
                                 break
                     except queue.Empty:
                         pass
