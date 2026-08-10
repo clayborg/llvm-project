@@ -1724,6 +1724,7 @@ bool ObjectFileELF::IsNVGPUCoreFile() const {
 //
 //   nvgpucore
 //     devN
+//       ctxN (per-context metadata)
 //       gridN
 //         param (per-grid parameter memory)
 //         constbank (per-grid constbank table)
@@ -1744,11 +1745,11 @@ bool ObjectFileELF::IsNVGPUCoreFile() const {
 // rule for whether to materialize a container is "the producer wrote a
 // section in the flat ELF representation for it":
 //
-//   * Devices, SMs, CTAs, warps -- one container per row in the parent
-//     table (`nvgpu-{device,sm,cta,warp}-table`). The row itself *is* the
-//     section data for that hardware unit, so a faulted-but-otherwise-idle
-//     SM (a row with non-zero `exception` but no child CTAs) still shows
-//     up as a bare container and downstream code can decode its row.
+//   * Devices, contexts, SMs, grids, CTAs, warps -- one section per row in
+//     the parent table. The row itself *is* the section data for that unit,
+//     so a faulted-but-otherwise-idle SM (a row with non-zero `exception`
+//     but no child CTAs) still shows up as a bare container and downstream
+//     code can decode its row.
 //
 //   * Lanes -- driven by per-lane leaf sections (`nvgpu-registers`,
 //     `nvgpu-predicates`, `nvgpu-local-memory`). Invalid lanes (cleared
@@ -1887,6 +1888,14 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       name = "dev" + std::to_string(row_idx);
       seq = &dev_seq;
       parent_sp = root_sp;
+      break;
+    case eSectionTypeNVGPUContextTable:
+      kind = nvgpu::SectionKind::Leaf;
+      child_type = eSectionTypeNVGPUContext;
+      expected_parent_type = eSectionTypeNVGPUDevice;
+      name = "ctx" + std::to_string(row_idx);
+      seq = &leaf_seq;
+      parent_sp = GetOrCreateAncestor(h.sh_link, h.sh_info);
       break;
     case eSectionTypeNVGPUSmTable:
       kind = nvgpu::SectionKind::Sm;
@@ -2033,10 +2042,11 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
 
   // Single forward pass over the ELF section headers.
   //
-  //   * SM / grid / CTA / warp tables: fan out every row into a container
-  //     under the parent that `sh_link`/`sh_info` resolves to (parent and any
-  //     missing ancestors created on-demand by `GetOrCreateAncestor`). Grids
-  //     are a sibling branch of the SM subtree under each device.
+  //   * Context / SM / grid / CTA / warp tables: fan out every row into a
+  //     section under the parent that `sh_link`/`sh_info` resolves to (parent
+  //     and any missing ancestors created on-demand by
+  //     `GetOrCreateAncestor`). Contexts and grids are sibling branches of
+  //     the SM subtree under each device.
   //
   //   * Lane table: skipped here. Lanes are materialized below by per-lane
   //     leaves (regs/preds/local) so invalid lanes -- which the producer
@@ -2060,6 +2070,7 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       return;
     const ELFSectionHeaderInfo &h = m_section_headers[i];
     switch (GetSectionType(h)) {
+    case eSectionTypeNVGPUContextTable:
     case eSectionTypeNVGPUSmTable:
     case eSectionTypeNVGPUGridTable:
     case eSectionTypeNVGPUCtaTable:

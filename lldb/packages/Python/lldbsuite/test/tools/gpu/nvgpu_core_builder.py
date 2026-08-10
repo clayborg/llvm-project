@@ -20,6 +20,7 @@ The section tree, wired up via ``sh_link`` / ``sh_info``::
           modN                          CUDBG_SHT_MOD_TABLE
             cubin, ucubin
         gridN                           CUDBG_SHT_GRID_TABLE
+          param
           constbank
         smN                             CUDBG_SHT_SM_TABLE
           ctaN                          CUDBG_SHT_CTA_TABLE
@@ -234,6 +235,7 @@ class _Grid:
     row_index: int
     row_bytes: bytes
     constbanks: list = field(default_factory=list)  # list of row_bytes
+    params: Optional[bytes] = None
 
 
 class NVGPUCoreBuilder:
@@ -516,6 +518,9 @@ class NVGPUCoreBuilder:
     def add_shared_memory(self, cta, addr, data):
         cta.shared = (addr, bytes(data))
 
+    def add_parameter_memory(self, grid, data):
+        grid.params = bytes(data)
+
     # -- grid constant banks ----------------------------------------------
 
     def add_constbank(self, grid, *, addr, size, bank_id=0):
@@ -668,12 +673,19 @@ class NVGPUCoreBuilder:
 
     def _emit_grids(self, emit, dev, devtbl):
         """Emit a device's grid table (sibling of the SM subtree) and the
-        constant-bank tables hanging off it."""
+        parameter-memory and constant-bank leaves hanging off it."""
         gridtbl = f".cudbg.gridtbl.{dev.tag}"
         emit(gridtbl, CUDBG_SHT_GRID_TABLE,
              _table((g.row_bytes for g in dev.grids), GRID_ROW_SIZE),
              link=devtbl, info=dev.idx, entsize=GRID_ROW_SIZE)
         for grid in dev.grids:
+            emit(
+                f".cudbg.param.{dev.tag}.grid{grid.row_index}",
+                CUDBG_SHT_PARAM_MEM,
+                grid.params,
+                link=gridtbl,
+                info=grid.row_index,
+            )
             if grid.constbanks:
                 emit(f".cudbg.cbtbl.{dev.tag}.grid{grid.row_index}",
                      CUDBG_SHT_CB_TABLE,
