@@ -50,7 +50,8 @@ enum class SectionKind : uint8_t {
   Lane = 0xC6,   ///< per-lane nvgpu-lane container
   Leaf = 0xC7,   ///< all other leaves (uregs/upreds/cbarrier per warp,
                  ///< shared per CTA, regs/preds/local per lane,
-                 ///< global/managed memory, cubin images)
+                 ///< context/constbank/backtrace rows, global/managed memory,
+                 ///< cubin images)
 };
 
 /// Bit position of the kind tag in `user_id`.

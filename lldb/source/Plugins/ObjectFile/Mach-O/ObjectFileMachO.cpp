@@ -1238,6 +1238,7 @@ AddressClass ObjectFileMachO::GetAddressClass(lldb::addr_t file_addr) {
         case eSectionTypeNVGPUConvergenceBarrier:
         case eSectionTypeNVGPURoot:
         case eSectionTypeNVGPUDevice:
+        case eSectionTypeNVGPUContext:
         case eSectionTypeNVGPUSm:
         case eSectionTypeNVGPUGrid:
         case eSectionTypeNVGPUCta:
