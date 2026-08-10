@@ -815,7 +815,8 @@ enum SectionType {
   // hierarchy built by ObjectFileELF when e_machine == EM_CUDA &&
   // GetType() == eTypeCoreFile. Each section's data window is its row in the
   // parent table section. Root through Lane are containers (they parent
-  // further rows/leaves); ConstBank is a terminal leaf (one constant bank).
+  // further rows/leaves); ConstBank, BacktraceEntry, and Context are terminal
+  // row sections.
   eSectionTypeNVGPURoot,
   eSectionTypeNVGPUDevice,
   eSectionTypeNVGPUSm,
@@ -825,6 +826,7 @@ enum SectionType {
   eSectionTypeNVGPULane,
   eSectionTypeNVGPUConstBank,
   eSectionTypeNVGPUBacktraceEntry,
+  eSectionTypeNVGPUContext,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){
