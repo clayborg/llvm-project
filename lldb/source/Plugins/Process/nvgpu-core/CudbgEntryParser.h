@@ -70,6 +70,13 @@ struct DeviceEntry : CudbgDeviceTableEntry {
                                             uint64_t entry_size);
 };
 
+/// One row of a nvgpu-context-table.
+struct ContextEntry : CudbgContextTableEntry {
+  static llvm::Expected<ContextEntry> Decode(const DataExtractor &data,
+                                             lldb::offset_t *offset_ptr,
+                                             uint64_t entry_size);
+};
+
 /// One row of a nvgpu-sm-table.
 struct SMEntry : CudbgSmTableEntry {
   static llvm::Expected<SMEntry> Decode(const DataExtractor &data,
