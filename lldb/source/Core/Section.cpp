@@ -206,6 +206,8 @@ const char *Section::GetTypeAsCString() const {
     return "nvgpu-root";
   case eSectionTypeNVGPUDevice:
     return "nvgpu-device";
+  case eSectionTypeNVGPUContext:
+    return "nvgpu-context";
   case eSectionTypeNVGPUSm:
     return "nvgpu-sm";
   case eSectionTypeNVGPUGrid:
@@ -509,6 +511,7 @@ bool Section::ContainsOnlyDebugInfo() const {
   case eSectionTypeNVGPUConvergenceBarrier:
   case eSectionTypeNVGPURoot:
   case eSectionTypeNVGPUDevice:
+  case eSectionTypeNVGPUContext:
   case eSectionTypeNVGPUSm:
   case eSectionTypeNVGPUGrid:
   case eSectionTypeNVGPUCta:
