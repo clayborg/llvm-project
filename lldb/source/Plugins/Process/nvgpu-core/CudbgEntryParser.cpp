@@ -46,6 +46,21 @@ llvm::Expected<DeviceEntry> DeviceEntry::Decode(const DataExtractor &data,
   return out;
 }
 
+llvm::Expected<ContextEntry> ContextEntry::Decode(const DataExtractor &data,
+                                                  offset_t *offset_ptr,
+                                                  uint64_t entry_size) {
+  if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
+    return llvm::createStringError("truncated context table entry");
+  ContextEntry out{};
+  out.contextId = data.GetU64(offset_ptr);
+  out.sharedWindowBase = data.GetU64(offset_ptr);
+  out.localWindowBase = data.GetU64(offset_ptr);
+  out.globalWindowBase = data.GetU64(offset_ptr);
+  out.deviceIdx = data.GetU32(offset_ptr);
+  out.tid = data.GetU32(offset_ptr);
+  return out;
+}
+
 llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
                                         offset_t *offset_ptr,
                                         uint64_t entry_size) {
@@ -223,9 +238,9 @@ std::optional<ProducerInfo> DecodeProducerInfo(const DataExtractor &data) {
   return info;
 }
 
-llvm::Expected<BacktraceEntry>
-BacktraceEntry::Decode(const DataExtractor &data, offset_t *offset_ptr,
-                       uint64_t entry_size) {
+llvm::Expected<BacktraceEntry> BacktraceEntry::Decode(const DataExtractor &data,
+                                                      offset_t *offset_ptr,
+                                                      uint64_t entry_size) {
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated backtrace table entry");
   BacktraceEntry out{};

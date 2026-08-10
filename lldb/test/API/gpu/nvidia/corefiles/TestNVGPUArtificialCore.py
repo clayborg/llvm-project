@@ -45,6 +45,22 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
     CONST_ADDR_G2 = 0x500000  # grid 2, bank 0
     ABSENT_ADDR = 0x100100000  # backed by nothing
 
+    # Grid 1's parameter offset deliberately collides with its shared-memory
+    # address. Explicit address-space dispatch must still select param data.
+    PARAM_ADDR = SHARED_ADDR
+    PARAM_ADDR2 = 0x600000
+    PARAM_ADDR3 = 0x700000  # grid 3 intentionally has no parameter payload
+
+    CONTEXT_ID = 0x101
+    CONTEXT_ID2 = 0x202
+    CONTEXT_ID3 = 0x303
+    SHARED_WINDOW_BASE = 0x10000000000
+    LOCAL_WINDOW_BASE = 0x10010000000
+    SHARED_WINDOW_BASE2 = 0x20000000000
+    LOCAL_WINDOW_BASE2 = 0x20010000000
+    SHARED_WINDOW_BASE3 = 0x30000000000
+    LOCAL_WINDOW_BASE3 = 0x30010000000
+
     PC_T1 = 0x00007FFFCF281000
     ERROR_PC_T1 = 0x00000000ABCD1000
 
@@ -227,29 +243,71 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         # An inline trap surfaces as isWarpBroken -> SIGTRAP "trap".
         trap_block = (2, 0, 0)
         trap_thread = (0, 2, 0)
-        cta2 = b.add_cta(sm, grid_id=1, block_idx=trap_block)
+        cta2 = b.add_cta(sm, grid_id=3, block_idx=trap_block)
         warp_trap = b.add_warp(
             cta2, valid_lanes_mask=1, active_lanes_mask=1, is_warp_broken=True
         )
         trap_lane = b.add_lane(warp_trap, lane_id=0, thread_idx=trap_thread)
         b.set_lane_registers(trap_lane, [0])
+        self.trap_thread_name = self._thread_name(trap_block, trap_thread)
         self.stop_threads.append(
             {
-                "name": self._thread_name(trap_block, trap_thread),
+                "name": self.trap_thread_name,
                 "reason": lldb.eStopReasonSignal,
                 "substr": "trap",
             }
         )
+        self.grid2_no_local_thread_name = self._thread_name(t1_block, (0, 3, 0))
 
         self.expected_num_threads = len(self.reg_threads) + num_exc + 2
 
-        # Two banks in grid 1, one in grid 2, each backed by global memory at
-        # its address. Const reads resolve the selected thread's CTA -> grid.
-        grid1 = b.add_grid(dev, grid_id=1)
+        # Each grid resolves through its context row. Grids 1 and 2 have
+        # distinct parameter payloads; grid 3 intentionally has none.
+        context1 = b.add_context(
+            dev,
+            context_id=self.CONTEXT_ID,
+            shared_window_base=self.SHARED_WINDOW_BASE,
+            local_window_base=self.LOCAL_WINDOW_BASE,
+        )
+        context2 = b.add_context(
+            dev,
+            context_id=self.CONTEXT_ID2,
+            shared_window_base=self.SHARED_WINDOW_BASE2,
+            local_window_base=self.LOCAL_WINDOW_BASE2,
+        )
+        context3 = b.add_context(
+            dev,
+            context_id=self.CONTEXT_ID3,
+            shared_window_base=self.SHARED_WINDOW_BASE3,
+            local_window_base=self.LOCAL_WINDOW_BASE3,
+        )
+        grid1 = b.add_grid(
+            dev,
+            grid_id=1,
+            context=context1,
+            params_offset=self.PARAM_ADDR,
+        )
+        b.add_parameter_memory(
+            grid1, struct.pack("<II", 0xFACE0000, 0xFACE0001)
+        )
         b.add_constbank(grid1, addr=self.CONST_ADDR, size=8, bank_id=0)
         b.add_constbank(grid1, addr=self.CONST_ADDR2, size=8, bank_id=1)
-        grid2 = b.add_grid(dev, grid_id=2)
+        grid2 = b.add_grid(
+            dev,
+            grid_id=2,
+            context=context2,
+            params_offset=self.PARAM_ADDR2,
+        )
+        b.add_parameter_memory(
+            grid2, struct.pack("<II", 0xFACE1000, 0xFACE1001)
+        )
         b.add_constbank(grid2, addr=self.CONST_ADDR_G2, size=8, bank_id=0)
+        b.add_grid(
+            dev,
+            grid_id=3,
+            context=context3,
+            params_offset=self.PARAM_ADDR3,
+        )
         b.add_global_memory(self.CONST_ADDR, struct.pack("<II", 0xC0FFEE00, 0xC0FFEE01))
         b.add_global_memory(
             self.CONST_ADDR2, struct.pack("<II", 0xC0FFEE10, 0xC0FFEE11)
@@ -396,7 +454,8 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         """Multiple global/managed sections plus per-thread shared/local; an
         absent address fails with the reader's diagnostic."""
         self.expect(
-            f"memory read {self.GLOBAL_ADDR:#x} --format x --size 4 -c 2",
+            f"memory read -p global {self.GLOBAL_ADDR:#x} "
+            "--format x --size 4 -c 2",
             substrs=["0xdeadbeef 0x00000001"],
         )
         self.expect(
@@ -430,6 +489,18 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         self.expect(
             f"memory read -p local {self.LOCAL_ADDR2:#x} --format x --size 4 -c 1",
             substrs=["0xfeed1111"],
+        )
+        self.expect(
+            f"memory read -p shared {self.SHARED_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'shared'"],
+        )
+        self.expect(
+            f"memory read -p local {self.LOCAL_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'local'"],
         )
 
         self.expect(
@@ -470,4 +541,125 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
             f"memory read -p const {self.CONST_ADDR:#x} --format x --size 4 -c 1",
             error=True,
             substrs=["is not within any constant bank"],
+        )
+
+    def test_parameter_memory_is_grid_scoped(self):
+        """Param reads use the selected thread's grid and never fall through
+        to a numerically overlapping shared-memory section."""
+        self._select(self.reg_threads[0]["name"])  # grid 1
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xface0000 0xface0001"],
+        )
+        self.expect(
+            f"memory read -p shared {self.PARAM_ADDR:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xabcd0000 0xabcd0001"],
+        )
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR2:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'param'"],
+        )
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR + 8:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'param'"],
+        )
+
+        self._select(self.reg_threads[1]["name"])  # grid 2
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR2:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xface1000 0xface1001"],
+        )
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'param'"],
+        )
+
+        self._select(self.trap_thread_name)  # grid 3 has no param section
+        self.expect(
+            f"memory read -p param {self.PARAM_ADDR3:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'param'"],
+        )
+
+    def test_generic_memory_translation(self):
+        """Generic reads preserve global addresses and translate shared/local
+        windows through the selected grid's context and lane hierarchy."""
+        self._select(self.reg_threads[0]["name"])  # grid/context 1
+        self.expect(
+            f"memory read -p generic {self.GLOBAL_ADDR:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xdeadbeef 0x00000001"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.SHARED_WINDOW_BASE + self.SHARED_ADDR:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xabcd0000 0xabcd0001"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.LOCAL_WINDOW_BASE + self.LOCAL_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            substrs=["0xfeedface"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.SHARED_WINDOW_BASE2 + self.SHARED_ADDR2:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'generic'"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.SHARED_WINDOW_BASE + self.SHARED_ADDR + 8:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'generic'"],
+        )
+
+        self._select(self.reg_threads[1]["name"])  # grid/context 2
+        self.expect(
+            f"memory read -p generic "
+            f"{self.SHARED_WINDOW_BASE2 + self.SHARED_ADDR2:#x} "
+            "--format x --size 4 -c 2",
+            substrs=["0xbeef0000 0xbeef0001"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.LOCAL_WINDOW_BASE2 + self.LOCAL_ADDR2:#x} "
+            "--format x --size 4 -c 1",
+            substrs=["0xfeed1111"],
+        )
+        self.expect(
+            f"memory read -p generic "
+            f"{self.SHARED_WINDOW_BASE + self.SHARED_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'generic'"],
+        )
+
+        # This lane belongs to context 2 but has no local-memory leaf.
+        self._select(self.grid2_no_local_thread_name)
+        self.expect(
+            f"memory read -p generic "
+            f"{self.LOCAL_WINDOW_BASE2 + self.LOCAL_ADDR2:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'generic'"],
+        )
+        self.expect(
+            f"memory read -p generic {self.ABSENT_ADDR:#x} "
+            "--format x --size 4 -c 1",
+            error=True,
+            substrs=["does not contain address space 'generic'"],
         )
