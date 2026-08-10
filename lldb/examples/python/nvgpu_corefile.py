@@ -52,6 +52,7 @@ def _build_type_names():
         # NVGPU-specific
         ("eSectionTypeNVGPURoot", "nvgpu-root"),
         ("eSectionTypeNVGPUDevice", "nvgpu-device"),
+        ("eSectionTypeNVGPUContext", "nvgpu-context"),
         ("eSectionTypeNVGPUSm", "nvgpu-sm"),
         ("eSectionTypeNVGPUGrid", "nvgpu-grid"),
         ("eSectionTypeNVGPUCta", "nvgpu-cta"),

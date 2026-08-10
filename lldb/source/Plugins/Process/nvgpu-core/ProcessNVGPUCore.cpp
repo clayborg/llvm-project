@@ -372,25 +372,44 @@ static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
   return data.CopyData(offset, bytes_to_read, buf);
 }
 
+/// Read `size` bytes at `offset` from a section's raw payload. Unlike
+/// `ReadFromMemorySection`, this does not use the section's file address and
+/// therefore also works for metadata-only leaves such as parameter memory.
+static size_t ReadFromSectionData(SectionSP section, offset_t offset, void *buf,
+                                  size_t size, ObjectFile *core) {
+  if (!section)
+    return 0;
+  DataExtractor data;
+  core->ReadSectionData(section.get(), data);
+  if (offset >= data.GetByteSize())
+    return 0;
+  const size_t bytes_to_read =
+      std::min<offset_t>(size, data.GetByteSize() - offset);
+  return data.CopyData(offset, bytes_to_read, buf);
+}
+
+struct GridSectionInfo {
+  SectionSP section;
+  nvgpu_core::GridEntry entry;
+};
+
 /// Locate the grid container that `gpu_thread` is part of by matching the
 /// thread's CTA `gridId64` against the device's grid children (the grid
-/// subtree is a sibling of the SM subtree under each device). Returns null
-/// if the grid can't be resolved -- callers treat that as "unverifiable"
-/// rather than an error.
-static SectionSP FindGridSection(ThreadNVGPUCore &gpu_thread,
-                                 ObjectFile *core) {
+/// subtree is a sibling of the SM subtree under each device).
+static std::optional<GridSectionInfo>
+FindGridSection(ThreadNVGPUCore &gpu_thread, ObjectFile *core) {
   Log *log = GetLog(LLDBLog::Process);
   SectionSP cta_sp = gpu_thread.GetCTASection();
   SectionSP dev_sp = gpu_thread.GetDeviceSection();
   if (!cta_sp || !dev_sp)
-    return nullptr;
+    return std::nullopt;
 
   llvm::Expected<nvgpu_core::CTAEntry> cta_or =
       nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(cta_sp, core);
   if (!cta_or) {
     LLDB_LOG_ERROR(log, cta_or.takeError(),
                    "grid lookup: failed to decode CTA row: {0}");
-    return nullptr;
+    return std::nullopt;
   }
 
   for (const SectionSP &grid_sp :
@@ -403,9 +422,9 @@ static SectionSP FindGridSection(ThreadNVGPUCore &gpu_thread,
       continue;
     }
     if (grid_or->gridId64 == cta_or->gridId64)
-      return grid_sp;
+      return GridSectionInfo{grid_sp, *grid_or};
   }
-  return nullptr;
+  return std::nullopt;
 }
 
 /// Test whether `addr` falls within one of the grid's constant banks. Each
@@ -430,6 +449,43 @@ static bool AddressInGridConstBanks(const Section &grid, ObjectFile *core,
   return false;
 }
 
+static std::optional<nvgpu_core::ContextEntry>
+FindContextEntry(const Section &device, uint64_t context_id, ObjectFile *core) {
+  Log *log = GetLog(LLDBLog::Process);
+  for (const SectionSP &context_sp :
+       nvgpu_core::FindChildrenByType(device, eSectionTypeNVGPUContext)) {
+    llvm::Expected<nvgpu_core::ContextEntry> context_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::ContextEntry>(context_sp, core);
+    if (!context_or) {
+      LLDB_LOG_ERROR(log, context_or.takeError(),
+                     "context lookup: failed to decode context row: {0}");
+      continue;
+    }
+    if (context_or->contextId == context_id)
+      return *context_or;
+  }
+  return std::nullopt;
+}
+
+static size_t FailAddressSpaceRead(const AddressSpaceInfo &info, addr_t addr,
+                                   Status &error) {
+  error = Status::FromErrorStringWithFormat(
+      "core file does not contain address space '%s' address 0x%" PRIx64,
+      info.name.c_str(), addr);
+  return 0;
+}
+
+static bool IsAddressInGenericWindow(addr_t addr, addr_t window_base) {
+  // TODO: Pre-Hopper and SM90 32-bit/32on64 compatibility mode use a 16 MiB
+  // shared window. Normal SM90+ mode uses a 4 GiB shared window with 16 MiB
+  // DSMEM rank strides. Version-1 cores record only the window bases, not the
+  // active mode or window sizes, so keep the legacy size until that ambiguity
+  // can be resolved. The local window remains 16 MiB.
+  constexpr addr_t kGenericMemoryWindowSize = 16 * 1024 * 1024;
+  return addr >= window_base &&
+         addr - window_base < kGenericMemoryWindowSize;
+}
+
 size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
                                       const AddressSpaceInfo &info, void *buf,
                                       size_t size, Status &error) {
@@ -440,6 +496,10 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
            "ProcessNVGPUCore::DoReadMemory(AddressSpec) addr={0:x} space={1} "
            "size={2}",
            addr, info.name, size);
+
+  // Global memory is not thread-specific and requires no hierarchy lookup.
+  if (info.value == nvgpu::GlobalStorage)
+    return DoReadMemory(addr, buf, size, error);
 
   ObjectFile *core = GetCoreObjectFile();
 
@@ -464,36 +524,101 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
 
   auto *gpu_thread = static_cast<ThreadNVGPUCore *>(thread_sp.get());
 
-  if (info.value == nvgpu::ConstStorage) {
-    if (SectionSP grid_sp = FindGridSection(*gpu_thread, core)) {
-      if (!AddressInGridConstBanks(*grid_sp, core, addr)) {
-        error = Status::FromErrorStringWithFormat(
-            "address 0x%" PRIx64 " is not within any constant bank", addr);
-        return 0;
-      }
-    }
-    return DoReadMemory(addr, buf, size, error);
-  }
-
   SectionSP lane_sp = gpu_thread->GetLaneSection();
   SectionSP cta_sp = gpu_thread->GetCTASection();
+  SectionSP dev_sp = gpu_thread->GetDeviceSection();
 
-  // Shared memory (per-CTA): under the lane's CTA ancestor.
-  SectionSP shared_sp =
-      nvgpu_core::FindChildByType(*cta_sp, eSectionTypeNVGPUSharedMemory);
-  if (size_t bytes = ReadFromMemorySection(shared_sp, addr, buf, size, core))
-    return bytes;
+  auto read_child = [&](SectionSP parent, SectionType type,
+                        addr_t section_addr) -> size_t {
+    if (parent) {
+      SectionSP child = nvgpu_core::FindChildByType(*parent, type);
+      size_t bytes =
+          ReadFromMemorySection(child, section_addr, buf, size, core);
+      if (bytes != 0)
+        return bytes;
+    }
+    return FailAddressSpaceRead(info, addr, error);
+  };
 
-  // Local memory (per-lane): a named child of the lane container.
-  SectionSP local_sp =
-      nvgpu_core::FindChildByType(*lane_sp, eSectionTypeNVGPULocalMemory);
-  if (size_t bytes = ReadFromMemorySection(local_sp, addr, buf, size, core))
-    return bytes;
+  switch (info.value) {
+  case nvgpu::SharedStorage:
+    return read_child(cta_sp, eSectionTypeNVGPUSharedMemory, addr);
+  case nvgpu::LocalStorage:
+    return read_child(lane_sp, eSectionTypeNVGPULocalMemory, addr);
+  case nvgpu::ConstStorage:
+  case nvgpu::ParamStorage:
+  case nvgpu::GenericStorage:
+    break;
+  case nvgpu::GlobalStorage:
+    llvm_unreachable("global address space handled before thread lookup");
+  default:
+    error = Status::FromErrorStringWithFormat(
+        "unsupported CUDA address space '%s'", info.name.c_str());
+    return 0;
+  }
 
-  error = Status::FromErrorStringWithFormat(
-      "core file does not contain address space '%s' address 0x%" PRIx64,
-      info.name.c_str(), addr);
-  return 0;
+  std::optional<GridSectionInfo> grid = FindGridSection(*gpu_thread, core);
+  if (!grid)
+    return FailAddressSpaceRead(info, addr, error);
+
+  switch (info.value) {
+  case nvgpu::ConstStorage: {
+    if (!AddressInGridConstBanks(*grid->section, core, addr)) {
+      error = Status::FromErrorStringWithFormat(
+          "address 0x%" PRIx64 " is not within any constant bank", addr);
+      return 0;
+    }
+    size_t bytes = DoReadMemory(addr, buf, size, error);
+    if (bytes != 0)
+      return bytes;
+    return FailAddressSpaceRead(info, addr, error);
+  }
+
+  case nvgpu::ParamStorage: {
+    if (addr < grid->entry.paramsOffset)
+      return FailAddressSpaceRead(info, addr, error);
+    SectionSP param_sp = nvgpu_core::FindChildByType(
+        *grid->section, eSectionTypeNVGPUParamMemory);
+    size_t bytes =
+        ReadFromSectionData(param_sp, addr - grid->entry.paramsOffset, buf,
+                            size, core);
+    if (bytes != 0)
+      return bytes;
+    return FailAddressSpaceRead(info, addr, error);
+  }
+
+  case nvgpu::GenericStorage: {
+    // A generic address belongs to this grid's CUDA context. Shared and local
+    // addresses occupy fixed 16 MiB windows; every other generic address
+    // keeps its value and is read as global memory.
+    if (!dev_sp)
+      return FailAddressSpaceRead(info, addr, error);
+    std::optional<nvgpu_core::ContextEntry> context =
+        FindContextEntry(*dev_sp, grid->entry.contextId, core);
+    if (!context)
+      return FailAddressSpaceRead(info, addr, error);
+
+    // TODO: When the shared window above is extended for normal SM90+ mode,
+    // decode the 16 MiB DSMEM rank stride and read the matching CTA instead
+    // of always using the selected thread's CTA.
+    if (IsAddressInGenericWindow(addr, context->sharedWindowBase))
+      return read_child(cta_sp, eSectionTypeNVGPUSharedMemory,
+                        addr - context->sharedWindowBase);
+
+    if (IsAddressInGenericWindow(addr, context->localWindowBase))
+      return read_child(lane_sp, eSectionTypeNVGPULocalMemory,
+                        addr - context->localWindowBase);
+
+    size_t bytes = DoReadMemory(addr, buf, size, error);
+    return bytes != 0 ? bytes : FailAddressSpaceRead(info, addr, error);
+  }
+
+  case nvgpu::GlobalStorage:
+  case nvgpu::LocalStorage:
+  case nvgpu::SharedStorage:
+  default:
+    llvm_unreachable("address space handled before grid lookup");
+  }
 }
 
 Status ProcessNVGPUCore::DoGetMemoryRegionInfo(addr_t load_addr,

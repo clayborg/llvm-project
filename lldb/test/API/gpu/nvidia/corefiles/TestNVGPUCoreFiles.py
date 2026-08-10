@@ -62,6 +62,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         self._test_backtrace("skip_local_memory")
         self._test_read_global_memory()
         self._test_read_constant_memory()
+        self._test_read_parameter_memory()
         self._test_read_shared_memory()
         self._test_read_local_memory()
         self._test_frame_variables()
@@ -153,6 +154,14 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
                 substrs=[expected],
             )
 
+        # Generic global addresses are unchanged and use the captured global
+        # memory backing.
+        self.expect(
+            f"memory read -p generic &global_data[13][0] "
+            f"--format x --size 4 -c {self.THREADS_PER_BLOCK}",
+            substrs=["0x00000034 0x00000035 0x00000036 0x00000037"],
+        )
+
         # Check that missing global memory is handled gracefully.
         _, gpu_process = self.generate_and_load_core(flags="skip_global_memory")
         gpu_process.SetSelectedThread(self.get_stopped_thread())
@@ -183,6 +192,25 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
             f"--format x --size 4 -c {self.THREADS_PER_BLOCK}",
             error=True,
             substrs=["core file does not contain"],
+        )
+
+    def _test_read_parameter_memory(self):
+        """Kernel parameters are available through variable evaluation and
+        explicit param-space reads in the kernel frame."""
+        _, gpu_process = self.generate_and_load_core()
+        thread = self.get_stopped_thread()
+        gpu_process.SetSelectedThread(thread)
+        thread.SetSelectedFrame(3)
+
+        frame = thread.GetSelectedFrame()
+        self.assertEqual(frame.GetFunctionName(), "crash_kernel")
+        self.expect(
+            "frame variable exception_type -f hex",
+            substrs=["exception_type = 0x00000001"],
+        )
+        self.expect(
+            "memory read -p param &exception_type --format x --size 4 -c 1",
+            substrs=["0x00000001"],
         )
 
     def _test_read_shared_memory(self):
