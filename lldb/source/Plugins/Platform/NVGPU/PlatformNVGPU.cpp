@@ -753,7 +753,7 @@ template <> struct DenseMapInfo<::GroupKey> {
 } // namespace llvm
 
 /// Aggregated representation of all threads sharing one GroupKey.
-struct ThreadGroup {
+struct AggregatedThreadGroup {
   GroupKey key;
   llvm::SmallVector<CUDAThreadCoord, 32> coords;
   ThreadSP representative_thread;
@@ -820,7 +820,7 @@ struct ThreadSnapshot {
 /// Accumulate one snapshot's coordinates into a group: per-dim DimSets and
 /// the coords vector. The caller is responsible for setting `representative_*`
 /// fields on first insertion.
-static void AccumulateSnapshotIntoGroup(ThreadGroup &group,
+static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
                                         const ThreadSnapshot &snap) {
   group.coords.push_back(snap.coord);
   group.bx.Insert(snap.coord.block_idx.x);
@@ -1020,7 +1020,8 @@ BuildGroupKey(const ThreadSnapshot &snap, const ResolvedLocation &loc,
 /// Render one aggregated group: count, coordinates with wildcards, stop
 /// reason on the first line, then a single indented location line whose
 /// contents depend on the group's tier.
-static void RenderAggregatedGroup(Stream &strm, const ThreadGroup &group) {
+static void RenderAggregatedGroup(Stream &strm,
+                                  const AggregatedThreadGroup &group) {
   strm.Indent();
   strm.Printf("%c %zu thread(s)", group.contains_selected ? '*' : ' ',
               group.coords.size());
@@ -1129,7 +1130,7 @@ RenderAggregated(Process &process, Stream &strm,
   // gives us deterministic output; the map is only used for O(1) lookup of
   // an existing group when a snapshot's key matches.
   llvm::DenseMap<GroupKey, size_t> key_to_index;
-  llvm::SmallVector<ThreadGroup, 8> groups;
+  llvm::SmallVector<AggregatedThreadGroup, 8> groups;
 
   Target &target = process.GetTarget();
   LocationCache location_cache;
@@ -1139,7 +1140,7 @@ RenderAggregated(Process &process, Stream &strm,
     auto [it, inserted] =
         key_to_index.try_emplace(std::move(key), groups.size());
     if (inserted) {
-      ThreadGroup g;
+      AggregatedThreadGroup g;
       g.key = it->first;
       g.representative_thread = snap.thread_sp;
       g.representative_sc = loc.sc;
@@ -1147,7 +1148,7 @@ RenderAggregated(Process &process, Stream &strm,
       g.used_error_pc = loc.used_error_pc;
       groups.push_back(std::move(g));
     }
-    ThreadGroup &group = groups[it->second];
+    AggregatedThreadGroup &group = groups[it->second];
     AccumulateSnapshotIntoGroup(group, snap);
     if (selected_tid != LLDB_INVALID_THREAD_ID &&
         snap.coord.tid == selected_tid)
@@ -1157,8 +1158,8 @@ RenderAggregated(Process &process, Stream &strm,
   // Move the FilteredOut summary group, if any, to the end of the list so the
   // summary line always trails the real entries. Relative order of the real
   // groups is preserved.
-  ThreadGroup *filtered_it =
-      std::find_if(groups.begin(), groups.end(), [](const ThreadGroup &g) {
+  AggregatedThreadGroup *filtered_it = std::find_if(
+      groups.begin(), groups.end(), [](const AggregatedThreadGroup &g) {
         return g.key.kind == GroupKind::FilteredOut;
       });
   if (filtered_it != groups.end())
