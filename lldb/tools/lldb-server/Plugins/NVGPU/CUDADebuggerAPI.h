@@ -101,6 +101,37 @@ public:
   static llvm::Expected<llvm::StringMap<uint64_t>>
   ResolveInferiorAttachSymbols(NativeProcessProtocol &linux_process);
 
+  /// Like ResolveInferiorAttachSymbols, but also resolves the OPTIONAL
+  /// CUDBG_DEBUGGER_INITIALIZED flag used by the detach path (gap 7). The flag
+  /// is included when libcuda exports it and silently omitted otherwise, so a
+  /// libcuda lacking it does not regress detach.
+  ///
+  /// \param[in] linux_process
+  ///     The native (CPU) process being debugged.
+  ///
+  /// \return
+  ///     A map from symbol name to inferior load address, or an error if
+  ///     libcuda is not present or a required handshake symbol is missing.
+  static llvm::Expected<llvm::StringMap<uint64_t>>
+  ResolveInferiorDetachSymbols(NativeProcessProtocol &linux_process);
+
+  /// Reset the driver's handshake globals during detach so a later debugger can
+  /// re-attach cleanly: clear the requested debugger capabilities, clear the
+  /// OPTIONAL CUDBG_DEBUGGER_INITIALIZED flag (skipped when absent), and clear
+  /// the IPC ready flag. Mirrors cuda-gdb's cuda_do_detach.
+  ///
+  /// \param[in] get_symbol_address
+  ///     Resolver for native-process symbol load addresses.
+  /// \param[in] linux_process
+  ///     The native (CPU) process being debugged.
+  ///
+  /// \return
+  ///     Error::success() on success, or an error describing the first failed
+  ///     write.
+  static llvm::Error
+  ResetDetachSymbols(SymbolAddressProvider get_symbol_address,
+                     NativeProcessProtocol &linux_process);
+
   /// \return true if the running process advertises a usable safe-attach
   /// handler (i.e. CUDBG_ATTACH_HANDLER_AVAILABLE is set). Returns false (not an
   /// error) when CUDA is present but the handler is unavailable, and an error

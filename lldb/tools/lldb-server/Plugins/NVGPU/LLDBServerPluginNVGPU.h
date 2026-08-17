@@ -76,6 +76,10 @@ public:
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
 private:
+  // ProcessNVGPU::Detach delegates the late-attach detach cleanup back to this
+  // plugin via the private DetachCleanup entry point.
+  friend class ProcessNVGPU;
+
   /// Phases of the late attach handshake. When attaching to an already-running
   /// CUDA process the driver must inject the debug engine at a safe point, so
   /// initialization is asynchronous and driven by this state machine. The
@@ -105,6 +109,12 @@ private:
     eInjected,
     /// Attach is complete; device state has been refreshed.
     eComplete,
+    /// A detach is in progress: breakpoints have been (or are being) torn down
+    /// and the driver is being asked to clean up. The DETACH_COMPLETE event
+    /// returns the state to eNone. Entered by DetachCleanup so the event-drain
+    /// loop and CancelInProgressAttach can tell a deliberate detach apart from
+    /// an active attach.
+    eDetaching,
   };
 
   /// Create a connection to the GPU process that the client can use.
@@ -129,8 +139,57 @@ private:
   /// Process debugger API events.
   ///
   /// Handles events from the CUDA debugger API, processing them and
-  /// taking appropriate action based on event type.
+  /// taking appropriate action based on event type. This is the callback wired
+  /// to the async event notifier; it simply drives one drain pass.
   void OnDebuggerAPIEvent();
+
+  /// Drain and handle one pass of the synchronous CUDA debugger API event
+  /// queue, then acknowledge the events that were consumed.
+  ///
+  /// A single notification can correspond to several queued events, so this
+  /// loops getNextEvent until the queue reports empty (or the
+  /// CUDBG_EVENT_INVALID sentinel) and acknowledges once. It is shared by the
+  /// async-notifier path (OnDebuggerAPIEvent) and the synchronous detach loop
+  /// (DetachCleanup), which both run on the GPU MainLoop thread. It sets the
+  /// m_detach_complete and m_api_faulted latches as those events are observed,
+  /// and short-circuits (without further getNextEvent/acknowledge calls) once
+  /// the API has been poisoned by an internal error.
+  ///
+  /// \return
+  ///     The number of events handled in this pass.
+  int DrainSyncEventsOnce();
+
+  /// Handle CUDBG_EVENT_INTERNAL_ERROR: poison the API, force a clean GPU stop
+  /// and surface a structured error to the client without aborting lldb-server.
+  ///
+  /// \param[in] error_type
+  ///     The CUDBGResult carried by the internal-error event.
+  void HandleInternalError(CUDBGResult error_type);
+
+  /// Plugin-owned detach cleanup: tear down device breakpoints, reset the
+  /// driver handshake flags, optionally resume the application so the driver can
+  /// finish its cleanup (draining the resulting events inline), then clear the
+  /// attach state. Driven from ProcessNVGPU::Detach. Runs on the GPU MainLoop
+  /// thread, so it drains events inline rather than waiting on the notifier.
+  ///
+  /// \return
+  ///     Error::success() on a clean detach, or an error describing what went
+  ///     wrong (the session is still torn down on a best-effort basis).
+  llvm::Error DetachCleanup();
+
+  /// Cancel an attach that is still in progress (from the interrupt path or the
+  /// probe watchdog). Idempotent against OnAttachComplete via the state machine.
+  void CancelInProgressAttach();
+
+  /// Schedule a one-shot CPU-MainLoop timer that re-probes the running process
+  /// for a usable safe-attach handler while still eProbing, re-arming itself
+  /// until the state leaves eProbing. This makes late attach progress even when
+  /// the inferior produces no further native stops.
+  void ScheduleAttachProbe();
+
+  /// \return the probing-phase timeout in seconds, overridable at runtime via
+  /// the NVGPU_ATTACH_PROBE_TIMEOUT_SECONDS environment variable.
+  unsigned GetAttachProbeTimeoutSeconds() const;
 
   /// Initialize the CUDA debugger API using the given symbol address resolver
   /// and libcuda library, wire up the event notifier, and create a reverse
@@ -208,9 +267,29 @@ private:
   /// flag is the one explicit, lock-published "the API object is live" guard.
   bool m_api_initialized = false;
 
+  /// Set once the debugger API has reported a CUDBG_EVENT_INTERNAL_ERROR. The
+  /// API is then considered poisoned: the event-drain loop and detach path stop
+  /// calling into it (acking/resuming on a faulted API can wedge or crash the
+  /// session). Guarded by m_attach_mutex.
+  bool m_api_faulted = false;
+
+  /// Latch set by the CUDBG_EVENT_DETACH_COMPLETE handler so the synchronous
+  /// detach drain loop (DetachCleanup) can tell when the driver has finished its
+  /// cleanup. Reset at the start of each detach. Guarded by m_attach_mutex.
+  bool m_detach_complete = false;
+
   /// Bounds on how long the late attach phases may run before we stop waiting.
   static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
   static constexpr unsigned kAttachInjectTimeoutSeconds = 60;
+
+  /// How often the probe watchdog re-checks the running process for a usable
+  /// safe-attach handler while eProbing (gap 9 probe cadence).
+  static constexpr unsigned kAttachProbeIntervalSeconds = 1;
+
+  /// Maximum number of inline drain iterations the detach cleanup loop performs
+  /// while waiting for CUDBG_EVENT_DETACH_COMPLETE before giving up. Mirrors
+  /// cuda-gdb's remote sync detach loop bound.
+  static constexpr int kDetachMaxIterations = 100;
 };
 
 } // namespace lldb_private::lldb_server

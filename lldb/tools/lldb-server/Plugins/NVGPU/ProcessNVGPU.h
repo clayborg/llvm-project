@@ -18,9 +18,13 @@
 
 #include "cudadebugger.h"
 
+#include "llvm/ADT/DenseSet.h"
+
 #include <functional>
 
 namespace lldb_private::lldb_server {
+
+class LLDBServerPluginNVGPU;
 
 /// Manages GPU process debugging and thread execution state.
 ///
@@ -62,6 +66,19 @@ public:
   void SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
+
+  /// Set the owning plugin so Detach can delegate the late-attach detach
+  /// cleanup (breakpoint teardown, flag reset, optional resume + inline event
+  /// drain) back to it.
+  void SetPlugin(LLDBServerPluginNVGPU *plugin) { m_plugin = plugin; }
+
+  /// Remove every tracked device breakpoint from every device.
+  ///
+  /// Called first during detach, while the debugger API and devices are still
+  /// valid. A debug-API bug leaves breakpoints set on the device if they are not
+  /// explicitly removed before teardown, so iterate the tracked set and unset
+  /// each on every device (errors are logged, not fatal, so detach proceeds).
+  void TeardownDeviceBreakpoints();
 
   /// Register a notifier used to re-run the debugger-API sync-event processing
   /// loop after the deferred ack on a dyld fake-stop resume. The driver only
@@ -421,6 +438,14 @@ private:
   /// Notifier registered by the plugin to re-run sync-event processing after
   /// the deferred ack on a dyld fake-stop resume. See SetSyncEventDrainNotifier.
   std::function<void()> m_sync_event_drain_notifier;
+
+  /// Addresses of breakpoints this process has inserted on the GPU devices.
+  /// Tracked so they can be explicitly removed on detach (see
+  /// TeardownDeviceBreakpoints); the debug API otherwise leaves them set.
+  llvm::DenseSet<lldb::addr_t> m_device_breakpoints;
+
+  /// The owning plugin, used by Detach to delegate the detach cleanup sequence.
+  LLDBServerPluginNVGPU *m_plugin = nullptr;
 
   /// Snapshot of the information of all devices. It's updated upon every stop.
   DeviceStateRegistry m_devices;

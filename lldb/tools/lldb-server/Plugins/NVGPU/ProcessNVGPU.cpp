@@ -9,6 +9,7 @@
 #include "ProcessNVGPU.h"
 #include "../Utils/Utils.h"
 #include "AddressSpaces.h"
+#include "LLDBServerPluginNVGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ThreadNVGPU.h"
 #include "cudadebugger.h"
@@ -139,11 +140,21 @@ void ProcessNVGPU::ChangeStateToStopped() {
 Status ProcessNVGPU::Detach() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::Detach()");
-  // If we initialized the debugger API (including via late attach), prepare the
-  // driver for detach. This mirrors cuda-gdb's detach sequence: clear the
-  // attach-specific state before tearing down. The API table's finalize() is
-  // invoked separately by the CUDADebuggerAPI deleter when the session ends.
-  if (m_api) {
+  // Delegate the late-attach detach cleanup to the owning plugin: tear down
+  // device breakpoints, reset the driver handshake flags, optionally resume the
+  // application so the driver completes its cleanup (draining the resulting
+  // events inline), then clear the attach state. The plugin owns the debugger
+  // API and the native CPU process, and runs on the GPU MainLoop thread, so it
+  // can drain detach events without a client round-trip. The API table's
+  // finalize() is invoked separately by the CUDADebuggerAPI deleter when the
+  // session ends.
+  if (m_plugin) {
+    if (llvm::Error err = m_plugin->DetachCleanup())
+      LLDB_LOG(log, "NVGPU::Detach(). Detach cleanup reported: {0}",
+               llvm::toString(std::move(err)));
+  } else if (m_api) {
+    // Fallback if the plugin back-pointer was never wired: at least clear the
+    // attach-specific state, mirroring the previous behavior.
     CUDBGResult res = m_api->clearAttachState();
     if (res != CUDBG_SUCCESS)
       LLDB_LOG(log, "NVGPU::Detach(). clearAttachState failed: {0}",
@@ -225,6 +236,10 @@ Status ProcessNVGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
     }
   }
 
+  // Track the breakpoint so it can be explicitly torn down on detach; the debug
+  // API otherwise leaves device breakpoints set after the session ends.
+  m_device_breakpoints.insert(addr);
+
   return Status();
 }
 
@@ -241,7 +256,28 @@ Status ProcessNVGPU::RemoveBreakpoint(lldb::addr_t addr, bool hardware) {
     }
   }
 
+  m_device_breakpoints.erase(addr);
+
   return Status();
+}
+
+void ProcessNVGPU::TeardownDeviceBreakpoints() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  if (!m_api)
+    return;
+  for (lldb::addr_t addr : m_device_breakpoints) {
+    for (DeviceState &device : m_devices.GetDevices()) {
+      CUDBGResult res = m_api->unsetBreakpoint(device.GetDeviceId(), addr);
+      // Log, don't fail: detach must proceed even if a device rejects the
+      // removal (e.g. it is already gone).
+      if (res != CUDBG_SUCCESS)
+        LLDB_LOG(log,
+                 "NVGPU::TeardownDeviceBreakpoints(). Failed to unset "
+                 "breakpoint {0:x} on device {1}: {2}",
+                 addr, device.GetDeviceId(), cudbgGetErrorString(res));
+    }
+  }
+  m_device_breakpoints.clear();
 }
 
 llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>

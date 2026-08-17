@@ -24,12 +24,14 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
 #include <string>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <thread>
 #include <type_traits>
 #include <unistd.h>
 
@@ -42,6 +44,14 @@ using namespace llvm;
 #define STRINGIFY_SYMBOL_HELPER(x) #x
 #define STRINGIFY_SYMBOL(x) STRINGIFY_SYMBOL_HELPER(x)
 
+// Bounds for the CUDBGAPI.initialize() retry/backoff (gap 8). The driver may
+// briefly report CUDBG_ERROR_ATTACH_NOT_POSSIBLE right after injection; we back
+// off starting at kInitRetryDelayMs (doubling, capped at kInitMaxRetryDelayMs)
+// and give up after kInitTimeoutMs total.
+static constexpr unsigned kInitRetryDelayMs = 100;
+static constexpr unsigned kInitMaxRetryDelayMs = 1000;
+static constexpr unsigned kInitTimeoutMs = 5000;
+
 namespace Symbols {
 static std::string CUDBG_IPC_FLAG_NAME = STRINGIFY_SYMBOL(CUDBG_IPC_FLAG_NAME);
 static std::string CUDBG_APICLIENT_PID = STRINGIFY_SYMBOL(CUDBG_APICLIENT_PID);
@@ -50,6 +60,12 @@ static std::string CUDBG_APICLIENT_REVISION =
 static std::string CUDBG_SESSION_ID = STRINGIFY_SYMBOL(CUDBG_SESSION_ID);
 static std::string CUDBG_DEBUGGER_CAPABILITIES =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_CAPABILITIES);
+// Set by the debug engine to indicate it has initialized. Cleared on detach so
+// the engine reinitializes from scratch on a later re-attach. Resolved
+// OPTIONALLY (see ResolveInferiorDetachSymbols): a libcuda that does not export
+// it must not regress attach or detach.
+static std::string CUDBG_DEBUGGER_INITIALIZED =
+    STRINGIFY_SYMBOL(CUDBG_DEBUGGER_INITIALIZED);
 static std::string CUDBG_INJECTION_PATH = "cudbgInjectionPath";
 static std::string CUDBG_GET_API = "cudbgGetAPI";
 static std::string CUDBG_GET_API_VERSION = "cudbgGetAPIVersion";
@@ -406,10 +422,38 @@ CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
 
   CUDADebuggerAPI api(*api_or, api_version);
 
-  CUDBGResult res = api->initialize();
-  if (res != CUDBG_SUCCESS)
-    return createStringErrorFmt("The `CUDBGAPI.initialize` call failed. {}",
-                                cudbgGetErrorString(res));
+  // Bounded retry around initialize(). Right after the driver injects the debug
+  // engine it can briefly report CUDBG_ERROR_ATTACH_NOT_POSSIBLE while it is not
+  // yet ready to be attached; back off and retry rather than failing the attach.
+  // Any other failure is terminal and returned immediately. Initialization runs
+  // unlocked (no caller holds m_attach_mutex here), so the sleeps below do not
+  // stall the attach state machine.
+  using std::chrono::milliseconds;
+  using std::chrono::steady_clock;
+  const steady_clock::time_point deadline =
+      steady_clock::now() + milliseconds(kInitTimeoutMs);
+  unsigned backoff_ms = kInitRetryDelayMs;
+  while (true) {
+    CUDBGResult res = api->initialize();
+    if (res == CUDBG_SUCCESS)
+      break;
+    if (res != CUDBG_ERROR_ATTACH_NOT_POSSIBLE)
+      return createStringErrorFmt("The `CUDBGAPI.initialize` call failed. {}",
+                                  cudbgGetErrorString(res));
+    steady_clock::time_point now = steady_clock::now();
+    if (now >= deadline)
+      return createStringErrorFmt(
+          "The `CUDBGAPI.initialize` call did not become possible within "
+          "{0}ms (CUDBG_ERROR_ATTACH_NOT_POSSIBLE). {1}",
+          kInitTimeoutMs, cudbgGetErrorString(res));
+    // Sleep the backoff, but never past the overall deadline, then grow it
+    // (capped) for the next attempt.
+    milliseconds remaining =
+        std::chrono::duration_cast<milliseconds>(deadline - now);
+    std::this_thread::sleep_for(
+        std::min(milliseconds(backoff_ms), remaining));
+    backoff_ms = std::min(backoff_ms * 2, kInitMaxRetryDelayMs);
+  }
 
   if (Error err = VerifyDebuggerCapabilities(api))
     return err;
@@ -676,9 +720,14 @@ OpenInferiorLibcuda(lldb::pid_t pid, const InferiorLibrary &libcuda) {
       errors);
 }
 
-Expected<llvm::StringMap<uint64_t>>
-CUDADebuggerAPI::ResolveInferiorAttachSymbols(
-    NativeProcessProtocol &linux_process) {
+/// Resolve the inferior load addresses of \a wanted symbols from libcuda's
+/// dynamic symbol table. Symbols in \a required must all resolve or an error is
+/// returned; any \a wanted symbol not in \a required is optional and simply
+/// absent from the result when libcuda does not export it.
+static Expected<llvm::StringMap<uint64_t>>
+ResolveInferiorSymbols(NativeProcessProtocol &linux_process,
+                       llvm::ArrayRef<std::string> wanted,
+                       const llvm::StringSet<> &required) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   Expected<InferiorLibrary> libcuda_or =
@@ -687,7 +736,7 @@ CUDADebuggerAPI::ResolveInferiorAttachSymbols(
     return libcuda_or.takeError();
   const InferiorLibrary &libcuda = *libcuda_or;
   LLDB_LOG(log,
-           "CUDADebuggerAPI::ResolveInferiorAttachSymbols(). libcuda at {0} "
+           "CUDADebuggerAPI::ResolveInferiorSymbols(). libcuda at {0} "
            "base {1:x}",
            libcuda.path, libcuda.load_base);
 
@@ -756,12 +805,12 @@ CUDADebuggerAPI::ResolveInferiorAttachSymbols(
         libcuda.load_base, *link_time_base);
   const uint64_t load_bias = libcuda.load_base - *link_time_base;
 
-  // Resolve each required symbol, tracking which remain so we can report an
-  // actionable error listing the missing ones instead of silently returning a
-  // partial map (which would make the caller probe forever).
-  std::vector<std::string> wanted = GetAttachSymbolNames();
+  // Resolve each wanted symbol, tracking which required ones remain so we can
+  // report an actionable error listing the missing ones instead of silently
+  // returning a partial map (which would make the caller probe forever).
+  // Optional symbols (wanted but not required) simply stay absent.
   llvm::StringSet<> remaining;
-  for (const std::string &name : wanted)
+  for (const llvm::StringRef name : required.keys())
     remaining.insert(name);
 
   llvm::StringMap<uint64_t> result;
@@ -816,6 +865,62 @@ CUDADebuggerAPI::ResolveInferiorAttachSymbols(
   }
 
   return result;
+}
+
+Expected<llvm::StringMap<uint64_t>>
+CUDADebuggerAPI::ResolveInferiorAttachSymbols(
+    NativeProcessProtocol &linux_process) {
+  std::vector<std::string> wanted = GetAttachSymbolNames();
+  llvm::StringSet<> required;
+  for (const std::string &name : wanted)
+    required.insert(name);
+  return ResolveInferiorSymbols(linux_process, wanted, required);
+}
+
+Expected<llvm::StringMap<uint64_t>>
+CUDADebuggerAPI::ResolveInferiorDetachSymbols(
+    NativeProcessProtocol &linux_process) {
+  // The detach path needs the same handshake symbols as attach, plus the
+  // OPTIONAL CUDBG_DEBUGGER_INITIALIZED flag (gap 7): it is reset when present
+  // but its absence must not regress detach. So it is "wanted" but not
+  // "required".
+  std::vector<std::string> required_names = GetAttachSymbolNames();
+  llvm::StringSet<> required;
+  for (const std::string &name : required_names)
+    required.insert(name);
+
+  std::vector<std::string> wanted = required_names;
+  wanted.push_back(Symbols::CUDBG_DEBUGGER_INITIALIZED);
+  return ResolveInferiorSymbols(linux_process, wanted, required);
+}
+
+Error CUDADebuggerAPI::ResetDetachSymbols(
+    SymbolAddressProvider get_symbol_address,
+    NativeProcessProtocol &linux_process) {
+  // Reset the driver's handshake globals so a later debugger can re-attach
+  // cleanly (mirrors cuda-gdb's cuda_do_detach):
+  //   - CUDBG_DEBUGGER_CAPABILITIES -> CUDBG_DEBUGGER_CAPABILITY_NONE, so the
+  //     next attach is not constrained by capabilities this session requested,
+  //   - CUDBG_DEBUGGER_INITIALIZED -> 0 (OPTIONAL; skipped if libcuda does not
+  //     export it), so the debug engine reinitializes from scratch,
+  //   - CUDBG_IPC_FLAG_NAME -> 0, clearing the "client ready" flag.
+  const uint32_t zero = 0;
+  if (Error err = WriteToHostSymbol(get_symbol_address, linux_process,
+                                    Symbols::CUDBG_DEBUGGER_CAPABILITIES, zero))
+    return err;
+
+  if (get_symbol_address(Symbols::CUDBG_DEBUGGER_INITIALIZED)) {
+    if (Error err =
+            WriteToHostSymbol(get_symbol_address, linux_process,
+                              Symbols::CUDBG_DEBUGGER_INITIALIZED, zero))
+      return err;
+  }
+
+  if (Error err = WriteToHostSymbol(get_symbol_address, linux_process,
+                                    Symbols::CUDBG_IPC_FLAG_NAME, zero))
+    return err;
+
+  return Error::success();
 }
 
 Expected<bool>

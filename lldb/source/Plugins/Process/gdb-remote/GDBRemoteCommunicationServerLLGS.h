@@ -104,6 +104,11 @@ public:
     m_plugin_instance = plugin;
   }
 
+  /// \return the MainLoop driving this server. GPU server plugins use this to
+  /// schedule timers on the CPU event loop (e.g. the late-attach probe cadence),
+  /// which is the loop running while the attach handshake is still in progress.
+  MainLoop &GetMainLoop() { return m_mainloop; }
+
   struct DebuggedProcess {
     enum class Flag {
       vkilled = (1u << 0),
