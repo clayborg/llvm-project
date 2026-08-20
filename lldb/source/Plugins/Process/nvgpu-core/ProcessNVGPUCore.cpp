@@ -96,10 +96,16 @@ bool ProcessNVGPUCore::CanDebug(TargetSP target_sp,
     ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
     Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
                                              nullptr, nullptr));
+    // The cubins are cached under this same core file's path, and a spec
+    // without bounds matches a slice, so the shared lookup can hand one back.
+    // Build the whole-file module directly when that happens.
+    if (m_core_module_sp && m_core_module_sp->GetObjectOffset() != 0)
+      m_core_module_sp = std::make_shared<Module>(core_module_spec);
     if (m_core_module_sp) {
       ObjectFile *core_objfile = m_core_module_sp->GetObjectFile();
       if (core_objfile && core_objfile->GetType() == ObjectFile::eTypeCoreFile)
         return true;
+      m_core_module_sp.reset();
     }
   }
   return false;
@@ -186,8 +192,22 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
       continue;
 
     // Point the module at the cubin's range within the core file so the
-    // module system mmaps the same file.
-    ModuleSpec module_spec(core_file);
+    // module system mmaps the same file. The slice bytes have to accompany the
+    // bounds: an explicit object offset and size are only honored for
+    // data-backed specs, and without them the core file's own ELF header is
+    // read from offset 0 instead of the cubin's.
+    DataBufferSP cubin_data_sp = FileSystem::Instance().CreateDataBuffer(
+        core_file.GetPath(), cubin_size, cubin_offset);
+    if (!cubin_data_sp) {
+      LLDB_LOG(log,
+               "  failed to map cubin module {0} ({1}) at offset {2:x} "
+               "({3} bytes); core file may be truncated",
+               cubin_count, cubin->GetName(), cubin_offset, cubin_size);
+      ++cubin_count;
+      continue;
+    }
+
+    ModuleSpec module_spec(core_file, UUID(), cubin_data_sp);
     module_spec.SetObjectOffset(cubin_offset);
     module_spec.SetObjectSize(cubin_size);
 
