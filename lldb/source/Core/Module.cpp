@@ -1200,7 +1200,11 @@ ObjectFile *Module::GetObjectFile() {
       else if (m_file)
         file_size = FileSystem::Instance().GetByteSize(m_file);
 
-      if (file_size > m_object_offset) {
+      // A data-backed slice already holds the subobject's bytes, so its object
+      // offset locates it in the backing file rather than in m_data_sp; only
+      // file-backed modules can compare the offset against the size.
+      const bool data_backed_slice = m_data_sp && m_object_size;
+      if (data_backed_slice || file_size > m_object_offset) {
         m_did_load_objfile = true;
         // FindPlugin will modify its data_sp argument. Do not let it
         // modify our m_data_sp member.

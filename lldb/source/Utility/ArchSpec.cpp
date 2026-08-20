@@ -1719,6 +1719,22 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
     }
     break;
 
+  case ArchSpec::eCore_nvidia_nvptx:
+    if (!enforce_exact_match) {
+      if (core2 == ArchSpec::eCore_nvidia_nvptx64)
+        return true;
+      try_inverse = false;
+    }
+    break;
+
+  case ArchSpec::eCore_nvidia_nvptx64:
+    if (!enforce_exact_match) {
+      if (core2 == ArchSpec::eCore_nvidia_nvptx)
+        return true;
+      try_inverse = false;
+    }
+    break;
+
   case ArchSpec::eCore_mips32:
     if (!enforce_exact_match) {
       if (core2 >= ArchSpec::kCore_mips32_first &&
