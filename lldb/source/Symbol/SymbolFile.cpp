@@ -39,6 +39,7 @@ std::recursive_mutex &SymbolFile::GetModuleMutex() const {
 
 SymbolFile *SymbolFile::FindPlugin(ObjectFileSP objfile_sp) {
   std::unique_ptr<SymbolFile> best_symfile_up;
+  std::unique_ptr<SymbolFile> fallback_symfile_up;
   if (objfile_sp != nullptr) {
 
     // We need to test the abilities of this section list. So create what it
@@ -58,6 +59,7 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFileSP objfile_sp) {
     // iterate over all of them to find the best one for the job.
 
     uint32_t best_symfile_abilities = 0;
+    uint32_t fallback_symfile_abilities = 0;
 
     SymbolFileCreateInstance create_callback;
     for (uint32_t idx = 0;
@@ -68,6 +70,13 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFileSP objfile_sp) {
 
       if (curr_symfile_up) {
         const uint32_t sym_file_abilities = curr_symfile_up->GetAbilities();
+        if (curr_symfile_up->IsFallback()) {
+          if (sym_file_abilities > fallback_symfile_abilities) {
+            fallback_symfile_abilities = sym_file_abilities;
+            fallback_symfile_up = std::move(curr_symfile_up);
+          }
+          continue;
+        }
         if (sym_file_abilities > best_symfile_abilities) {
           best_symfile_abilities = sym_file_abilities;
           best_symfile_up.reset(curr_symfile_up.release());
@@ -77,6 +86,10 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFileSP objfile_sp) {
             break;
         }
       }
+    }
+    if (!best_symfile_up) {
+      best_symfile_abilities = fallback_symfile_abilities;
+      best_symfile_up = std::move(fallback_symfile_up);
     }
     if (best_symfile_up) {
       // If symbol on-demand is enabled the winning symbol file parser is

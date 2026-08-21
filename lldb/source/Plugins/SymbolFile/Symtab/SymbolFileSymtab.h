@@ -88,6 +88,8 @@ public:
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
+  bool IsFallback() const override { return true; }
+
 protected:
   uint32_t CalculateNumCompileUnits() override;
 

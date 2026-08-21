@@ -87,6 +87,10 @@ public:
   /// backing SymbolFile implementation that loads on-demand.
   virtual SymbolFile *GetBackingSymbolFile() { return this; }
 
+  /// Return true when this plug-in should only be selected if no other symbol
+  /// file plug-in recognizes the object file.
+  virtual bool IsFallback() const { return false; }
+
   /// Get a mask of what this symbol file supports for the object file
   /// that it was constructed with.
   ///
