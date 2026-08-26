@@ -141,9 +141,9 @@ DWARFExpression::ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
   if (reg_info)
     return llvm::createStringError(
         "register %s can't be converted to a scalar value", reg_info->name);
-
-  return llvm::createStringError(
-      "register can't be converted to a scalar value");
+  else
+    return llvm::createStringError(
+        "register can't be converted to a scalar value");
 }
 
 /// Return the length in bytes of the set of operands for \p op. No guarantees
