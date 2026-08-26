@@ -100,8 +100,10 @@ class Manager : public NativeProcessProtocol::Manager {
 
   bool GetProcessInfo(ProcessInstanceInfo &info) override;
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
+
+  std::optional<llvm::json::Value> GetKernelInfos() override;
 
   // Custom accessors
   void SetLaunchInfo(ProcessLaunchInfo &launch_info);

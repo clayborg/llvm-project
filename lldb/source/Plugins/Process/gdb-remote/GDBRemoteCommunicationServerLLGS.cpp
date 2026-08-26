@@ -274,6 +274,9 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
       StringExtractorGDBRemote::eServerPacketType_jGPUPluginInitialize,
       &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginInitialize);
   RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jGPUGetKernelInfos,
+      &GDBRemoteCommunicationServerLLGS::Handle_jGPUGetKernelInfos);
+  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::eServerPacketType_jLLDBSettings,
       &GDBRemoteCommunicationServerLLGS::Handle_jLLDBSettings);
   RegisterMemberFunctionHandler(
@@ -3878,6 +3881,21 @@ GDBRemoteCommunicationServerLLGS::Handle_jThreadExtendedInfo(
     return SendUnimplementedResponse("jThreadExtendedInfo");
 
   return SendJSONResponse(*extended_info);
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jGPUGetKernelInfos(
+    StringExtractorGDBRemote &) {
+  // Ensure we have a debugged process.
+  if (!m_current_process ||
+      (m_current_process->GetID() == LLDB_INVALID_PROCESS_ID))
+    return SendErrorResponse(50);
+
+  std::optional<json::Value> kernel_infos = m_current_process->GetKernelInfos();
+  if (!kernel_infos)
+    return SendUnimplementedResponse("jGPUGetKernelInfos");
+
+  return SendJSONResponse(*kernel_infos);
 }
 
 GDBRemoteCommunication::PacketResult

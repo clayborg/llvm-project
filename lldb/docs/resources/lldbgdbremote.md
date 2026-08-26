@@ -226,6 +226,39 @@ On macOS 10.12, iOS 10, tvOS 10, watchOS 3 and newer: High.  If this packet is a
 lldb will not know anything about shared libraries in the inferior, or where the main
 executable loaded.
 
+## jGPUGetKernelInfos
+
+Ask the remote debug stub for full details about the GPU kernels in the
+process. This packet takes no arguments.
+
+The reply is a JSON dictionary with three keys:
+
+* `kernel_infos`: an array of dictionaries, one per kernel. Each dictionary has
+  a `name` string with the name of the kernel, an integer `id` that identifies
+  the kernel, and an `args` dictionary with the arguments the kernel was
+  launched with, such as the grid coordinates and the arguments that were
+  passed to the top level kernel in the GPU.
+* `summary-format`: a summary string that uses the information from an entry in
+  `kernel_infos` to display a one line summary of that kernel.
+* `info-format`: a summary string used to display detailed information about an
+  individual kernel.
+
+The two format strings are `lldb_private::FormatEntity` format strings. They
+refer to the values of the kernel dictionary they are being applied to with
+`${kernel.info.<dot.separated.path>}`, so `${kernel.info.args.grid_size}` prints
+the `grid_size` value out of that kernel's `args` dictionary.
+
+```
+LLDB SENDS: jGPUGetKernelInfos
+STUB REPLIES: ${"kernel_infos":[{"name":"vector_add","id":1,"args":{"grid_size":[1024,1,1],"work_group_size":[64,1,1],"count":1024}}],"summary-format":"${kernel.info.name} (id = ${kernel.info.id})","info-format":"kernel ${kernel.info.name}:\n  id = ${kernel.info.id}\n"}#00
+```
+
+The reply uses the same binary escaping convention as the other JSON packets.
+A stub that has nothing to report replies with an empty packet.
+
+**Priority To Implement:** Low. This packet is only needed by stubs that debug
+GPUs.
+
 ## jGetSharedCacheInfo
 
 This packet asks the remote debug stub to send the details about the inferior's

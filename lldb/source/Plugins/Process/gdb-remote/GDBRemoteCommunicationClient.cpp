@@ -73,8 +73,8 @@ GDBRemoteCommunicationClient::GDBRemoteCommunicationClient()
       m_qSymbol_requests_done(false), m_supports_qModuleInfo(true),
       m_supports_jThreadsInfo(true), m_supports_jModulesInfo(true),
       m_supports_vFileSize(true), m_supports_vFileMode(true),
-      m_supports_vFileExists(true), m_supports_vRun(true), 
-      m_supports_address_spaces(false),
+      m_supports_vFileExists(true), m_supports_vRun(true),
+      m_supports_address_spaces(false), m_supports_jGPUGetKernelInfos(true),
 
       m_host_arch(), m_host_distribution_id(), m_process_arch(), m_os_build(),
       m_os_kernel(), m_hostname(), m_gdb_server_name(),
@@ -322,6 +322,7 @@ void GDBRemoteCommunicationClient::ResetDiscoverableSettings(bool did_exec) {
     m_supports_gpu_plugins = eLazyBoolCalculate;
     m_supports_lldb_settings = eLazyBoolCalculate;
     m_supports_address_spaces = false;
+    m_supports_jGPUGetKernelInfos = true;
     m_supports_qProcessInfoPID = true;
     m_supports_qfProcessInfo = true;
     m_supports_qUserName = true;
@@ -618,6 +619,28 @@ StructuredData::ObjectSP GDBRemoteCommunicationClient::GetThreadsInfo() {
         PacketResult::Success) {
       if (response.IsUnsupportedResponse()) {
         m_supports_jThreadsInfo = false;
+      } else if (!response.Empty()) {
+        object_sp = StructuredData::ParseJSON(response.GetStringRef());
+      }
+    }
+  }
+  return object_sp;
+}
+
+StructuredData::ObjectSP GDBRemoteCommunicationClient::GetGPUKernelInfos() {
+  // Get full details about all of the GPU kernels at once using the
+  // "jGPUGetKernelInfos" packet. This packet takes no arguments.
+  StructuredData::ObjectSP object_sp;
+
+  if (m_supports_jGPUGetKernelInfos) {
+    StringExtractorGDBRemote response;
+    response.SetResponseValidatorToJSON();
+    if (SendPacketAndWaitForResponse("jGPUGetKernelInfos", response) ==
+        PacketResult::Success) {
+      if (response.IsUnsupportedResponse()) {
+        m_supports_jGPUGetKernelInfos = false;
+      } else if (response.IsErrorResponse()) {
+        Debugger::ReportError(response.GetStatus().AsCString());
       } else if (!response.Empty()) {
         object_sp = StructuredData::ParseJSON(response.GetStringRef());
       }

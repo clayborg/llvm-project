@@ -316,6 +316,8 @@ protected:
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
       StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_jGPUGetKernelInfos(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_jLLDBSettings(StringExtractorGDBRemote &packet);
 
   void SetCurrentThreadID(lldb::tid_t tid);

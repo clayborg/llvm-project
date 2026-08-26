@@ -272,8 +272,28 @@ public:
   virtual Status GetFileLoadAddress(const llvm::StringRef &file_name,
                                     lldb::addr_t &load_addr) = 0;
 
-  virtual std::optional<GPUDynamicLoaderResponse> 
+  virtual std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) {
+    return std::nullopt;
+  }
+
+  /// Fetch GPU kernel information with full details about the kernels.
+  ///
+  /// This backs the "jGPUGetKernelInfos" GDB remote packet. The returned JSON
+  /// is a dictionary with three keys:
+  ///   - "kernel_infos": an array of dictionaries, one per kernel, each with a
+  ///     "name" string, an integer "id" that identifies the kernel, and an
+  ///     "args" dictionary with the arguments the kernel was launched with.
+  ///   - "summary-format": a summary string that uses the information from an
+  ///     entry in "kernel_infos" to display a one line summary of that kernel.
+  ///   - "info-format": a summary string used to display detailed information
+  ///     about an individual kernel.
+  ///
+  /// \return
+  ///     The kernel information as JSON, or std::nullopt if this process
+  ///     doesn't know anything about GPU kernels. Returning std::nullopt
+  ///     causes the "jGPUGetKernelInfos" packet to be reported as unsupported.
+  virtual std::optional<llvm::json::Value> GetKernelInfos() {
     return std::nullopt;
   }
 

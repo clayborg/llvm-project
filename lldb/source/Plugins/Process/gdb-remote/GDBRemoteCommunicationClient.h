@@ -445,8 +445,17 @@ public:
   std::optional<GPUPluginBreakpointHitResponse> 
   GPUBreakpointHit(const GPUPluginBreakpointHitArgs &args);
 
-  std::optional<GPUDynamicLoaderResponse> 
+  std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args);
+
+  /// Get full details about the GPU kernels in the remote process.
+  ///
+  /// Sends the "jGPUGetKernelInfos" packet, which takes no arguments.
+  ///
+  /// \return
+  ///     The kernel information, or an empty shared pointer if the remote end
+  ///     doesn't support the packet or has nothing to report.
+  StructuredData::ObjectSP GetGPUKernelInfos();
 
   bool GetThreadExtendedInfoSupported();
 
@@ -614,7 +623,7 @@ protected:
       m_supports_qModuleInfo : 1, m_supports_jThreadsInfo : 1,
       m_supports_jModulesInfo : 1, m_supports_vFileSize : 1,
       m_supports_vFileMode : 1, m_supports_vFileExists : 1, m_supports_vRun : 1,
-      m_supports_address_spaces : 1;
+      m_supports_address_spaces : 1, m_supports_jGPUGetKernelInfos : 1;
 
   /// Current gdb remote protocol process identifier for all other operations
   lldb::pid_t m_curr_pid = LLDB_INVALID_PROCESS_ID;

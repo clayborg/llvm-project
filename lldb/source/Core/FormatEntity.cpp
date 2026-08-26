@@ -177,6 +177,9 @@ constexpr Definition g_thread_child_entries[] = {
     Definition("return-value", EntryType::ThreadReturnValue),
     Definition("completed-expression", EntryType::ThreadCompletedExpression)};
 
+constexpr Definition g_kernel_child_entries[] = {Entry::DefinitionWithChildren(
+    "info", EntryType::KernelInfo, g_string_entry)};
+
 constexpr Definition g_target_child_entries[] = {
     Definition("arch", EntryType::TargetArch),
     Entry::DefinitionWithChildren("file", EntryType::TargetFile,
@@ -264,6 +267,8 @@ constexpr Definition g_top_level_entries[] = {
                                   g_frame_child_entries),
     Entry::DefinitionWithChildren("function", EntryType::Invalid,
                                   g_function_child_entries),
+    Entry::DefinitionWithChildren("kernel", EntryType::Invalid,
+                                  g_kernel_child_entries),
     Entry::DefinitionWithChildren("line", EntryType::Invalid,
                                   g_line_child_entries),
     Entry::DefinitionWithChildren("module", EntryType::Invalid,
@@ -369,6 +374,7 @@ const char *FormatEntity::Entry::TypeToCString(Type t) {
     ENUM_TO_CSTR(ThreadCompletedExpression);
     ENUM_TO_CSTR(ScriptThread);
     ENUM_TO_CSTR(ThreadInfo);
+    ENUM_TO_CSTR(KernelInfo);
     ENUM_TO_CSTR(TargetArch);
     ENUM_TO_CSTR(TargetFile);
     ENUM_TO_CSTR(ScriptTarget);
@@ -1130,6 +1136,44 @@ static bool FormatThreadExtendedInfoRecurse(
   return false;
 }
 
+/// Print the value that \a entry's dot separated path selects out of the
+/// \a kernel_info dictionary.
+static bool FormatKernelInfoValue(const FormatEntity::Entry &entry,
+                                  const StructuredData::ObjectSP &kernel_info,
+                                  Stream &s) {
+  StructuredData::ObjectSP value =
+      kernel_info->GetObjectForDotSeparatedPath(entry.string);
+  if (!value)
+    return false;
+
+  switch (value->GetType()) {
+  case eStructuredDataTypeSignedInteger:
+    s.Printf(entry.printf_format.empty() ? "%" PRId64
+                                         : entry.printf_format.c_str(),
+             value->GetSignedIntegerValue());
+    return true;
+  case eStructuredDataTypeUnsignedInteger:
+    s.Printf(entry.printf_format.empty() ? "%" PRIu64
+                                         : entry.printf_format.c_str(),
+             value->GetUnsignedIntegerValue());
+    return true;
+  case eStructuredDataTypeFloat:
+    s.Printf("%g", value->GetAsFloat()->GetValue());
+    return true;
+  case eStructuredDataTypeBoolean:
+    s.PutCString(value->GetAsBoolean()->GetValue() ? "true" : "false");
+    return true;
+  case eStructuredDataTypeString:
+    s << value->GetAsString()->GetValue();
+    return true;
+  default:
+    // Arrays and dictionaries are dumped as JSON so that values like the grid
+    // coordinates of a kernel show up as "[1024,1,1]".
+    value->Dump(s, /*pretty_print=*/false);
+    return true;
+  }
+}
+
 static inline bool IsToken(const char *var_name_begin, const char *var) {
   return (::strncmp(var_name_begin, var, strlen(var)) == 0);
 }
@@ -1303,18 +1347,18 @@ static bool FormatFunctionNameForLanguage(Stream &s,
   return success;
 }
 
-bool FormatEntity::FormatStringRef(const llvm::StringRef &format_str, Stream &s,
-                                   const SymbolContext *sc,
-                                   const ExecutionContext *exe_ctx,
-                                   const Address *addr, ValueObject *valobj,
-                                   bool function_changed,
-                                   bool initial_function) {
+bool FormatEntity::FormatStringRef(
+    const llvm::StringRef &format_str, Stream &s, const SymbolContext *sc,
+    const ExecutionContext *exe_ctx, const Address *addr, ValueObject *valobj,
+    bool function_changed, bool initial_function,
+    const StructuredData::ObjectSP &kernel_info) {
   if (!format_str.empty()) {
     FormatEntity::Entry root;
     Status error = FormatEntity::Parse(format_str, root);
     if (error.Success()) {
       return FormatEntity::Format(root, s, sc, exe_ctx, addr, valobj,
-                                  function_changed, initial_function);
+                                  function_changed, initial_function,
+                                  kernel_info);
     }
   }
   return false;
@@ -1324,7 +1368,8 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
                           const SymbolContext *sc,
                           const ExecutionContext *exe_ctx, const Address *addr,
                           ValueObject *valobj, bool function_changed,
-                          bool initial_function) {
+                          bool initial_function,
+                          const StructuredData::ObjectSP &kernel_info) {
   switch (entry.type) {
   case Entry::Type::Invalid:
   case Entry::Type::ParentNumber: // Only used for
@@ -1345,7 +1390,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
   case Entry::Type::Root:
     for (const auto &child : entry.children_stack[0]) {
       if (!Format(child, s, sc, exe_ctx, addr, valobj, function_changed,
-                  initial_function)) {
+                  initial_function, kernel_info)) {
         return false; // If any item of root fails, then the formatting fails
       }
     }
@@ -1361,7 +1406,7 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       scope_stream.Clear();
       for (const auto &child : children) {
         if (!Format(child, scope_stream, sc, exe_ctx, addr, valobj,
-                    function_changed, initial_function))
+                    function_changed, initial_function, kernel_info))
           return false;
       }
       return true;
@@ -1597,6 +1642,11 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
         }
       }
     }
+    return false;
+
+  case Entry::Type::KernelInfo:
+    if (kernel_info && kernel_info->GetType() == eStructuredDataTypeDictionary)
+      return FormatKernelInfoValue(entry, kernel_info, s);
     return false;
 
   case Entry::Type::TargetArch:

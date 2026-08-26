@@ -9,6 +9,7 @@
 #ifndef LLDB_CORE_FORMATENTITY_H
 #define LLDB_CORE_FORMATENTITY_H
 
+#include "lldb/Utility/StructuredData.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-types.h"
 #include "llvm/ADT/SmallVector.h"
@@ -66,6 +67,7 @@ struct Entry {
     ThreadCompletedExpression,
     ScriptThread,
     ThreadInfo,
+    KernelInfo,
     TargetArch,
     TargetFile,
     ScriptTarget,
@@ -229,14 +231,23 @@ struct Entry {
   bool deref = false;
 };
 
+/// Format \a entry into \a s.
+///
+/// \param[in] kernel_info
+///     The dictionary that "${kernel.info.<path>}" entries pull their values
+///     out of. This is one of the entries from the "kernel_infos" array that
+///     Process::GetKernelInfos() returns. It may be empty if the format string
+///     doesn't refer to any kernel information.
 bool Format(const Entry &entry, Stream &s, const SymbolContext *sc,
             const ExecutionContext *exe_ctx, const Address *addr,
-            ValueObject *valobj, bool function_changed, bool initial_function);
+            ValueObject *valobj, bool function_changed, bool initial_function,
+            const StructuredData::ObjectSP &kernel_info = {});
 
 bool FormatStringRef(const llvm::StringRef &format, Stream &s,
                      const SymbolContext *sc, const ExecutionContext *exe_ctx,
                      const Address *addr, ValueObject *valobj,
-                     bool function_changed, bool initial_function);
+                     bool function_changed, bool initial_function,
+                     const StructuredData::ObjectSP &kernel_info = {});
 
 Status Parse(const llvm::StringRef &format, Entry &entry);
 

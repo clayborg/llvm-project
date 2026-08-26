@@ -4729,6 +4729,10 @@ StructuredData::ObjectSP ProcessGDBRemote::GetSharedCacheInfo() {
   return object_sp;
 }
 
+StructuredData::ObjectSP ProcessGDBRemote::GetKernelInfos() {
+  return m_gdb_comm.GetGPUKernelInfos();
+}
+
 Status ProcessGDBRemote::ConfigureStructuredData(
     llvm::StringRef type_name, const StructuredData::ObjectSP &config_sp) {
   return m_gdb_comm.ConfigureRemoteStructuredData(type_name, config_sp);

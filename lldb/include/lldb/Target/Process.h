@@ -1505,6 +1505,30 @@ public:
     return {};
   }
 
+  /// Fetch GPU kernel information with full details about the kernels.
+  ///
+  /// GPU processes can be running one or more kernels. This returns everything
+  /// that is known about each of those kernels, along with format strings that
+  /// describe how to display that information to the user. The returned
+  /// dictionary contains:
+  ///   - "kernel_infos": an array of dictionaries, one per kernel. Each has a
+  ///     "name" string, an integer "id" that identifies the kernel, and an
+  ///     "args" dictionary with the arguments the kernel was launched with,
+  ///     such as the grid coordinates and the arguments that were passed to
+  ///     the top level kernel in the GPU.
+  ///   - "summary-format": a summary string that uses the information from an
+  ///     entry in "kernel_infos" to display a one line summary of that kernel.
+  ///   - "info-format": a summary string used to display detailed information
+  ///     about an individual kernel.
+  ///
+  /// \return
+  ///     A StructuredData::ObjectSP with the kernel information, or an empty
+  ///     shared pointer if this process doesn't have any GPU kernels or can't
+  ///     supply information about them.
+  virtual lldb_private::StructuredData::ObjectSP GetKernelInfos() {
+    return StructuredData::ObjectSP();
+  }
+
   /// Print a user-visible warning about a module being built with
   /// optimization
   ///

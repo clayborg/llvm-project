@@ -232,6 +232,74 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   return response;
 }
 
+std::optional<llvm::json::Value> ProcessMockGPU::GetKernelInfos() {
+  // Three mock kernels, each launched with a different set of arguments. What
+  // ends up in the "args" dictionary of a kernel is entirely up to the GPU
+  // plug-in; the "summary-format" and "info-format" strings below are what
+  // tell LLDB how to present those arguments to the user.
+  llvm::json::Array kernel_infos{
+      llvm::json::Object{
+          {"name", "vector_add"},
+          {"id", 1},
+          {"args",
+           llvm::json::Object{
+               {"grid_size", llvm::json::Array{1024, 1, 1}},
+               {"work_group_size", llvm::json::Array{64, 1, 1}},
+               {"lhs", 0x100000},
+               {"rhs", 0x200000},
+               {"result", 0x300000},
+               {"count", 1024},
+           }},
+      },
+      llvm::json::Object{
+          {"name", "matrix_multiply"},
+          {"id", 2},
+          {"args",
+           llvm::json::Object{
+               {"grid_size", llvm::json::Array{64, 64, 1}},
+               {"work_group_size", llvm::json::Array{16, 16, 1}},
+               {"a", 0x400000},
+               {"b", 0x500000},
+               {"c", 0x600000},
+               {"m", 64},
+               {"n", 64},
+               {"k", 64},
+           }},
+      },
+      llvm::json::Object{
+          {"name", "reduce_sum"},
+          {"id", 3},
+          {"args",
+           llvm::json::Object{
+               {"grid_size", llvm::json::Array{512, 1, 1}},
+               {"work_group_size", llvm::json::Array{128, 1, 1}},
+               {"input", 0x700000},
+               {"output", 0x800000},
+               {"count", 65536},
+               {"scale", 0.5},
+           }},
+      },
+  };
+
+  llvm::json::Object kernels{
+      {"kernel_infos", std::move(kernel_infos)},
+      // One line per kernel, used when listing all of the kernels. The values
+      // are pulled out of an entry in the "kernel_infos" array above using the
+      // "${kernel.info.<dot.separated.path>}" format entities.
+      {"summary-format", "${kernel.info.name} (id = ${kernel.info.id}) "
+                         "grid = ${kernel.info.args.grid_size} "
+                         "work group = ${kernel.info.args.work_group_size}"},
+      // The full details for a single kernel.
+      {"info-format", "kernel ${kernel.info.name}:\n"
+                      "  id               = ${kernel.info.id}\n"
+                      "  grid size        = ${kernel.info.args.grid_size}\n"
+                      "  work group size  = "
+                      "${kernel.info.args.work_group_size}\n"
+                      "  arguments        = ${kernel.info.args}\n"},
+  };
+  return llvm::json::Value(std::move(kernels));
+}
+
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessMockGPU::Manager::Launch(
     ProcessLaunchInfo &launch_info,

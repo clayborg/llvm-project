@@ -16,6 +16,7 @@
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Breakpoint/BreakpointName.h"
 #include "lldb/Breakpoint/BreakpointSite.h"
+#include "lldb/Core/FormatEntity.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Host/OptionParser.h"
@@ -35,6 +36,7 @@
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/ScriptedMetadata.h"
 #include "lldb/Utility/State.h"
+#include "lldb/Utility/StructuredData.h"
 #include "llvm/Support/FormatAdapters.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -1890,6 +1892,191 @@ public:
   ~CommandObjectMultiwordProcessTrace() override = default;
 };
 
+// Next are the subcommands of CommandObjectMultiwordProcessKernel
+
+/// Fetch the GPU kernel information from \a process and parse the format
+/// string stored under \a format_key.
+///
+/// \return
+///     The object that owns \a kernel_infos, or an empty shared pointer after
+///     filling in \a result with an error describing what was missing.
+static StructuredData::ObjectSP GetGPUKernelInfos(
+    Process &process, llvm::StringRef format_key, CommandReturnObject &result,
+    StructuredData::Array *&kernel_infos, FormatEntity::Entry &format_entry) {
+  StructuredData::ObjectSP kernels_sp = process.GetKernelInfos();
+  StructuredData::Dictionary *kernels =
+      kernels_sp ? kernels_sp->GetAsDictionary() : nullptr;
+  if (kernels == nullptr) {
+    result.AppendError(
+        "no GPU kernel information is available for this process");
+    return nullptr;
+  }
+
+  if (!kernels->GetValueForKeyAsArray("kernel_infos", kernel_infos)) {
+    result.AppendError("GPU kernel information has no \"kernel_infos\" array");
+    return nullptr;
+  }
+
+  llvm::StringRef format;
+  if (!kernels->GetValueForKeyAsString(format_key, format)) {
+    result.AppendErrorWithFormat("GPU kernel information has no \"%s\" string",
+                                 format_key.str().c_str());
+    return nullptr;
+  }
+
+  // Parse the format once so it can be applied to each kernel info dictionary.
+  Status error = FormatEntity::Parse(format, format_entry);
+  if (error.Fail()) {
+    result.AppendErrorWithFormat("invalid \"%s\" string: %s",
+                                 format_key.str().c_str(), error.AsCString());
+    return nullptr;
+  }
+  return kernels_sp;
+}
+
+/// Find the entry in \a kernel_infos whose "id" matches \a kernel_id.
+static StructuredData::ObjectSP
+FindGPUKernelWithID(StructuredData::Array &kernel_infos, uint64_t kernel_id) {
+  const size_t num_kernels = kernel_infos.GetSize();
+  for (size_t i = 0; i < num_kernels; ++i) {
+    StructuredData::ObjectSP kernel_sp = kernel_infos.GetItemAtIndex(i);
+    StructuredData::Dictionary *kernel =
+        kernel_sp ? kernel_sp->GetAsDictionary() : nullptr;
+    if (kernel == nullptr)
+      continue;
+    uint64_t id;
+    if (kernel->GetValueForKeyAsInteger("id", id) && id == kernel_id)
+      return kernel_sp;
+  }
+  return nullptr;
+}
+
+/// Print \a kernel formatted with \a format_entry, on a line of its own.
+static void DumpGPUKernel(const FormatEntity::Entry &format_entry,
+                          const StructuredData::ObjectSP &kernel,
+                          const ExecutionContext &exe_ctx, Stream &strm) {
+  StreamString kernel_strm;
+  // Print whatever the format string managed to produce even if some of the
+  // values it asked for are missing from this kernel.
+  FormatEntity::Format(format_entry, kernel_strm, /*sc=*/nullptr, &exe_ctx,
+                       /*addr=*/nullptr, /*valobj=*/nullptr,
+                       /*function_changed=*/false, /*initial_function=*/false,
+                       kernel);
+  llvm::StringRef text = kernel_strm.GetString();
+  strm << text;
+  if (!text.ends_with("\n"))
+    strm << '\n';
+}
+
+// CommandObjectProcessKernelList
+class CommandObjectProcessKernelList : public CommandObjectParsed {
+public:
+  CommandObjectProcessKernelList(CommandInterpreter &interpreter)
+      : CommandObjectParsed(interpreter, "process kernel list",
+                            "List the GPU kernels in the current process.",
+                            "process kernel list",
+                            eCommandRequiresProcess | eCommandTryTargetAPILock |
+                                eCommandProcessMustBeLaunched |
+                                eCommandProcessMustBePaused) {}
+
+  ~CommandObjectProcessKernelList() override = default;
+
+protected:
+  void DoExecute(Args &command, CommandReturnObject &result) override {
+    Process *process = m_exe_ctx.GetProcessPtr();
+
+    StructuredData::Array *kernel_infos = nullptr;
+    FormatEntity::Entry format_entry;
+    StructuredData::ObjectSP kernels_sp = GetGPUKernelInfos(
+        *process, "summary-format", result, kernel_infos, format_entry);
+    if (!kernels_sp)
+      return;
+
+    const size_t num_kernels = kernel_infos->GetSize();
+    Stream &strm = result.GetOutputStream();
+    for (size_t i = 0; i < num_kernels; ++i) {
+      StructuredData::ObjectSP kernel_sp = kernel_infos->GetItemAtIndex(i);
+      if (!kernel_sp || kernel_sp->GetType() != eStructuredDataTypeDictionary)
+        continue;
+      DumpGPUKernel(format_entry, kernel_sp, m_exe_ctx, strm);
+    }
+    result.SetStatus(eReturnStatusSuccessFinishResult);
+  }
+};
+
+// CommandObjectProcessKernelInfo
+class CommandObjectProcessKernelInfo : public CommandObjectParsed {
+public:
+  CommandObjectProcessKernelInfo(CommandInterpreter &interpreter)
+      : CommandObjectParsed(
+            interpreter, "process kernel info",
+            "Display detailed information about one or more GPU kernels, "
+            "identified by the kernel IDs shown by \"process kernel list\".",
+            "process kernel info <kernel-id> [<kernel-id> ...]",
+            eCommandRequiresProcess | eCommandTryTargetAPILock |
+                eCommandProcessMustBeLaunched | eCommandProcessMustBePaused) {
+    AddSimpleArgumentList(eArgTypeUnsignedInteger, eArgRepeatPlus);
+  }
+
+  ~CommandObjectProcessKernelInfo() override = default;
+
+protected:
+  void DoExecute(Args &command, CommandReturnObject &result) override {
+    if (command.empty()) {
+      result.AppendError("at least one kernel ID must be specified");
+      return;
+    }
+
+    Process *process = m_exe_ctx.GetProcessPtr();
+
+    StructuredData::Array *kernel_infos = nullptr;
+    FormatEntity::Entry format_entry;
+    StructuredData::ObjectSP kernels_sp = GetGPUKernelInfos(
+        *process, "info-format", result, kernel_infos, format_entry);
+    if (!kernels_sp)
+      return;
+
+    Stream &strm = result.GetOutputStream();
+    for (const auto &entry : command.entries()) {
+      uint64_t kernel_id;
+      if (entry.ref().getAsInteger(0, kernel_id)) {
+        result.AppendErrorWithFormat("invalid kernel ID '%s'",
+                                     entry.ref().str().c_str());
+        return;
+      }
+
+      StructuredData::ObjectSP kernel_sp =
+          FindGPUKernelWithID(*kernel_infos, kernel_id);
+      if (!kernel_sp) {
+        result.AppendErrorWithFormat("no GPU kernel with ID %" PRIu64,
+                                     kernel_id);
+        return;
+      }
+
+      DumpGPUKernel(format_entry, kernel_sp, m_exe_ctx, strm);
+    }
+    result.SetStatus(eReturnStatusSuccessFinishResult);
+  }
+};
+
+// CommandObjectMultiwordProcessKernel
+class CommandObjectMultiwordProcessKernel : public CommandObjectMultiword {
+public:
+  CommandObjectMultiwordProcessKernel(CommandInterpreter &interpreter)
+      : CommandObjectMultiword(
+            interpreter, "kernel",
+            "Commands for interacting with the GPU kernels in the current "
+            "process.",
+            "process kernel <subcommand> [<subcommand objects>]") {
+    LoadSubCommand("list", CommandObjectSP(new CommandObjectProcessKernelList(
+                               interpreter)));
+    LoadSubCommand("info", CommandObjectSP(new CommandObjectProcessKernelInfo(
+                               interpreter)));
+  }
+
+  ~CommandObjectMultiwordProcessKernel() override = default;
+};
+
 // CommandObjectMultiwordProcess
 
 CommandObjectMultiwordProcess::CommandObjectMultiwordProcess(
@@ -1916,6 +2103,9 @@ CommandObjectMultiwordProcess::CommandObjectMultiwordProcess(
                  CommandObjectSP(new CommandObjectProcessSignal(interpreter)));
   LoadSubCommand("handle",
                  CommandObjectSP(new CommandObjectProcessHandle(interpreter)));
+  LoadSubCommand(
+      "kernel",
+      CommandObjectSP(new CommandObjectMultiwordProcessKernel(interpreter)));
   LoadSubCommand("status",
                  CommandObjectSP(new CommandObjectProcessStatus(interpreter)));
   LoadSubCommand("interrupt", CommandObjectSP(new CommandObjectProcessInterrupt(

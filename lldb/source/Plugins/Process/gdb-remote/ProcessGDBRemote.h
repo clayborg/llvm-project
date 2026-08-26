@@ -284,6 +284,8 @@ public:
 
   StructuredData::ObjectSP GetDynamicLoaderProcessState() override;
 
+  StructuredData::ObjectSP GetKernelInfos() override;
+
   std::string HarmonizeThreadIdsForProfileData(
       StringExtractorGDBRemote &inputStringExtractor);
 

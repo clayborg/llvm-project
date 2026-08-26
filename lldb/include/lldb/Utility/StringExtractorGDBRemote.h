@@ -190,6 +190,7 @@ public:
     eServerPacketType_jGPUPluginInitialize,
     eServerPacketType_jGPUPluginBreakpointHit,
     eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
+    eServerPacketType_jGPUGetKernelInfos,
 
     // LLDB extension packets
     eServerPacketType_jLLDBSettings,
