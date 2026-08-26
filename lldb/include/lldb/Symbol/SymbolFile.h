@@ -507,8 +507,8 @@ public:
            Type::EncodingDataType encoding_uid_type, const Declaration &decl,
            const CompilerType &compiler_qual_type,
            Type::ResolveState compiler_type_resolve_state,
-           std::optional<lldb::addr_space_t> addr_space = std::nullopt,
-           uint32_t opaque_payload = 0) = 0;
+           uint32_t opaque_payload = 0,
+           std::optional<lldb::addr_space_t> addr_space = std::nullopt) = 0;
 
   virtual lldb::TypeSP CopyType(const lldb::TypeSP &other_type) = 0;
 
@@ -608,21 +608,23 @@ public:
   /// This function is used to create types that belong to a SymbolFile. The
   /// symbol file will own a strong reference to the type in an internal type
   /// list.
-  lldb::TypeSP
-  MakeType(lldb::user_id_t uid, ConstString name,
-           std::optional<uint64_t> byte_size, SymbolContextScope *context,
-           lldb::user_id_t encoding_uid,
-           Type::EncodingDataType encoding_uid_type, const Declaration &decl,
-           const CompilerType &compiler_qual_type,
-           Type::ResolveState compiler_type_resolve_state,
-           std::optional<lldb::addr_space_t> addr_space = std::nullopt,
-           uint32_t opaque_payload = 0) override {
-    lldb::TypeSP type_sp(
-        new Type(uid, this, name, byte_size, context, encoding_uid,
-                 encoding_uid_type, decl, compiler_qual_type,
-                 compiler_type_resolve_state, addr_space, opaque_payload));
-    m_type_list.Insert(type_sp);
-    return type_sp;
+  lldb::TypeSP MakeType(lldb::user_id_t uid, ConstString name,
+                        std::optional<uint64_t> byte_size,
+                        SymbolContextScope *context,
+                        lldb::user_id_t encoding_uid,
+                        Type::EncodingDataType encoding_uid_type,
+                        const Declaration &decl,
+                        const CompilerType &compiler_qual_type,
+                        Type::ResolveState compiler_type_resolve_state,
+                        uint32_t opaque_payload = 0,
+                        std::optional<lldb::addr_space_t> addr_space =
+                            std::nullopt) override {
+     lldb::TypeSP type_sp (new Type(
+         uid, this, name, byte_size, context, encoding_uid,
+         encoding_uid_type, decl, compiler_qual_type,
+         compiler_type_resolve_state, opaque_payload, addr_space));
+     m_type_list.Insert(type_sp);
+     return type_sp;
   }
 
   lldb::TypeSP CopyType(const lldb::TypeSP &other_type) override {
