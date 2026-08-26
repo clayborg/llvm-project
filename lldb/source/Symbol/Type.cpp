@@ -278,9 +278,8 @@ Type::Type(lldb::user_id_t uid, SymbolFile *symbol_file, ConstString name,
            std::optional<uint64_t> byte_size, SymbolContextScope *context,
            user_id_t encoding_uid, EncodingDataType encoding_uid_type,
            const Declaration &decl, const CompilerType &compiler_type,
-           ResolveState compiler_type_resolve_state,
-           std::optional<lldb::addr_space_t> addr_space,
-           uint32_t opaque_payload)
+           ResolveState compiler_type_resolve_state, uint32_t opaque_payload,
+           std::optional<lldb::addr_space_t> addr_space)
     : std::enable_shared_from_this<Type>(), UserID(uid), m_name(name),
       m_symbol_file(symbol_file), m_context(context),
       m_encoding_uid(encoding_uid), m_encoding_uid_type(encoding_uid_type),

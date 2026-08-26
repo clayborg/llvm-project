@@ -361,8 +361,9 @@ TypeSP DWARFASTParserClang::ParseTypeFromClangModule(const SymbolContext &sc,
       die.GetID(), pcm_type_sp->GetName(),
       llvm::expectedToOptional(pcm_type_sp->GetByteSize(nullptr)), nullptr,
       LLDB_INVALID_UID, Type::eEncodingInvalid, &pcm_type_sp->GetDeclaration(),
-      type, Type::ResolveState::Forward, pcm_type_sp->GetAddressSpace(),
-      TypePayloadClang(GetOwningClangModule(die)));
+      type, Type::ResolveState::Forward,
+      TypePayloadClang(GetOwningClangModule(die)),
+      pcm_type_sp->GetAddressSpace());
   clang::TagDecl *tag_decl = TypeSystemClang::GetAsTagDecl(type);
   if (tag_decl) {
     LinkDeclContextToDIE(tag_decl, die);
@@ -975,7 +976,7 @@ DWARFASTParserClang::ParseTypeModifier(const SymbolContext &sc,
   return dwarf->MakeType(die.GetID(), attrs.name, attrs.byte_size, nullptr,
                          attrs.type.Reference().GetID(), encoding_data_type,
                          &attrs.decl, clang_type, resolve_state,
-                         optional_addr_space, payload);
+                         payload, optional_addr_space);
 }
 
 std::string DWARFASTParserClang::GetDIEClassTemplateParams(DWARFDIE die) {
@@ -1090,11 +1091,11 @@ TypeSP DWARFASTParserClang::ParseEnum(const SymbolContext &sc,
       GetClangDeclContextContainingDIE(def_die, nullptr),
       GetOwningClangModule(def_die), attrs.decl, enumerator_clang_type,
       attrs.is_scoped_enum, attrs.enum_kind);
-  TypeSP type_sp = dwarf->MakeType(
-      def_die.GetID(), attrs.name, attrs.byte_size, nullptr,
-      attrs.type.Reference().GetID(), Type::eEncodingIsUID, &attrs.decl,
-      clang_type, Type::ResolveState::Forward, std::nullopt,
-      TypePayloadClang(GetOwningClangModule(def_die)));
+  TypeSP type_sp =
+      dwarf->MakeType(def_die.GetID(), attrs.name, attrs.byte_size, nullptr,
+                      attrs.type.Reference().GetID(), Type::eEncodingIsUID,
+                      &attrs.decl, clang_type, Type::ResolveState::Forward,
+                      TypePayloadClang(GetOwningClangModule(def_die)));
 
   clang::DeclContext *type_decl_ctx =
       TypeSystemClang::GetDeclContextForType(clang_type);
@@ -1953,7 +1954,7 @@ DWARFASTParserClang::ParseStructureLikeDIE(const SymbolContext &sc,
   TypeSP type_sp = dwarf->MakeType(
       die.GetID(), attrs.name, attrs.byte_size, nullptr, LLDB_INVALID_UID,
       Type::eEncodingIsUID, &attrs.decl, clang_type,
-      Type::ResolveState::Forward, std::nullopt,
+      Type::ResolveState::Forward,
       TypePayloadClang(OptionalClangModuleID(), attrs.is_complete_objc_class));
 
   // Store a forward declaration to this class type in case any
