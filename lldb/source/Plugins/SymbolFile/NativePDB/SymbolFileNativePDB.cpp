@@ -639,7 +639,8 @@ lldb::TypeSP SymbolFileNativePDB::CreateModifierType(PdbTypeSymId type_id,
   return MakeType(toOpaqueUid(type_id), ConstString(name),
                   llvm::expectedToOptional(modified_type->GetByteSize(nullptr)),
                   nullptr, LLDB_INVALID_UID, Type::eEncodingIsUID, decl, ct,
-                  Type::ResolveState::Full, modified_type->GetAddressSpace());
+                  Type::ResolveState::Full, 0,
+                  modified_type->GetAddressSpace());
 }
 
 lldb::TypeSP
