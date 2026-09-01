@@ -68,8 +68,8 @@ public:
 
   const ProcessAMDGPU &GetProcess() const;
 
-  amd_dbgapi_wave_id_t GetWaveID() const { return m_wave->GetWaveID(); }
-  amd_dbgapi_lane_id_t GetLaneID() const { return m_lane_id; }
+  amd_dbgapi_wave_id_t GetDbgApiWaveID() const { return m_wave->GetWaveID(); }
+  amd_dbgapi_lane_id_t GetDbgApiLaneID() const { return m_lane_id; }
 
   WaveAMDGPU *GetWave() const { return m_wave.get(); }
 

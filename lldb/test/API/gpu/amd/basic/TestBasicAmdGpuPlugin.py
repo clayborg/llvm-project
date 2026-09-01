@@ -246,3 +246,30 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         # Memory-backed module should show amd_memory_kernel[start, end)
         self.assertIn("amd_memory_kernel[", output,
                       f"Expected 'amd_memory_kernel[' in image list output, got:\n{output}")
+
+    def test_wave_and_group_ids(self):
+        """Test that a kernel smaller than a wave maps onto a single SIMD group."""
+        self.build()
+
+        source = "hello_world.hip"
+        self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
+
+        # A single block smaller than a wave lands entirely in one wave, so
+        # every thread shares one SIMD id. Lane ids happen to be unique across
+        # the process here only because of that; TestMultiWaveAmdGpuPlugin
+        # covers a kernel spread over several waves, where they are not.
+        gpu_threads = self.gpu_process.threads
+        simd_ids = {thread.GetSIMD() for thread in gpu_threads}
+        self.assertEqual(
+            len(simd_ids), 1, f"all lanes should share one wave, got {simd_ids}"
+        )
+        self.assertNotIn(
+            lldb.LLDB_INVALID_SIMD_ID, simd_ids, "GPU threads should have a SIMD id"
+        )
+
+        # A CPU thread is neither a lane nor part of a SIMD group.
+        self.stop_cpu_if_running(self.dbg.GetListener())
+        cpu_thread = self.cpu_process.GetThreadAtIndex(0)
+        self.assertTrue(cpu_thread.IsValid(), "CPU thread should be valid")
+        self.assertEqual(cpu_thread.GetLaneID(), lldb.LLDB_INVALID_LANE_ID)
+        self.assertEqual(cpu_thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)

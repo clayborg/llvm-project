@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 #include "ThreadAMDGPU.h"
 #include "ProcessAMDGPU.h"
+#include "lldb/Utility/AmdDbgApiUtils.h"
 #include "lldb/lldb-enumerations.h"
 #include <limits>
 #include <memory>
@@ -17,8 +18,9 @@ using namespace lldb_server;
 ThreadAMDGPU::ThreadAMDGPU(ProcessAMDGPU &process, lldb::tid_t tid,
                            std::shared_ptr<WaveAMDGPU> wave,
                            amd_dbgapi_lane_id_t lane_id)
-    : NativeThreadProtocol(process, tid), m_reg_context(*this), m_wave(wave),
-      m_lane_id(lane_id) {}
+    : NativeThreadProtocol(process, tid, AmdDbgApiLaneIdToTid(lane_id),
+                           AmdDbgApiWaveIdToTid(wave->GetWaveID())),
+      m_reg_context(*this), m_wave(wave), m_lane_id(lane_id) {}
 
 std::unique_ptr<ThreadAMDGPU>
 ThreadAMDGPU::CreateGPUShadowThread(ProcessAMDGPU &process) {

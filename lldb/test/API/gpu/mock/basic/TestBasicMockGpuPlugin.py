@@ -188,3 +188,32 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             "breakpoint list --internal",
             patterns=[r"name = 'gpu_first_stop'.*hit count = 1"],
         )
+
+    def test_mock_gpu_lane_and_simd_ids(self):
+        """
+        Test that a GPU thread reports the lane and SIMD group it belongs to,
+        and that a CPU thread reports neither.
+        """
+        self.common_setup()
+
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        # ProcessMockGPU::UpdateThreads() creates a single thread with these
+        # values, so they should come back with these values
+        self.select_gpu()
+        gpu_thread = self.gpu_process.GetThreadAtIndex(0)
+        self.assertTrue(gpu_thread.IsValid())
+        self.assertEqual(gpu_thread.GetThreadID(), 3456)
+        self.assertEqual(gpu_thread.GetLaneID(), 0)
+        self.assertEqual(gpu_thread.GetSIMD(), 1)
+
+        # A CPU thread has no lane or SIMD group, so both should come back
+        # invalid.
+        self.select_cpu()
+        cpu_thread = self.cpu_process.GetThreadAtIndex(0)
+        self.assertTrue(cpu_thread.IsValid())
+        self.assertEqual(cpu_thread.GetLaneID(), lldb.LLDB_INVALID_LANE_ID)
+        self.assertEqual(cpu_thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)

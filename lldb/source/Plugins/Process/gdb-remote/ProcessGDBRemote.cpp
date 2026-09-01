@@ -2582,14 +2582,12 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
         });
       }
     } else if (key == g_key_lane) {
-      lldb::tid_t tmp_id =
-          object->GetUnsignedIntegerValue(LLDB_INVALID_THREAD_ID);
-      if (tmp_id != LLDB_INVALID_THREAD_ID)
+      lldb::tid_t tmp_id = object->GetUnsignedIntegerValue(LLDB_INVALID_LANE_ID);
+      if (tmp_id != LLDB_INVALID_LANE_ID)
         lane_id = tmp_id;
     } else if (key == g_key_simd) {
-      lldb::tid_t tmp_id =
-          object->GetUnsignedIntegerValue(LLDB_INVALID_THREAD_ID);
-      if (tmp_id != LLDB_INVALID_THREAD_ID)
+      lldb::tid_t tmp_id = object->GetUnsignedIntegerValue(LLDB_INVALID_SIMD_ID);
+      if (tmp_id != LLDB_INVALID_SIMD_ID)
         simd_id = tmp_id;
     } else if (key == g_key_inactive) {
       active = false;
@@ -2826,11 +2824,11 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         }
       } else if (key.compare("lane") == 0) {
         lldb::tid_t tmp_id = 0;
-        if (!key.getAsInteger(0, tmp_id))
+        if (!value.getAsInteger(0, tmp_id))
           lane_id = tmp_id;
       } else if (key.compare("simd") == 0) {
         lldb::tid_t tmp_id = 0;
-        if (!key.getAsInteger(0, tmp_id))
+        if (!value.getAsInteger(0, tmp_id))
           simd_id = tmp_id;
       } else if (key.compare("inactive") == 0) {
         active = false;

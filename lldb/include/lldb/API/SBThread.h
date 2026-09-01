@@ -103,6 +103,10 @@ public:
 
   bool IsActive() const;
 
+  lldb::tid_t GetLaneID() const;
+
+  lldb::tid_t GetSIMD() const;
+
   lldb::queue_id_t GetQueueID() const;
 
   bool GetInfoItemByPathAsString(const char *path, SBStream &strm);

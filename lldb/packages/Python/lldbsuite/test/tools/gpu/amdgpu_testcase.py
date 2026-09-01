@@ -12,6 +12,19 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
 
     NO_DEBUG_INFO_TESTCASE = True
 
+    def get_wave_size(self) -> int:
+        """Return the number of lanes in a wave on the GPU being debugged.
+
+        The EXEC mask holds exactly one bit per lane, so the width of the
+        "exec" register is the wave size.
+
+        TODO: read the warpSize built-in instead once that is possible.
+        """
+        frame = self.gpu_process.GetThreadAtIndex(0).GetFrameAtIndex(0)
+        exec_reg = frame.FindRegister("exec")
+        self.assertTrue(exec_reg.IsValid(), "GPU frame should have an exec register")
+        return exec_reg.GetByteSize() * 8
+
     def continue_to_gpu_target_creation(self):
         """Continues the process until the GPU target is created."""
         # Need to run these commands asynchronously to be able to switch targets.

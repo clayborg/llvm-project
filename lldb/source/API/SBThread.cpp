@@ -366,6 +366,42 @@ const char *SBThread::GetQueueName() const {
   return ConstString(exe_ctx->GetThreadPtr()->GetQueueName()).GetCString();
 }
 
+lldb::tid_t SBThread::GetLaneID() const {
+  LLDB_INSTRUMENT_VA(this);
+
+  lldb::tid_t id = LLDB_INVALID_LANE_ID;
+  llvm::Expected<StoppedExecutionContext> exe_ctx =
+      GetStoppedExecutionContext(m_opaque_sp);
+  if (!exe_ctx) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::API), exe_ctx.takeError(), "{0}");
+    return id;
+  }
+
+  if (exe_ctx->HasThreadScope()) {
+    id = exe_ctx->GetThreadPtr()->GetLaneID().value_or(LLDB_INVALID_LANE_ID);
+  }
+
+  return id;
+}
+
+lldb::tid_t SBThread::GetSIMD() const {
+  LLDB_INSTRUMENT_VA(this);
+
+  lldb::tid_t id = LLDB_INVALID_SIMD_ID;
+  llvm::Expected<StoppedExecutionContext> exe_ctx =
+      GetStoppedExecutionContext(m_opaque_sp);
+  if (!exe_ctx) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::API), exe_ctx.takeError(), "{0}");
+    return id;
+  }
+
+  if (exe_ctx->HasThreadScope()) {
+    id = exe_ctx->GetThreadPtr()->GetSIMD().value_or(LLDB_INVALID_SIMD_ID);
+  }
+
+  return id;
+}
+
 lldb::queue_id_t SBThread::GetQueueID() const {
   LLDB_INSTRUMENT_VA(this);
 

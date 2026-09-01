@@ -92,6 +92,24 @@ See also :py:class:`SBFrame` ."
 ) lldb::SBThread::GetIndexID;
 
 %feature("docstring", "
+    Return the GPU lane this thread represents, as a lldb::tid_t, or
+    LLDB_INVALID_LANE_ID if this thread id is not a valid GPU lane id.  How
+    lanes are numbered is defined by the GPU vendor, and 0 can be a valid lane,
+    so compare against LLDB_INVALID_LANE_ID rather than against 0 to test
+    whether a thread has a lane.  See related GetSIMD."
+) lldb::SBThread::GetLaneID;
+
+%feature("docstring", "
+    Return the SIMD group (GPU wave or warp) this thread belongs to, as a
+    lldb::tid_t, or LLDB_INVALID_SIMD_ID if this thread id is not a valid SIMD
+    group id.  The value is an opaque vendor handle rather than an index, and 0
+    can be a valid group, so compare against LLDB_INVALID_SIMD_ID rather than
+    against 0.  All lanes of a SIMD group share one program counter and are
+    stopped and resumed together, so threads reporting the same value here
+    cannot be stepped independently.  See related GetLaneID."
+) lldb::SBThread::GetSIMD;
+
+%feature("docstring", "
     Return the queue name associated with this thread, if any, as a str.
     For example, with a libdispatch (aka Grand Central Dispatch) queue."
 ) lldb::SBThread::GetQueueName;

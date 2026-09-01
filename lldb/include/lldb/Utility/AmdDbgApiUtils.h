@@ -9,6 +9,7 @@
 #ifndef LLDB_UTILITY_AMDDBGAPIUTILS_H
 #define LLDB_UTILITY_AMDDBGAPIUTILS_H
 
+#include "lldb/lldb-types.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -149,6 +150,20 @@ inline std::optional<amd_dbgapi_log_level_t> GetAmdDbgApiLogLevelFromEnv() {
       .Case("verbose", AMD_DBGAPI_LOG_LEVEL_VERBOSE)
       .Case("trace", AMD_DBGAPI_LOG_LEVEL_TRACE)
       .Default(std::nullopt);
+}
+
+/// Convert amd_dbgapi_lane_id_t to lldb::tid_t
+inline std::optional<lldb::tid_t> AmdDbgApiLaneIdToTid(amd_dbgapi_lane_id_t lane_id) {
+  if (lane_id == AMD_DBGAPI_LANE_NONE)
+    return std::nullopt;
+  return static_cast<lldb::tid_t>(lane_id);
+}
+
+/// Convert amd_dbgapi_wave_id_t to lldb::tid_t
+inline std::optional<lldb::tid_t> AmdDbgApiWaveIdToTid(amd_dbgapi_wave_id_t wave_id) {
+  if (wave_id.handle == AMD_DBGAPI_WAVE_NONE.handle)
+    return std::nullopt;
+  return static_cast<lldb::tid_t>(wave_id.handle);
 }
 
 } // namespace lldb_private

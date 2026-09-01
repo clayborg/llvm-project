@@ -57,7 +57,7 @@ RegisterContextAmdGpu::GetRegisterSet(uint32_t set_index) const {
 Status RegisterContextAmdGpu::ReadRegister(const RegisterInfo *reg_info,
                                            RegisterValue &reg_value) {
   ThreadAMDGPU *thread = static_cast<ThreadAMDGPU *>(&m_thread);
-  auto wave_id = thread->GetWaveID();
+  auto wave_id = thread->GetDbgApiWaveID();
 
   const uint32_t lldb_reg_num = reg_info->kinds[eRegisterKindLLDB];
   if (!m_impl->IsRegisterValid(lldb_reg_num)) {
@@ -77,7 +77,7 @@ Status RegisterContextAmdGpu::WriteRegister(const RegisterInfo *reg_info,
 Status RegisterContextAmdGpu::ReadAllRegisterValues(
     lldb::WritableDataBufferSP &data_sp) {
   ThreadAMDGPU *thread = static_cast<ThreadAMDGPU *>(&m_thread);
-  auto wave_id = thread->GetWaveID();
+  auto wave_id = thread->GetDbgApiWaveID();
 
   Status error = m_impl->ReadAllRegisters(wave_id);
   if (error.Fail())

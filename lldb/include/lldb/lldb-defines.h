@@ -88,6 +88,11 @@
 #define LLDB_INVALID_UID UINT64_MAX
 #define LLDB_INVALID_PROCESS_ID 0
 #define LLDB_INVALID_THREAD_ID 0
+// GPU lane and SIMD (wave/warp) ids. Unlike thread ids these cannot use 0 as
+// the invalid value: lane 0 is the default lane of every SIMD group, and a
+// SIMD id is an opaque vendor handle that may legitimately be 0.
+#define LLDB_INVALID_LANE_ID UINT64_MAX
+#define LLDB_INVALID_SIMD_ID UINT64_MAX
 #define LLDB_INVALID_FRAME_ID UINT32_MAX
 #define LLDB_INVALID_SIGNAL_NUMBER INT32_MAX
 #define LLDB_INVALID_OFFSET UINT64_MAX // Must match max of lldb::offset_t

@@ -60,6 +60,10 @@ lldb_enable_amdgpu_plugin = @LLDB_ENABLE_AMDGPU_PLUGIN@
 if lldb_enable_amdgpu_plugin:
     config.enabled_plugins.append('lldb-amdgpu')
     config.hipcc_path = os.path.join('@ROCM_PATH@', 'bin', 'hipcc')
+    # lit sanitizes the environment, so ROCM_PATH must be injected explicitly.
+    # Without it the core tests fall back to `which rocgdb` (a system ROCm that
+    # may not match @ROCM_PATH@) and fail to generate a core with GPU waves.
+    config.environment['ROCM_PATH'] = '@ROCM_PATH@'
     # ROCgdb environment configuration (optional)
     # These can be set via CMake: -DROCGDB_LD_PRELOAD=... -DROCGDB_LD_LIBRARY_PATH=...
     config.rocgdb_ld_preload = '@ROCGDB_LD_PRELOAD@'

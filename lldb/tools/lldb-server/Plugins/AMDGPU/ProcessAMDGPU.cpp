@@ -111,7 +111,7 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
         LLDB_LOG(log,
                  "coalescing conflicting resume actions for wave {0}: "
                  "existing state {1}, new state {2}",
-                 gpu_thread->GetWaveID().handle,
+                 gpu_thread->GetDbgApiWaveID().handle,
                  StateAsCString(wave_action.resume_state),
                  StateAsCString(action->state));
 
@@ -246,9 +246,9 @@ Status ProcessAMDGPU::ReadMemoryWithSpace(lldb::addr_t addr,
   ThreadAMDGPU *amd_thread = static_cast<ThreadAMDGPU *>(thread);
   amd_dbgapi_process_id_t process_id = GetDbgApiProcessID();
   amd_dbgapi_wave_id_t wave_id =
-      amd_thread ? amd_thread->GetWaveID() : AMD_DBGAPI_WAVE_NONE;
+      amd_thread ? amd_thread->GetDbgApiWaveID() : AMD_DBGAPI_WAVE_NONE;
   amd_dbgapi_lane_id_t lane_id =
-      amd_thread ? amd_thread->GetLaneID() : AMD_DBGAPI_LANE_NONE;
+      amd_thread ? amd_thread->GetDbgApiLaneID() : AMD_DBGAPI_LANE_NONE;
 
   // Do the actual read memory.
   if (llvm::Error err = RunAmdDbgApiCommand([&] {
@@ -679,7 +679,7 @@ void ProcessAMDGPU::UpdateThreadListFromWaves() {
                        if (thread.IsShadowThread())
                          return true;
 
-                       return m_waves.count(thread.GetWaveID()) == 0;
+                       return m_waves.count(thread.GetDbgApiWaveID()) == 0;
                      }),
       m_threads.end());
 
