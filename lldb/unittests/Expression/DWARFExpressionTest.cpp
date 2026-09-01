@@ -1403,6 +1403,34 @@ TEST_F(DWARFExpressionMockProcessTest, deref_register) {
       ExpectLoadAddress(0x08070605, Value::ContextType::Invalid));
 }
 
+TEST_F(DWARFExpressionMockProcessTest, DW_OP_LLVM_piece_end) {
+  TestContext test_ctx;
+  constexpr uint64_t reg_value = 0x8877665544332211;
+  ASSERT_TRUE(
+      CreateTestContext(&test_ctx, "i386-pc-linux", RegisterValue(reg_value)));
+
+  ExecutionContext exe_ctx(test_ctx.process_sp);
+  MockDwarfDelegate delegate = MockDwarfDelegate::Dwarf5();
+
+  // Match the flat expression emitted for a value split across two AMDGPU
+  // registers. DW_OP_LLVM_piece_end completes the two-piece composite.
+  EXPECT_THAT_EXPECTED(
+      Evaluate({DW_OP_regx, 0x20, DW_OP_piece, 4, DW_OP_regx, 0x21, DW_OP_piece,
+                4, DW_OP_LLVM_user, DW_OP_LLVM_piece_end},
+               {}, &delegate, &exe_ctx, test_ctx.reg_ctx_sp.get()),
+      ExpectHostAddress({0x11, 0x22, 0x33, 0x44, 0x11, 0x22, 0x33, 0x44}));
+}
+
+TEST(DWARFExpression, DW_OP_LLVM_piece_end_multiple) {
+  EXPECT_THAT_ERROR(
+      Evaluate({DW_OP_const1u, 0xaa, DW_OP_piece, 1, DW_OP_LLVM_user,
+                DW_OP_LLVM_piece_end, DW_OP_LLVM_user, DW_OP_LLVM_piece_end})
+          .takeError(),
+      llvm::FailedWithMessage(
+          "could not evaluate DW_OP_LLVM_user: DW_OP_LLVM_piece_end is only "
+          "supported at the end of an expression"));
+}
+
 TEST_F(DWARFExpressionMockProcessTest, deref_implicit_value) {
   TestContext test_ctx;
   MockMemory::Map memory = {
