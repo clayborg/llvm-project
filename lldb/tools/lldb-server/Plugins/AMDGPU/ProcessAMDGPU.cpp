@@ -533,18 +533,18 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
                 status);
       exit(-1);
     }
-
     LLDB_LOGF(GetLog(GDBRLog::Plugin),
               "Wave stopped due to breakpoint at: 0x%" PRIx64
               " with wave id: %" PRIu64 " "
               "event id: %" PRIu64,
               pc, wave_id.handle, eventId.handle);
-    return true;
   } else {
-    LLDB_LOGF(GetLog(GDBRLog::Plugin), "Wave stopped due to unknown reason: %d",
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "Wave stopped due to reason: %d",
               stop_reason);
   }
-  return false;
+
+  GetOrCreateWave(wave_id).UpdateStopReason(stop_reason);
+  return true;
 }
 
 bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
@@ -669,7 +669,7 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
 }
 
 void ProcessAMDGPU::UpdateThreadListFromWaves() {
-  std::vector<amd_dbgapi_wave_id_t> new_waves = UpdateWavesAndReturnNew();
+  UpdateWaveList();
 
   // Remove dead threads.
   m_threads.erase(
@@ -683,11 +683,6 @@ void ProcessAMDGPU::UpdateThreadListFromWaves() {
                      }),
       m_threads.end());
 
-  // Add new threads.
-  for (auto wave_id : new_waves) {
-    assert(m_waves.count(wave_id) && "New wave not in m_waves");
-    m_waves.at(wave_id)->AddThreadsToList(*this, m_threads);
-  }
 }
 
 template <typename T>
@@ -796,7 +791,15 @@ ProcessAMDGPU::GetWaveList(size_t *count, amd_dbgapi_changed_t *changed) {
   return DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>(wave_list);
 }
 
-WaveIdList ProcessAMDGPU::UpdateWavesAndReturnNew() {
+WaveAMDGPU &ProcessAMDGPU::GetOrCreateWave(amd_dbgapi_wave_id_t wave_id) {
+  auto [it, inserted] =
+      m_waves.try_emplace(wave_id, std::make_shared<WaveAMDGPU>(wave_id));
+  if (inserted)
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "New wave: %" PRIu64, wave_id.handle);
+  return *it->second;
+}
+
+void ProcessAMDGPU::UpdateWaveList() {
   Log *log = GetLog(GDBRLog::Plugin);
 
   // Get the list of waves
@@ -807,39 +810,40 @@ WaveIdList ProcessAMDGPU::UpdateWavesAndReturnNew() {
     LLDB_LOG_ERROR(log, maybe_wave_list.takeError(),
                    "Failed to get wave list: {0}");
     m_waves.clear();
-    return {};
+    return;
   }
   amd_dbgapi_wave_id_t *wave_list = maybe_wave_list->get();
 
   if (changed == AMD_DBGAPI_CHANGED_NO) {
     LLDB_LOGF(log, "No changes in wave list");
-    return {};
+    return;
   }
 
-  // Update the info for our live waves.
-  // Any waves that we fail to get info for are considered dead.
-  // Keep track of which waves are new so we can return them to the caller.
+  WaveIdSet waves_with_threads;
+  for (const auto &thread : m_threads) {
+    ThreadAMDGPU &gpu_thread = static_cast<ThreadAMDGPU &>(*thread);
+    if (!gpu_thread.IsShadowThread())
+      waves_with_threads.insert(gpu_thread.GetWaveID());
+  }
+
+  // Reconcile wave lifetime and cached metadata. Stop reasons are updated only
+  // while processing the corresponding WAVE_STOP event.
   WaveIdSet live_waves;
-  WaveIdList new_waves;
   for (size_t i = 0; i < count; ++i) {
     amd_dbgapi_wave_id_t wave_id = wave_list[i];
+    live_waves.insert(wave_id);
+    WaveAMDGPU &wave = GetOrCreateWave(wave_id);
 
     if (llvm::Expected<DbgApiWaveInfo> wave_info = GetWaveInfo(wave_id)) {
-      LLDB_LOGF(log, "Successfully retrieved wave info for wave: %" PRIu64,
-                wave_id.handle);
-      if (!m_waves.count(wave_id)) {
-        LLDB_LOGF(log, "New wave: %" PRIu64, wave_id.handle);
-        m_waves.emplace(wave_id, std::make_shared<WaveAMDGPU>(wave_id));
-        new_waves.push_back(wave_id);
+      wave.SetDbgApiInfo(*wave_info);
+      if (!waves_with_threads.count(wave_id)) {
+        wave.AddThreadsToList(*this, m_threads);
+        waves_with_threads.insert(wave_id);
       }
-      live_waves.insert(wave_id);
-      m_waves.at(wave_id)->SetDbgApiInfo(*wave_info);
     } else {
-      // We failed to get wave info for this wave.
-      LLDB_LOG_ERROR(
-          log, wave_info.takeError(),
-          "Failed to get wave info for wave {1}. {0}. Marking wave as dead.",
-          wave_id.handle);
+      LLDB_LOG_ERROR(log, wave_info.takeError(),
+                     "Failed to get wave info for wave {1}. {0}",
+                     wave_id.handle);
     }
   }
 
@@ -854,6 +858,4 @@ WaveIdList ProcessAMDGPU::UpdateWavesAndReturnNew() {
       it = m_waves.erase(it);
     }
   }
-
-  return new_waves;
 }
