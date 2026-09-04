@@ -118,7 +118,14 @@ bool ValueObjectChild::UpdateValue() {
            (parent_type_flags.AnySet(lldb::eTypeInstanceIsPointer)));
 
       if (parent->GetCompilerType().ShouldTreatScalarValueAsAddress()) {
-        m_value.GetScalar() = parent->GetPointerValue().address;
+        AddrAndType addr_and_type = parent->GetPointerValue();
+        m_value.GetScalar() = addr_and_type.address;
+        if (addr_and_type.addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
+          const bool thread_and_frame_only_if_stopped = true;
+          ExecutionContext exe_ctx(
+              GetExecutionContextRef().Lock(thread_and_frame_only_if_stopped));
+          m_value.SetAddressSpace(addr_and_type.addr_space, &exe_ctx);
+        }
 
         switch (parent->GetAddressTypeOfChildren()) {
         case eAddressTypeFile: {
@@ -152,7 +159,9 @@ bool ValueObjectChild::UpdateValue() {
         std::optional<uint64_t> address_space = parent->GetValue().GetAddressSpaceId();
         if (addr == LLDB_INVALID_ADDRESS) {
           m_error = Status::FromErrorString("parent address is invalid.");
-        } else if (addr == 0 && !address_space) {
+        } else if (addr == 0 &&
+                   (!address_space ||
+                    *address_space == LLDB_DEFAULT_ADDRESS_SPACE)) {
           m_error = Status::FromErrorString("parent is NULL");
         } else {
           // If a bitfield doesn't fit into the child_byte_size'd window at

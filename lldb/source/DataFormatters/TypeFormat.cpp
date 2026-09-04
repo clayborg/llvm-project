@@ -20,6 +20,7 @@
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/TypeList.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/StreamString.h"
@@ -120,6 +121,18 @@ bool TypeFormatImpl_Format::FormatObject(ValueObject *valobj,
         // CompilerType::DumpTypeValue() should always return something, even
         // if that something is an error message
         dest = std::string(sstr.GetString());
+
+        // This is a hack until we have a proper address spaces in compiler
+        // types
+        if (compiler_type.IsPointerOrReferenceType()) {
+          lldb::addr_t addr_space = valobj->GetPointerValue().addr_space;
+          ProcessSP process_sp(valobj->GetProcessSP());
+          if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE && process_sp &&
+              process_sp->GetABI()) {
+            dest = process_sp->GetABI().get()->MapAddressSpaceName(addr_space) +
+                   "#" + dest;
+          }
+        }
       }
     }
     return !dest.empty();

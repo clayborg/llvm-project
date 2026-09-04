@@ -1,0 +1,391 @@
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#include "DeviceState.h"
+#include "../Utils/Utils.h"
+#include "ProcessNVGPU.h"
+#include "ThreadNVGPU.h"
+#include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
+#include "lldb/Utility/StreamString.h"
+#include <numeric>
+
+using namespace lldb_private::lldb_server;
+using namespace lldb_private::process_gdb_remote;
+using namespace lldb_private::sass;
+
+std::string ThreadCoords::Dump() const {
+  return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} thread_id = {}",
+                       dev_id, sm_id, warp_id, thread_id);
+}
+
+ThreadState::ThreadState(ProcessNVGPU &gpu, const ThreadCoords &thread_coords,
+                         WarpState &warp_state)
+    : m_thread_coords(thread_coords), m_thread_nvgpu(gpu, this),
+      m_warp_state(&warp_state) {}
+
+ThreadState::ThreadState(ThreadState &&other)
+    : m_thread_coords(other.GetCoords()),
+      m_thread_nvgpu(other.m_thread_nvgpu.GetGPU(), this),
+      m_warp_state(other.m_warp_state) {
+  logAndReportFatalError("ThreadState is not movable. Ensure that this "
+                         "constructor is never called by reserving the "
+                         "appropriate amount of space in parent container.");
+}
+
+void ThreadState::Dump(Stream &s) {
+  s.Indent();
+  s.Format("x = {}, y = {}, z = {}\n", m_thread_idx.x, m_thread_idx.y,
+           m_thread_idx.z);
+  s.Indent();
+  s.Format("pc = 0x{:x}, is_active = {}, stop_reason = {}\n", m_pc, m_is_active,
+           StopReasonToString(m_thread_nvgpu.GetStopReason()));
+  if (m_exception) {
+    s.Indent();
+    s.Format("exception = {}\n", m_exception->exception);
+    if (m_exception->errorPC) {
+      s.Indent();
+      s.Format("errorPC = 0x{:x}\n", *m_exception->errorPC);
+    }
+  }
+}
+
+WarpState::WarpState(ProcessNVGPU &gpu, uint32_t num_threads,
+                     uint32_t device_id, uint32_t sm_id, uint32_t warp_id,
+                     SMState &sm_state)
+    : m_sm_state(&sm_state), m_grid_id(0) {
+  m_threads.reserve(num_threads);
+  for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
+    m_threads.emplace_back(
+        gpu, ThreadCoords(device_id, sm_id, warp_id, thread_id), *this);
+}
+
+void WarpState::Dump(Stream &s) {
+  s.Indent();
+  s.Format("Threads (#{}):\n", m_threads.size());
+
+  s.IndentMore();
+  for (uint32_t thread_id = 0; thread_id < m_threads.size(); ++thread_id) {
+    if (!m_threads[thread_id].IsValid())
+      continue;
+
+    s.Indent();
+    s.Format("thread_id = {}\n", thread_id);
+
+    s.IndentMore();
+    m_threads[thread_id].Dump(s);
+    s.IndentLess();
+  }
+  s.IndentLess();
+}
+
+size_t WarpState::GetCurrentNumRegularRegisters() {
+  if (m_current_num_regular_registers)
+    return *m_current_num_regular_registers;
+
+  CUDBGWarpResources resources;
+  const WarpCoords &warp_coords = GetWarpCoords();
+
+  CUDBGResult res = GetSMState().GetDeviceState().GetAPI()->readWarpResources(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, &resources);
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("WarpState::GetCurrentNumRegularRegisters(). "
+                           "readWarpResources failed: {}",
+                           cudbgGetErrorString(res));
+
+  m_current_num_regular_registers = resources.numRegisters;
+  return *m_current_num_regular_registers;
+}
+
+static void ReadUniformRegistersFromDevice(DeviceState &device_info,
+                                           CUDBGAPI api,
+                                           const WarpCoords &warp_coords,
+                                           WarpSharedRegisterCache &regs) {
+  size_t num_regs = device_info.GetNumUniformRegisters();
+  if (num_regs == 0)
+    return;
+
+  if (num_regs > kNumURRegs)
+    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
+                           "uniform registers, but only {} are supported",
+                           num_regs, kNumURRegs);
+
+  CUDBGResult res = api->readUniformRegisterRange(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, 0, num_regs,
+      regs.val.uniform);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("WarpState::GetRegisters(). "
+                           "readUniformRegisterRange failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i)
+    regs.is_valid.uniform[i] = true;
+}
+
+static void
+ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                        const WarpCoords &warp_coords,
+                                        WarpSharedRegisterCache &regs) {
+  size_t num_regs = device_info.GetNumUniformPredicateRegisters();
+  if (num_regs == 0)
+    return;
+
+  if (num_regs > kNumUPRegs)
+    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
+                           "uniform predicate registers, but only {} are "
+                           "supported",
+                           num_regs, kNumUPRegs);
+
+  CUDBGResult res = api->readUniformPredicates(
+      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, num_regs,
+      regs.val.uniform_predicate);
+
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("WarpState::GetRegisters(). "
+                           "readUniformPredicates failed: {}",
+                           cudbgGetErrorString(res));
+
+  for (size_t i = 0; i < num_regs; ++i) {
+    regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
+    regs.is_valid.uniform_predicate[i] = true;
+  }
+}
+
+const WarpSharedRegisterCache &WarpState::GetRegisters() {
+  if (m_regs_calculated)
+    return m_shared_registers;
+
+  WarpCoords coords = GetWarpCoords();
+  DeviceState &device_info = GetSMState().GetDeviceState();
+  CUDBGAPI api = device_info.GetAPI();
+
+  ReadUniformRegistersFromDevice(device_info, api, coords, m_shared_registers);
+  ReadUniformPredicateRegistersFromDevice(device_info, api, coords,
+                                          m_shared_registers);
+
+  m_regs_calculated = true;
+  return m_shared_registers;
+}
+
+SMState::SMState(ProcessNVGPU &gpu, uint32_t num_warps,
+                 uint32_t num_threads_per_warp, uint32_t device_id,
+                 uint32_t sm_id, DeviceState &device_state)
+    : m_is_active(false), m_warps(), m_device_state(&device_state) {
+  m_warps.reserve(num_warps);
+  for (uint32_t warp_id = 0; warp_id < num_warps; ++warp_id)
+    m_warps.emplace_back(gpu, num_threads_per_warp, device_id, sm_id, warp_id,
+                         *this);
+}
+
+void SMState::SetIsActive(bool is_active) { m_is_active = is_active; }
+
+void SMState::Dump(Stream &s) {
+  s.Indent();
+  s.Format("Warps (#{}):\n", m_warps.size());
+
+  s.IndentMore();
+
+  for (uint32_t warp_id = 0; warp_id < m_warps.size(); ++warp_id) {
+    if (!m_warps[warp_id].IsValid())
+      continue;
+
+    s.Indent();
+    s.Format("warp_id = {}\n", warp_id);
+
+    s.IndentMore();
+    m_warps[warp_id].Dump(s);
+    s.IndentLess();
+  }
+  s.IndentLess();
+}
+
+DeviceState::DeviceState(ProcessNVGPU &gpu, uint32_t device_id)
+    : m_api(gpu.GetDebuggerAPI()), m_device_id(device_id) {
+  CUDBGResult res =
+      m_api->getDeviceInfoSizes(m_device_id, &m_device_info_sizes);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
+                           "getDeviceInfoSizes failed: {0}",
+                           cudbgGetErrorString(res));
+  }
+  m_device_info_buffer.resize(m_device_info_sizes.requiredBufferSize);
+
+  res = m_api->getNumSMs(m_device_id, &m_num_sms);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
+                           "getNumSMs failed: {0}",
+                           cudbgGetErrorString(res));
+  }
+
+  res = m_api->getNumWarps(m_device_id, &m_num_warps_per_sm);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
+                           "getNumWarps failed: {0}",
+                           cudbgGetErrorString(res));
+  }
+
+  res = m_api->getNumLanes(m_device_id, &m_num_threads_per_warp);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
+                           "getNumLanes failed: {0}",
+                           cudbgGetErrorString(res));
+  }
+
+  m_sms.reserve(m_num_sms);
+  for (uint32_t sm_id = 0; sm_id < m_num_sms; ++sm_id)
+    m_sms.emplace_back(gpu, m_num_warps_per_sm, m_num_threads_per_warp,
+                       m_device_id, sm_id, *this);
+}
+
+size_t DeviceState::GetNumPredicateRegisters() {
+  if (m_num_predicate_registers)
+    return *m_num_predicate_registers;
+
+  uint32_t num_predicate_registers = 0;
+  CUDBGResult res =
+      m_api->getNumPredicates(m_device_id, &num_predicate_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::GetNumPredicateRegisters(). "
+                           "getNumPredicates failed: {}",
+                           cudbgGetErrorString(res));
+  }
+  m_num_predicate_registers = static_cast<size_t>(num_predicate_registers);
+  return *m_num_predicate_registers;
+}
+
+size_t DeviceState::GetNumUniformPredicateRegisters() {
+  if (m_num_uniform_predicate_registers)
+    return *m_num_uniform_predicate_registers;
+
+  uint32_t num_uniform_predicate_registers = 0;
+  CUDBGResult res = m_api->getNumUniformPredicates(
+      m_device_id, &num_uniform_predicate_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError(
+        "DeviceInformation::GetNumUniformPredicateRegisters(). "
+        "getNumUniformPredicates failed: {}",
+        cudbgGetErrorString(res));
+  }
+  m_num_uniform_predicate_registers =
+      static_cast<size_t>(num_uniform_predicate_registers);
+  return *m_num_uniform_predicate_registers;
+}
+
+size_t DeviceState::GetNumUniformRegisters() {
+  if (m_num_uniform_registers)
+    return *m_num_uniform_registers;
+
+  uint32_t num_uniform_registers = 0;
+  CUDBGResult res =
+      m_api->getNumUniformRegisters(m_device_id, &num_uniform_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::GetNumUniformRegisters(). "
+                           "getNumUniformRegisters failed: {}",
+                           cudbgGetErrorString(res));
+  }
+  m_num_uniform_registers = static_cast<size_t>(num_uniform_registers);
+  return *m_num_uniform_registers;
+}
+
+size_t DeviceState::GetMaxNumSupportedRegularRegister() {
+  if (m_num_r_registers)
+    return *m_num_r_registers;
+
+  uint32_t num_r_registers = 0;
+  CUDBGResult res = m_api->getNumRegisters(m_device_id, &num_r_registers);
+  if (res != CUDBG_SUCCESS) {
+    logAndReportFatalError("DeviceInformation::GetNumRRegisters(). "
+                           "getNumRegisters failed: {}",
+                           cudbgGetErrorString(res));
+  }
+  m_num_r_registers = static_cast<size_t>(num_r_registers);
+  return *m_num_r_registers;
+}
+
+void DeviceState::Dump(Stream &s) {
+  s.Format("Device id: {0}\n", m_device_id);
+  s.Format("SMs (#{}):\n", m_sms.size());
+  s.IndentMore();
+  for (uint32_t sm_id = 0; sm_id < m_sms.size(); ++sm_id) {
+    if (!m_sms[sm_id].IsActive())
+      continue;
+
+    s.Indent();
+    s.Format("sm_id = {}\n", sm_id);
+
+    s.IndentMore();
+    m_sms[sm_id].Dump(s);
+    s.IndentLess();
+  }
+  s.IndentLess();
+}
+
+const CUDBGGridInfo &DeviceState::GetGridInfo(uint64_t grid_id) {
+  auto it = m_grid_info.find(grid_id);
+  if (it != m_grid_info.end())
+    return it->second;
+
+  CUDBGGridStatus grid_status = CUDBG_GRID_STATUS_INVALID;
+  m_api->getGridStatus(m_device_id, grid_id, &grid_status);
+  if (grid_status == CUDBG_GRID_STATUS_INVALID)
+    logAndReportFatalError("DeviceInformation::GetGridInfo(). "
+                           "getGridStatus returned invalid grid status: {}",
+                           grid_status);
+
+  CUDBGGridInfo grid_info;
+  memset(&grid_info, 0, sizeof(CUDBGGridInfo));
+
+  CUDBGResult res = m_api->getGridInfo(m_device_id, grid_id, &grid_info);
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("DeviceInformation::GetGridInfo(). "
+                           "getGridInfo failed: {}",
+                           cudbgGetErrorString(res));
+
+  return m_grid_info.insert({grid_id, grid_info}).first->second;
+}
+
+size_t DeviceState::GetMaxNumSupportedThreads() const {
+  return m_num_threads_per_warp * m_num_warps_per_sm * m_num_sms;
+}
+
+DeviceStateRegistry::DeviceStateRegistry(ProcessNVGPU &gpu) {
+  uint32_t num_devices;
+  CUDBGResult res = gpu.GetDebuggerAPI()->getNumDevices(&num_devices);
+  if (res != CUDBG_SUCCESS)
+    logAndReportFatalError("AllDevices::AllDevices(). "
+                           "getNumDevices failed: {0}",
+                           cudbgGetErrorString(res));
+
+  m_devices.reserve(num_devices);
+  for (uint32_t device_id = 0; device_id < num_devices; ++device_id)
+    m_devices.emplace_back(gpu, device_id);
+}
+
+void DeviceStateRegistry::BatchUpdate(
+    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+  for (DeviceState &device : m_devices)
+    device.BatchUpdate(log_to_client_callback);
+}
+
+void DeviceStateRegistry::Dump(Stream &s) {
+  for (DeviceState &device : m_devices)
+    device.Dump(s);
+}
+
+std::string DeviceStateRegistry::Dump() {
+  StreamString s;
+  Dump(s);
+  return s.GetData();
+}
+
+size_t DeviceStateRegistry::GetMaxNumSupportedThreads() const {
+  return std::accumulate(m_devices.begin(), m_devices.end(), 0,
+                         [](size_t acc, const DeviceState &device) {
+                           return acc + device.GetMaxNumSupportedThreads();
+                         });
+}

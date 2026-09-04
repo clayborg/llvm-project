@@ -307,8 +307,7 @@ void RegisterContextUnwind::InitializeZerothFrame() {
   UnwindLogMsg("initialized frame current pc is 0x%" PRIx64 " cfa is 0x%" PRIx64
                " afa is 0x%" PRIx64 " using %s UnwindPlan",
                (uint64_t)m_current_pc.GetLoadAddress(exe_ctx.GetTargetPtr()),
-               (uint64_t)m_cfa,
-               (uint64_t)m_afa,
+               (uint64_t)m_cfa, (uint64_t)m_afa,
                m_full_unwind_plan_sp->GetSourceName().GetCString());
 }
 
@@ -417,8 +416,8 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
       if (GetNextFrame().get() && GetNextFrame()->IsValid() &&
           GetNextFrame()->IsFrameZero()) {
         UnwindLogMsg("had a pc of 0x%" PRIx64 " which is not in executable "
-                                              "memory but on frame 1 -- "
-                                              "allowing it once.",
+                     "memory but on frame 1 -- "
+                     "allowing it once.",
                      (uint64_t)pc);
         m_frame_type = eSkipFrame;
       } else {
@@ -534,9 +533,9 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
       decr_pc_and_recompute_addr_range = true;
   } else if (IsTrapHandlerSymbol(process, m_sym_ctx)) {
     // Signal dispatch may set the return address of the handler it calls to
-    // point to the first byte of a return trampoline (like __kernel_rt_sigreturn),
-    // so do not decrement and recompute if the symbol we already found is a trap
-    // handler.
+    // point to the first byte of a return trampoline (like
+    // __kernel_rt_sigreturn), so do not decrement and recompute if the symbol
+    // we already found is a trap handler.
     decr_pc_and_recompute_addr_range = false;
   } else if (m_behaves_like_zeroth_frame) {
     decr_pc_and_recompute_addr_range = false;
@@ -697,11 +696,10 @@ void RegisterContextUnwind::InitializeNonZerothFrame() {
   // Give the Architecture a chance to replace the UnwindPlan.
   TryAdoptArchitectureUnwindPlan();
 
-  UnwindLogMsg("initialized frame current pc is 0x%" PRIx64
-               " cfa is 0x%" PRIx64 " afa is 0x%" PRIx64,
+  UnwindLogMsg("initialized frame current pc is 0x%" PRIx64 " cfa is 0x%" PRIx64
+               " afa is 0x%" PRIx64,
                (uint64_t)m_current_pc.GetLoadAddress(exe_ctx.GetTargetPtr()),
-               (uint64_t)m_cfa,
-               (uint64_t)m_afa);
+               (uint64_t)m_cfa, (uint64_t)m_afa);
 }
 
 bool RegisterContextUnwind::CheckIfLoopingStack() {
@@ -996,9 +994,10 @@ RegisterContextUnwind::GetFullUnwindPlanForFrame() {
           func_unwinders_sp->GetUnwindPlanArchitectureDefaultAtFunctionEntry(
               m_thread);
       if (unwind_plan_sp) {
-        UnwindLogMsgVerbose("frame uses %s for full UnwindPlan because we are at "
-                            "the first instruction of a function",
-                            unwind_plan_sp->GetSourceName().GetCString());
+        UnwindLogMsgVerbose(
+            "frame uses %s for full UnwindPlan because we are at "
+            "the first instruction of a function",
+            unwind_plan_sp->GetSourceName().GetCString());
         return unwind_plan_sp;
       }
     }
@@ -1051,9 +1050,10 @@ RegisterContextUnwind::GetFullUnwindPlanForFrame() {
   }
 
   if (IsUnwindPlanValidForCurrentPC(unwind_plan_sp)) {
-    UnwindLogMsgVerbose("frame uses %s for full UnwindPlan because we "
-                        "failed to find a call-site unwind plan that would work",
-                        unwind_plan_sp->GetSourceName().GetCString());
+    UnwindLogMsgVerbose(
+        "frame uses %s for full UnwindPlan because we "
+        "failed to find a call-site unwind plan that would work",
+        unwind_plan_sp->GetSourceName().GetCString());
     return unwind_plan_sp;
   }
 
@@ -1121,6 +1121,39 @@ bool RegisterContextUnwind::ReadRegisterValueFromRegisterLocation(
 
     if (!other_reg_info)
       return false;
+
+    // If we're reading a register for PC/RA, check if there's a composite RA
+    // register that should be used instead. This handles cases like NVGPU where
+    // the return address spans multiple physical registers (R20-R21) but DWARF
+    // CFI can only reference the first component (R20).
+    //
+    // We directly check other_reg_info to see if it's part of a composite
+    // by examining if any register with the RA generic kind has this register
+    // as its first value_reg component.
+    if (reg_info &&
+        (reg_info->kinds[eRegisterKindGeneric] == LLDB_REGNUM_GENERIC_PC ||
+         reg_info->kinds[eRegisterKindGeneric] == LLDB_REGNUM_GENERIC_RA)) {
+      // Try to directly access the RA register using
+      // ConvertBetweenRegisterKinds which is safe to call during unwinding,
+      // unlike GetRegisterInfo which can trigger lazy initialization.
+      uint32_t ra_regnum = LLDB_INVALID_REGNUM;
+      if (m_thread.GetRegisterContext() &&
+          m_thread.GetRegisterContext()->ConvertBetweenRegisterKinds(
+              eRegisterKindGeneric, LLDB_REGNUM_GENERIC_RA, eRegisterKindLLDB,
+              ra_regnum) &&
+          ra_regnum != LLDB_INVALID_REGNUM) {
+        // Get the RA register info directly by its LLDB register number
+        const RegisterInfo *ra_reg_info = GetRegisterInfoAtIndex(ra_regnum);
+
+        // If the RA register is a composite (has value_regs), and its first
+        // component matches what we're being asked to read, use the composite
+        if (ra_reg_info && ra_reg_info->value_regs &&
+            ra_reg_info->value_regs[0] == regloc.location.register_number &&
+            ra_reg_info->value_regs[1] != LLDB_INVALID_REGNUM) {
+          other_reg_info = ra_reg_info;
+        }
+      }
+    }
 
     if (IsFrameZero()) {
       success =
@@ -1557,6 +1590,38 @@ RegisterContextUnwind::SavedLocationForRegister(
   }
 
   if (abs_regloc->IsSame()) {
+    // NVIDIA: Check if the ABI wants to override the "same" rule for this
+    // register. This allows ABIs to work around compiler bugs in DWARF CFI
+    // (e.g., nvcc's FDE for SASS doesn't emit DW_CFA_val_offset or other rules
+    // to update SP when the CFA offset changes, leaving the CIE's "same" rule
+    // in effect).
+    if (regnum.GetAsKind(eRegisterKindGeneric) == LLDB_REGNUM_GENERIC_SP) {
+      ProcessSP process_sp = m_thread.GetProcess();
+      ABI *abi = process_sp ? process_sp->GetABI().get() : nullptr;
+      if (abi) {
+        const RegisterInfo *reg_info =
+            GetRegisterInfoAtIndex(regnum.GetAsKind(eRegisterKindLLDB));
+        UnwindPlan::Row::AbstractRegisterLocation abi_regloc;
+        if (reg_info &&
+            abi->GetFallbackRegisterLocation(reg_info, abi_regloc)) {
+          // ABI provided an override (typically SP = CFA + 0)
+          if (abi_regloc.IsCFAPlusOffset()) {
+            int offset = abi_regloc.GetOffset();
+            regloc.type =
+                UnwindLLDB::ConcreteRegisterLocation::eRegisterValueInferred;
+            regloc.location.inferred_value = m_cfa + offset;
+            m_registers[regnum.GetAsKind(eRegisterKindLLDB)] = regloc;
+            UnwindLogMsg("supplying caller's register %s (%d) using ABI "
+                         "override: CFA plus offset %d [value is 0x%" PRIx64
+                         "]",
+                         regnum.GetName(), regnum.GetAsKind(eRegisterKindLLDB),
+                         offset, regloc.location.inferred_value);
+            return UnwindLLDB::RegisterSearchResult::eRegisterFound;
+          }
+        }
+      }
+    }
+
     if (IsFrameZero()) {
       regloc.type =
           UnwindLLDB::ConcreteRegisterLocation::eRegisterInLiveRegisterContext;
@@ -1618,7 +1683,7 @@ RegisterContextUnwind::SavedLocationForRegister(
 
   if (abs_regloc->IsAFAPlusOffset()) {
     if (m_afa == LLDB_INVALID_ADDRESS)
-        return UnwindLLDB::RegisterSearchResult::eRegisterNotFound;
+      return UnwindLLDB::RegisterSearchResult::eRegisterNotFound;
 
     int offset = abs_regloc->GetOffset();
     regloc.type = UnwindLLDB::ConcreteRegisterLocation::eRegisterValueInferred;
@@ -1633,7 +1698,7 @@ RegisterContextUnwind::SavedLocationForRegister(
 
   if (abs_regloc->IsAtAFAPlusOffset()) {
     if (m_afa == LLDB_INVALID_ADDRESS)
-        return UnwindLLDB::RegisterSearchResult::eRegisterNotFound;
+      return UnwindLLDB::RegisterSearchResult::eRegisterNotFound;
 
     int offset = abs_regloc->GetOffset();
     regloc.type =
@@ -1675,9 +1740,14 @@ RegisterContextUnwind::SavedLocationForRegister(
     DWARFExpressionList dwarfexpr(opcode_ctx, dwarfdata, nullptr);
     dwarfexpr.GetMutableExpressionAtAddress()->SetRegisterKind(abs_regkind);
     Value cfa_val = Scalar(m_cfa);
+    if (exe_ctx.GetProcessSP() && exe_ctx.GetProcessSP()->GetABI().get()) {
+      ABI *abi = exe_ctx.GetProcessSP()->GetABI().get();
+      lldb::addr_space_t stack_addr_space = abi->GetDefaultStackAddressSpace();
+      cfa_val.SetAddressSpace(stack_addr_space, &exe_ctx);
+    }
     cfa_val.SetValueType(Value::ValueType::LoadAddress);
-    llvm::Expected<Value> result =
-        dwarfexpr.Evaluate(&exe_ctx, this, 0, &cfa_val, nullptr);
+    llvm::Expected<Value> result = dwarfexpr.Evaluate(
+        &exe_ctx, this, 0, LLDB_DEFAULT_ADDRESS_SPACE, &cfa_val, nullptr);
     if (!result) {
       LLDB_LOG_ERROR(log, result.takeError(),
                      "DWARF expression failed to evaluate: {0}");
@@ -1852,9 +1922,8 @@ bool RegisterContextUnwind::TryFallbackUnwindPlan() {
       m_fallback_unwind_plan_sp->GetRowForFunctionOffset(
           m_current_offset_backed_up_one);
 
-  if (active_row &&
-      active_row->GetCFAValue().GetValueType() !=
-          UnwindPlan::Row::FAValue::unspecified) {
+  if (active_row && active_row->GetCFAValue().GetValueType() !=
+                        UnwindPlan::Row::FAValue::unspecified) {
     addr_t new_cfa;
     ProcessSP process_sp = m_thread.GetProcess();
     ABISP abi_sp = process_sp ? process_sp->GetABI() : nullptr;
@@ -1898,8 +1967,7 @@ bool RegisterContextUnwind::TryFallbackUnwindPlan() {
       return false;
     }
 
-    if (old_caller_pc_value == new_caller_pc_value &&
-        m_cfa == old_cfa &&
+    if (old_caller_pc_value == new_caller_pc_value && m_cfa == old_cfa &&
         m_afa == old_afa) {
       UnwindLogMsg("fallback unwind plan got the same values for this frame "
                    "CFA and caller frame pc, not using");
@@ -1938,9 +2006,8 @@ bool RegisterContextUnwind::ForceSwitchToFallbackUnwindPlan() {
   const UnwindPlan::Row *active_row =
       m_fallback_unwind_plan_sp->GetRowForFunctionOffset(m_current_offset);
 
-  if (active_row &&
-      active_row->GetCFAValue().GetValueType() !=
-          UnwindPlan::Row::FAValue::unspecified) {
+  if (active_row && active_row->GetCFAValue().GetValueType() !=
+                        UnwindPlan::Row::FAValue::unspecified) {
     addr_t new_cfa;
     ProcessSP process_sp = m_thread.GetProcess();
     ABISP abi_sp = process_sp ? process_sp->GetABI() : nullptr;
@@ -2064,8 +2131,7 @@ bool RegisterContextUnwind::ReadFrameAddress(
   }
   case UnwindPlan::Row::FAValue::isRegisterPlusOffset: {
     UnwindLogMsg("CFA value via register plus offset");
-    RegisterNumber cfa_reg(m_thread, row_register_kind,
-                           fa.GetRegisterNumber());
+    RegisterNumber cfa_reg(m_thread, row_register_kind, fa.GetRegisterNumber());
     if (ReadGPRValue(cfa_reg, cfa_reg_contents)) {
       if (!CallFrameAddressIsValid(abi_sp, cfa_reg_contents)) {
         UnwindLogMsg(
@@ -2090,18 +2156,25 @@ bool RegisterContextUnwind::ReadFrameAddress(
     UnwindLogMsg("CFA value via DWARF expression");
     ExecutionContext exe_ctx(m_thread.shared_from_this());
     Process *process = exe_ctx.GetProcessPtr();
-    DataExtractor dwarfdata(fa.GetDWARFExpressionBytes(),
-                            fa.GetDWARFExpressionLength(),
-                            process->GetByteOrder(),
-                            process->GetAddressByteSize());
+    DataExtractor dwarfdata(
+        fa.GetDWARFExpressionBytes(), fa.GetDWARFExpressionLength(),
+        process->GetByteOrder(), process->GetAddressByteSize());
     ModuleSP opcode_ctx;
     DWARFExpressionList dwarfexpr(opcode_ctx, dwarfdata, nullptr);
     dwarfexpr.GetMutableExpressionAtAddress()->SetRegisterKind(
         row_register_kind);
-    llvm::Expected<Value> result =
-        dwarfexpr.Evaluate(&exe_ctx, this, 0, nullptr, nullptr);
+    lldb::addr_space_t stack_addr_space = LLDB_DEFAULT_ADDRESS_SPACE;
+    ABISP abi_sp = m_thread.GetProcess()->GetABI();
+    if (abi_sp) {
+      stack_addr_space = abi_sp->GetDefaultStackAddressSpace();
+    }
+    llvm::Expected<Value> result = dwarfexpr.Evaluate(
+        &exe_ctx, this, 0, stack_addr_space, nullptr, nullptr);
     if (result) {
       address = result->GetScalar().ULongLong();
+      if (abi_sp)
+        address = abi_sp->FixCodeAddress(address);
+
       UnwindLogMsg("CFA value set by DWARF expression is 0x%" PRIx64, address);
       std::optional<uint64_t> address_space_id = result->GetAddressSpaceId();
       UnwindLogMsg("CFA value has address space ID %" PRIu64,
@@ -2384,17 +2457,15 @@ bool RegisterContextUnwind::GetStartPC(addr_t &start_pc) {
     return false;
 
   if (!m_start_pc.IsValid()) {
-        bool read_successfully = ReadPC (start_pc);
-        if (read_successfully)
-        {
-            ProcessSP process_sp (m_thread.GetProcess());
-            if (process_sp)
-            {
-              if (ABISP abi_sp = process_sp->GetABI())
-                start_pc = abi_sp->FixCodeAddress(start_pc);
-            }
-        }
-        return read_successfully;
+    bool read_successfully = ReadPC(start_pc);
+    if (read_successfully) {
+      ProcessSP process_sp(m_thread.GetProcess());
+      if (process_sp) {
+        if (ABISP abi_sp = process_sp->GetABI())
+          start_pc = abi_sp->FixCodeAddress(start_pc);
+      }
+    }
+    return read_successfully;
   }
   start_pc = m_start_pc.GetLoadAddress(CalculateTarget().get());
   return true;

@@ -56,6 +56,7 @@
 #include "lldb/ValueObject/ValueObject.h"
 #include "lldb/ValueObject/ValueObjectConstResult.h"
 #include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <memory>
 #include <optional>
@@ -627,6 +628,9 @@ void Thread::WillStop() {
 }
 
 bool Thread::SetupToStepOverBreakpointIfNeeded(RunDirection direction) {
+  if (!CalculateTarget()->ShouldStepOverBreakpointsOnResume().value_or(true))
+    return false;
+
   if (GetResumeState() != eStateSuspended) {
     // First check whether this thread is going to "actually" resume at all.
     // For instance, if we're stepping from one level to the next of an
@@ -1795,45 +1799,22 @@ Thread::GetStackFrameSPForStackFramePtr(StackFrame *stack_frame_ptr) {
 
 std::string Thread::StopReasonAsString(lldb::StopReason reason) {
   switch (reason) {
-  case eStopReasonInvalid:
-    return "invalid";
-  case eStopReasonNone:
-    return "none";
-  case eStopReasonTrace:
-    return "trace";
-  case eStopReasonBreakpoint:
-    return "breakpoint";
-  case eStopReasonWatchpoint:
-    return "watchpoint";
-  case eStopReasonSignal:
-    return "signal";
-  case eStopReasonException:
-    return "exception";
-  case eStopReasonExec:
-    return "exec";
-  case eStopReasonFork:
-    return "fork";
-  case eStopReasonVFork:
-    return "vfork";
-  case eStopReasonVForkDone:
-    return "vfork done";
-  case eStopReasonPlanComplete:
-    return "plan complete";
-  case eStopReasonThreadExiting:
-    return "thread exiting";
-  case eStopReasonInstrumentation:
-    return "instrumentation break";
-  case eStopReasonProcessorTrace:
-    return "processor trace";
-  case eStopReasonInterrupt:
-    return "async interrupt";
-    case eStopReasonHistoryBoundary:
-    return "history boundary";
-  case eStopReasonDynamicLoader:
-    return "dynamic loader";
+#define LLDB_STOP_REASON(reason_enum, reason_name)                             \
+  case reason_enum:                                                            \
+    return reason_name;
+#include "lldb/Target/StopReason.def"
   }
 
   return "StopReason = " + std::to_string(reason);
+}
+
+std::optional<lldb::StopReason>
+Thread::StopReasonFromString(llvm::StringRef reason_str) {
+  return llvm::StringSwitch<std::optional<lldb::StopReason>>(reason_str)
+#define LLDB_STOP_REASON(reason_enum, reason_name)                             \
+  .Case(reason_name, reason_enum)
+#include "lldb/Target/StopReason.def"
+      .Default(std::nullopt);
 }
 
 std::string Thread::RunModeAsString(lldb::RunMode mode) {

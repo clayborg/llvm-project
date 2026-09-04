@@ -1861,6 +1861,22 @@ let Command = "thread until" in {
              "or leave the function - can be specified multiple times.">;
 }
 
+let Command = "thread list" in {
+  def thread_list_verbose : Option<"verbose", "v">,
+    Desc<"For GPU targets, disable platform-specific aggregation and render "
+         "one row per thread, the same way `thread list` works for CPU "
+         "targets.">;
+  def thread_list_stop_reason : Option<"stop-reason", "s">, Arg<"Name">,
+    Desc<"For GPU targets, only show threads whose stop reason matches the "
+         "given name. Must be one of the stop reason names produced by "
+         "'thread list': 'invalid', 'none', 'trace', 'breakpoint', "
+         "'watchpoint', 'signal', 'exception', 'exec', 'fork', 'vfork', "
+         "'vfork done', 'plan complete', 'thread exiting', "
+         "'instrumentation break', 'processor trace', 'async interrupt', "
+         "'history boundary', or 'dynamic loader'. Threads that do not match "
+         "are summarised in a single trailing row.">;
+}
+
 let Command = "thread info" in {
   def thread_info_json : Option<"json", "j">,
                          Desc<"Display the thread info in"
@@ -1936,6 +1952,20 @@ let Command = "thread select" in {
         Arg<"ThreadID">,
         Completion<"ThreadID">,
         Desc<"Provide a thread ID instead of a thread index.">;
+  def thread_select_blockidx
+      : Option<"blockidx", "b">,
+        Group<3>,
+        Arg<"None">,
+        Desc<"Select GPU thread by block index. Format: N, (N), (x=N), "
+             "(N,M), (x=N y=M), (N,M,P), or (x=N y=M z=P). "
+             "Single integers refer to x coordinate.">;
+  def thread_select_threadidx
+      : Option<"threadidx", "i">,
+        Group<3>,
+        Arg<"None">,
+        Desc<"Select GPU thread by thread index. Format: N, (N), (x=N), "
+             "(N,M), (x=N y=M), (N,M,P), or (x=N y=M z=P). "
+             "Single integers refer to x coordinate.">;
 }
 
 let Command = "thread trace dump function calls" in {

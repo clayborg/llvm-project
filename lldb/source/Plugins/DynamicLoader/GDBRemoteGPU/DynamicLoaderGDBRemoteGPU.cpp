@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
@@ -15,6 +16,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "llvm/Support/Base64.h"
 
 #include "DynamicLoaderGDBRemoteGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemote.h"
@@ -126,6 +128,17 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
                  info.pathname, *info.native_memory_address);
       }
     }
+    // Convert the Base64-encoded ELF image data to a DataBufferHeap
+    if (info.elf_image_base64_sp) {
+      LLDB_LOG(log, "[DynamicLoaderGDBRemoteGPU] Converting base64 elf image");
+      std::vector<char> decoded_data;
+      llvm::StringRef elf_data_ref(*info.elf_image_base64_sp);
+      if (llvm::Error decode_error = llvm::decodeBase64(elf_data_ref, decoded_data))
+        Debugger::ReportError("Failed to decode Base64 NVIDIA ELF image data: " +
+                              llvm::toString(std::move(decode_error)));
+      else
+        data_sp = std::make_shared<DataBufferHeap>(decoded_data.data(), decoded_data.size());
+    }
     // Extract the UUID if available.
     UUID uuid;
     if (info.uuid_str)
@@ -200,6 +213,12 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
       if (changed) {
         LLDB_LOG(log, "Module \"{0}\" was loaded, notifying target",
                  info.pathname);
+
+        auto platform_sp = target.GetPlatform();
+        if (platform_sp) {
+          platform_sp->RecordLoadedModule(module_sp, target);
+        }
+
         loaded_module_list.AppendIfNeeded(module_sp);
       }
     }

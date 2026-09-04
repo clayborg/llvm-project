@@ -1421,9 +1421,11 @@ public:
 
   void GetStatus(Stream &ostrm);
 
-  size_t GetThreadStatus(Stream &ostrm, bool only_threads_with_stop_reason,
-                         uint32_t start_frame, uint32_t num_frames,
-                         uint32_t num_frames_with_source, bool stop_format);
+  size_t
+  GetThreadStatus(Stream &ostrm, bool only_threads_with_stop_reason,
+                  uint32_t start_frame, uint32_t num_frames,
+                  uint32_t num_frames_with_source, bool stop_format,
+                  std::optional<size_t> max_threads_to_dump = std::nullopt);
 
   /// Send an async interrupt request.
   ///
@@ -1737,8 +1739,8 @@ public:
   ReadMemoryRanges(llvm::ArrayRef<Range<lldb::addr_t, size_t>> ranges,
                    llvm::MutableArrayRef<uint8_t> buffer);
 
-  virtual size_t ReadMemory(const AddressSpec &addr_spec, void *buf, 
-                            size_t size, Status &error);
+  size_t ReadMemory(const AddressSpec &addr_spec, void *buf, size_t size,
+                    Status &error);
 
   /// Read of memory from a process.
   ///
@@ -1864,6 +1866,8 @@ public:
 
   lldb::addr_t ReadPointerFromMemory(lldb::addr_t vm_addr, Status &error);
 
+  lldb::addr_t ReadPointerFromMemory(AddressSpec addr, Status &error);
+
   bool WritePointerToMemory(lldb::addr_t vm_addr, lldb::addr_t ptr_value,
                             Status &error);
 
@@ -1925,6 +1929,10 @@ public:
                              size_t size, Status &error);
 
   size_t ReadScalarIntegerFromMemory(lldb::addr_t addr, uint32_t byte_size,
+                                     bool is_signed, Scalar &scalar,
+                                     Status &error);
+
+  size_t ReadScalarIntegerFromMemory(AddressSpec addr, uint32_t byte_size,
                                      bool is_signed, Scalar &scalar,
                                      Status &error);
 

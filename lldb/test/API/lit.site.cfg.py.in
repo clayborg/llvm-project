@@ -69,6 +69,12 @@ if lldb_enable_amdgpu_plugin:
     config.rocgdb_ld_preload = '@ROCGDB_LD_PRELOAD@'
     config.rocgdb_ld_library_path = '@ROCGDB_LD_LIBRARY_PATH@'
 
+lldb_enable_nvgpu_plugin = '@LLDB_ENABLE_NVGPU_PLUGIN@'
+if lldb_enable_nvgpu_plugin in ('ON', '1'):
+    config.enabled_plugins.append('nvgpu')
+    config.nvcc_path = '@NVGPU_NVCC_PATH@'
+    config.nvgpu_test_ld_library_path = '@NVGPU_TEST_LD_LIBRARY_PATH@'
+
 # Additional dotest arguments can be passed to lit by providing a
 # semicolon-separates list: --param dotest-args="arg;arg".
 dotest_lit_args_str = lit_config.params.get('dotest-args', None)

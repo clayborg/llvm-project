@@ -77,6 +77,8 @@
 #define LLDB_REGNUM_GENERIC_TP                                                 \
   13 // The register that would contain thread specific data, like TLS data and
      // thread control block pointer
+/// Default address space
+#define LLDB_DEFAULT_ADDRESS_SPACE 0
 /// Invalid value definitions
 #define LLDB_INVALID_STOP_ID 0
 #define LLDB_INVALID_ADDRESS UINT64_MAX

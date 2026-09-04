@@ -1,0 +1,186 @@
+NVIDIA GPU Support in LLDB
+==========================
+
+System requirements
+^^^^^^^^^^^^^^^^^^^
+
+You need to have the CUDA Driver and the CUDA Toolkit installed. They can be
+installed following the `official download page <https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_network>`_.
+
+The minimal version of the CUDA Toolkit and CUDA driver that is supported is
+13.0.0.
+
+CMake requirements
+^^^^^^^^^^^^^^^^^^
+
+The only requirement for building the plugin is that you need to specify the
+CMake variable `LLDB_ENABLE_NVGPU_PLUGIN` as `ON`. Everything else
+related to the build system should be taken care of automatically, except
+for uncommon CUDA Toolkit and CUDA driver installations, which will require
+you to provide some CMake variables manually. See the CMake variables section
+below.
+
+CMake variables
+^^^^^^^^^^^^^^^
+
+- `LLDB_ENABLE_NVGPU_PLUGIN`: enables this plugin at the build system level.
+- `NVGPU_DEBUGGER_INCLUDE_DIR`: path to the CUDA debugger headers required
+  to build this plugin. This is the folder that contains the
+  `cudadebugger.h` and `cudacoredump.h` header files, e.g.
+  `/usr/local/cuda/extras/Debugger/include`. If the CUDA Toolkit is
+  installed in a standard location, this variable will be deduced
+  automatically.
+- `NVGPU_NVCC_PATH`: path to the NVCC compiler to use in tests. If the CUDA
+  Toolkit is installed in a standard location, this variable will be deduced
+  automatically.
+- `NVGPU_CUDBG_INJECTION_PATH`: path to the CUDA debugger injection library.
+  Can also be set at runtime. See Environment variables section for more
+  details.
+- `NVGPU_CUDA_VISIBLE_DEVICES`: controls which CUDA devices are visible to the
+  application being debugged. Can also be set at runtime. See Environment
+  variables section for more details.
+- `NVGPU_CUDA_DEVICE_ORDER`: controls the ordering of CUDA devices. Can also
+  be set at runtime. See Environment variables section for more details.
+- `NVGPU_CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches
+  to be synchronous. Can also be set at runtime. See Environment variables
+  section for more details.
+- `NVGPU_INITIALIZATION_SYMBOL`: an optional CPU symbol to use to identify
+  that the CUDA runtime is being initialized.
+- `NVGPU_DISASSEMBLER_PATH`: a default path to the nvdisasm disassembler that
+  will be hardcoded in LLDB. It bypasses the regular disassembler discovery
+  logic.
+- `NVGPU_TEST_LD_LIBRARY_PATH`: a way to override LD_LIBRARY_PATH for NVGPU
+  tests. This doesn't affect regular builds.
+
+Environment variables
+^^^^^^^^^^^^^^^^^^^^^
+
+The following environment variables can be set to control CUDA debugging
+behavior when lldb-server starts:
+
+- `CUDBG_INJECTION_PATH`: path to the CUDA debugger injection library. This
+  specifies which debugger library should be injected into CUDA applications
+  for debugging support. When set, this will be automatically applied when
+  the NVIDIA GPU plugin initializes.
+
+- `CUDA_VISIBLE_DEVICES`: controls which CUDA devices are visible to the
+  application being debugged. This can be used to restrict debugging to
+  specific GPUs. For example, setting this to "0" will make only GPU 0
+  visible to the debugged application.
+
+- `CUDA_DEVICE_ORDER`: controls the ordering of CUDA devices. Common values
+  are "FASTEST_FIRST" to prioritize faster devices, or "PCI_BUS_ID" to use
+  PCI bus ordering. This affects which device gets which device ID.
+
+- `CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches to be
+  synchronous, which can be helpful for debugging by making kernel execution
+  more predictable and easier to trace.
+
+- `NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP`: when set to "1", disables the automatic
+  suspension of the CPU process when the GPU is stopped.
+
+These environment variables can be set in the shell environment before
+starting lldb-server.
+
+Driver compatibility
+^^^^^^^^^^^^^^^^^^^^
+
+This plugin is built against a single CUDA debugger-API header
+(`cudadebugger.h`, provided by the CUDA Toolkit installation or the
+`NVGPU_DEBUGGER_INCLUDE_DIR` CMake variable). The header's
+`CUDBG_API_VERSION_MAJOR` identifies the CUDA *major* release the build
+targets.
+
+Support policy: a build works with any CUDA driver -- and reads any GPU
+coredump -- within that same major release. There is no cross-major-release
+compatibility. In other words, an lldb-server (or corefile reader) built
+against, say, CUDA 13.x supports every 13.x driver/coredump, but not 12.x or
+14.x.
+
+- Live debugging: the plugin queries the driver's API version
+  (`cudbgGetAPIVersion`) and negotiates the API revision down to the lesser of
+  the driver's and the compiled header's. An older in-major driver therefore
+  attaches successfully; API features newer than that driver are simply
+  unavailable. A driver from a different major release is rejected with a clear
+  error -- rebuild lldb-server against that major's header.
+- Coredumps: the reader applies the same policy. It reads any in-major
+  coredump and ignores fields the producing driver predates, using the
+  producer version recorded in the coredump's metadata section. A coredump
+  produced by a different major release is loaded best-effort with a warning,
+  since field layouts are not guaranteed across majors.
+- The version of your driver can be obtained via the `DRIVER version` section
+  of the `nvidia-smi --version` output.
+
+Running the tests
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: bash
+
+  # First build the test runner
+  ninja lldb-dotest
+  # Now you can run the tests
+  ./bin/llvm-lit ../llvm-project/lldb/test/API/gpu/nvidia/ -a -v
+
+
+Remote platforms - Linux
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+You can connect to a remote platform and connect the the GPU lldb-server by
+setting up the following environment variables:
+
+- `NVGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST`: the host to listen to for remote
+  connections.
+- `NVGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT`: the port to listen to for remote
+  connections.
+- `NVGPU_DEBUGGER_REMOTE_HOST`: the host to connect to for remote
+  connections.
+
+Example:
+
+First launch the lldb-server in platform mode on the machine with IP address
+`10.112.215.212` with these variables set:
+
+.. code-block:: bash
+
+  NVGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT=0 \
+  NVGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST="*" \
+  NVGPU_DEBUGGER_REMOTE_HOST="10.112.215.212" \
+  ./bin/lldb-server platform --listen  "*:12346" --server
+
+Then connect remotely to the lldb-server with the following command:
+
+.. code-block:: bash
+
+  lldb
+  > platform select remote-linux
+  > platform connect connect://10.112.215.212:12346
+  > file /remote/path/to/a/program
+  > run
+
+Remote platforms - Android
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Android support is much simpler than the regular Linux remote support as you
+don't need to set any environment variables.
+
+Example:
+
+First launch the lldb-server in platform mode on the Android device with the
+correct port forwarding set up:
+
+.. code-block:: bash
+
+  # On the host
+  adb forward tcp:5039 tcp:5039
+  # On the Android device
+  ./lldb-server platform --listen '*:5039' --server
+
+Then connect remotely to the lldb-server with the following command:
+
+.. code-block:: bash
+
+  lldb
+  > platform select remote-android
+  > platform connect connect://:5039
+  > file /remote/path/to/a/program
+  > run

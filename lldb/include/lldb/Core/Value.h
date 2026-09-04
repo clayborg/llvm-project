@@ -13,6 +13,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-private-enumerations.h"
 #include "lldb/lldb-private-types.h"
@@ -86,7 +87,21 @@ public:
 
   ContextType GetContextType() const { return m_context_type; }
 
-  void SetValueType(ValueType value_type) { m_value_type = value_type; }
+  void SetValueType(ValueType value_type) {
+    if ((value_type == ValueType::LoadAddress ||
+         value_type == ValueType::FileAddress) &&
+        !m_address_space_id.has_value()) {
+      m_address_space_id = LLDB_DEFAULT_ADDRESS_SPACE;
+    }
+    m_value_type = value_type;
+  }
+
+  void SetAddressSpace(lldb::addr_space_t addr_space,
+                       ExecutionContext *exe_ctx);
+
+  std::optional<lldb::addr_space_t> GetAddressSpace() const {
+    return m_address_space_id;
+  }
 
   void ClearContext() {
     m_context = nullptr;

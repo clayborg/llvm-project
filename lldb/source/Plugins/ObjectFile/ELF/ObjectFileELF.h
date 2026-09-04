@@ -175,8 +175,24 @@ private:
 
   typedef std::vector<elf::ELFProgramHeader> ProgramHeaderColl;
 
+  /// Section header info extending ELFSectionHeader with the resolved name.
   struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
     lldb_private::ConstString section_name;
+
+    /// True if this section's window extends past file_size.
+    /// Zero-sized sections are never considered truncated.
+    bool IsTruncated(uint64_t file_size) const {
+      if (sh_size == 0)
+        return false;
+      return sh_size > file_size || sh_offset > file_size - sh_size;
+    }
+
+    /// [NVIDIA] Map this section header's `sh_type` to its NVGPU
+    /// SectionType per cudacoredump.h's `CUDBG_SHT_*` enums (each
+    /// defined as `SHT_LOUSER + N`). Returns `std::nullopt` for
+    /// non-NVGPU sh_type values. Callers should only invoke this when
+    /// the parent object file is an NVGPU corefile.
+    std::optional<lldb::SectionType> GetNVGPUSectionType() const;
   };
 
   typedef std::vector<ELFSectionHeaderInfo> SectionHeaderColl;
@@ -348,6 +364,33 @@ private:
 
   /// Returns the section header with the given id or NULL.
   const ELFSectionHeaderInfo *GetSectionHeaderByIndex(lldb::user_id_t id);
+
+  /// [NVIDIA] True if this object file is a synthetic NVGPU corefile
+  /// (`EM_CUDA` machine type + `ET_CORE` file type).
+  bool IsNVGPUCoreFile() const;
+
+  /// [NVIDIA] Synthesize the NVGPU GPU hierarchy directly from
+  /// `m_section_headers` and install it as both `m_sections_up` and the
+  /// Module's unified section list:
+  ///
+  ///   `nvgpucore` root
+  ///     `global`, `managed`, `cubin`, `ucubin` leaves at root level
+  ///     `devN` -> `smN` -> `ctaN`
+  ///       `shared` leaf
+  ///       `warpN`
+  ///         `uregs`, `upreds`, `cbarrier` leaves
+  ///         `laneN` -> {`regs`, `preds`, `local`} leaves
+  ///
+  /// Called from `CreateSections` only when `e_machine == EM_CUDA &&
+  /// GetType() == eTypeCoreFile`; the generic flat section-create loop is
+  /// skipped for those corefiles. A no-op for any other ELF input.
+  ///
+  /// \param[out] unified_section_list
+  ///     The Module's unified section list. The synthetic root section
+  ///     is added here in addition to `m_sections_up`. NVGPU corefiles
+  ///     are single-file (no companion symbol file), so the unified list
+  ///     starts empty and ends up containing exactly the same root.
+  void BuildNVGPUSectionList(lldb_private::SectionList &unified_section_list);
 
   /// \name  ELF header dump routines
   //@{

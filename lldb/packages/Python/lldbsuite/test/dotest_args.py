@@ -87,6 +87,15 @@ def create_parser():
         default="",
         help=textwrap.dedent("""Specify LD_LIBRARY_PATH for running rocgdb."""),
     )
+    group.add_argument(
+        "--nvcc-path",
+        metavar="path",
+        dest="nvcc_path",
+        default="",
+        help=textwrap.dedent(
+            """Specify the path to the NVCC compiler."""
+        ),
+    )
     if sys.platform == "darwin":
         group.add_argument(
             "--apple-sdk",

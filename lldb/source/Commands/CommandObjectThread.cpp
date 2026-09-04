@@ -26,6 +26,7 @@
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/LineEntry.h"
 #include "lldb/Symbol/LineTable.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/SystemRuntime.h"
@@ -1101,6 +1102,8 @@ public:
 
     void OptionParsingStarting(ExecutionContext *execution_context) override {
       m_thread_id = LLDB_INVALID_THREAD_ID;
+      m_block_idx = GPUDim3();
+      m_thread_idx = GPUDim3();
     }
 
     Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
@@ -1113,6 +1116,22 @@ public:
           return Status::FromErrorStringWithFormat("Invalid thread ID: '%s'.",
                                                    option_arg.str().c_str());
         }
+        break;
+      }
+      case 'b': {
+        // Use the default Platform implementation for parsing.
+        Status status = Platform::ParseGPUCoordinate(option_arg, m_block_idx);
+        if (status.Fail())
+          return Status::FromErrorStringWithFormat(
+              "Invalid block index format: %s", status.AsCString());
+        break;
+      }
+      case 'i': {
+        // Use the default Platform implementation for parsing.
+        Status status = Platform::ParseGPUCoordinate(option_arg, m_thread_idx);
+        if (status.Fail())
+          return Status::FromErrorStringWithFormat(
+              "Invalid thread index format: %s", status.AsCString());
         break;
       }
 
@@ -1128,12 +1147,15 @@ public:
     }
 
     lldb::tid_t m_thread_id;
+    GPUDim3 m_block_idx;
+    GPUDim3 m_thread_idx;
   };
 
   CommandObjectThreadSelect(CommandInterpreter &interpreter)
       : CommandObjectParsed(interpreter, "thread select",
                             "Change the currently selected thread.",
-                            "thread select <thread-index> (or -t <thread-id>)",
+                            "thread select <thread-index> (or -t <thread-id> or "
+                            "--blockidx/--threadidx for GPU threads)",
                             eCommandRequiresProcess | eCommandTryTargetAPILock |
                                 eCommandProcessMustBeLaunched |
                                 eCommandProcessMustBePaused) {
@@ -1152,7 +1174,7 @@ public:
     // Push the data for the first argument into the m_arguments vector.
     m_arguments.push_back(arg);
 
-    m_option_group.Append(&m_options, LLDB_OPT_SET_ALL, LLDB_OPT_SET_2);
+    m_option_group.Append(&m_options, LLDB_OPT_SET_ALL, LLDB_OPT_SET_2 | LLDB_OPT_SET_3);
     m_option_group.Finalize();
   }
 
@@ -1177,8 +1199,82 @@ protected:
     if (process == nullptr) {
       result.AppendError("no process");
       return;
-    } else if (m_options.m_thread_id == LLDB_INVALID_THREAD_ID &&
-               command.GetArgumentCount() != 1) {
+    }
+
+    // Check if GPU coordinate options are specified.
+    bool has_gpu_options =
+        !m_options.m_block_idx.IsEmpty() || !m_options.m_thread_idx.IsEmpty();
+
+    // Validate option combinations.
+    if (has_gpu_options) {
+      if (m_options.m_thread_id != LLDB_INVALID_THREAD_ID) {
+        result.AppendError("cannot use --blockidx/--threadidx with --thread-id");
+        return;
+      }
+      if (command.GetArgumentCount() != 0) {
+        result.AppendError(
+            "cannot use --blockidx/--threadidx with thread index argument");
+        return;
+      }
+
+      // Check if this is a GPU target.
+      Target &target = process->GetTarget();
+      if (!target.IsGPUTarget()) {
+        result.AppendError(
+            "--blockidx/--threadidx options only apply to GPU targets");
+        return;
+      }
+
+      // Get the platform to use its GPU thread selection capabilities.
+      PlatformSP platform_sp = target.GetPlatform();
+      if (!platform_sp) {
+        result.AppendError("no platform available");
+        return;
+      }
+
+      // Get the currently selected thread to preserve its coordinates if needed.
+      GPUDim3 search_block_idx = m_options.m_block_idx;
+      GPUDim3 search_thread_idx = m_options.m_thread_idx;
+
+      ThreadSP current_thread = process->GetThreadList().GetSelectedThread();
+      if (current_thread) {
+        const char *current_name = current_thread->GetName();
+        if (current_name) {
+          GPUDim3 current_block_idx, current_thread_idx;
+          if (platform_sp->ParseGPUThreadName(current_name, current_block_idx,
+                                              current_thread_idx)) {
+            // If only threadidx is specified, preserve blockidx from current
+            // thread.
+            if (!m_options.m_thread_idx.IsEmpty() &&
+                m_options.m_block_idx.IsEmpty()) {
+              search_block_idx = current_block_idx;
+            }
+            // If only blockidx is specified, preserve threadidx from current
+            // thread.
+            else if (!m_options.m_block_idx.IsEmpty() &&
+                     m_options.m_thread_idx.IsEmpty()) {
+              search_thread_idx = current_thread_idx;
+            }
+          }
+        }
+      }
+
+      // Find the thread matching the GPU coordinates using the platform.
+      ThreadSP new_thread_sp =
+          platform_sp->FindGPUThread(*process, search_block_idx, search_thread_idx);
+      if (!new_thread_sp) {
+        result.AppendError("no GPU thread found matching the specified coordinates");
+        return;
+      }
+
+      process->GetThreadList().SetSelectedThreadByID(new_thread_sp->GetID(), true);
+      result.SetStatus(eReturnStatusSuccessFinishNoResult);
+      return;
+    }
+
+    // Handle traditional thread selection (by index or ID).
+    if (m_options.m_thread_id == LLDB_INVALID_THREAD_ID &&
+        command.GetArgumentCount() != 1) {
       result.AppendErrorWithFormat(
           "'%s' takes exactly one thread index argument, or a thread ID "
           "option:\nUsage: %s\n",
@@ -1225,9 +1321,51 @@ protected:
 };
 
 // CommandObjectThreadList
+#define LLDB_OPTIONS_thread_list
+#include "CommandOptions.inc"
 
 class CommandObjectThreadList : public CommandObjectParsed {
 public:
+  class CommandOptions : public Options {
+  public:
+    CommandOptions() { OptionParsingStarting(nullptr); }
+
+    ~CommandOptions() override = default;
+
+    void OptionParsingStarting(ExecutionContext *execution_context) override {
+      m_verbose = false;
+      m_stop_reason_filter.reset();
+    }
+
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      const int short_option = m_getopt_table[option_idx].val;
+      Status error;
+
+      switch (short_option) {
+      case 'v':
+        m_verbose = true;
+        break;
+      case 's':
+        m_stop_reason_filter = Thread::StopReasonFromString(option_arg);
+        if (!m_stop_reason_filter)
+          error = Status::FromErrorStringWithFormat("invalid stop reason '%s'",
+                                                    option_arg.str().c_str());
+        break;
+      default:
+        llvm_unreachable("Unimplemented option");
+      }
+      return error;
+    }
+
+    llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
+      return llvm::ArrayRef(g_thread_list_options);
+    }
+
+    bool m_verbose;
+    std::optional<lldb::StopReason> m_stop_reason_filter;
+  };
+
   CommandObjectThreadList(CommandInterpreter &interpreter)
       : CommandObjectParsed(
             interpreter, "thread list",
@@ -1240,19 +1378,72 @@ public:
 
   ~CommandObjectThreadList() override = default;
 
+  Options *GetOptions() override { return &m_options; }
+
 protected:
   void DoExecute(Args &command, CommandReturnObject &result) override {
     Stream &strm = result.GetOutputStream();
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
     Process *process = m_exe_ctx.GetProcessPtr();
     const bool only_threads_with_stop_reason = false;
+
+    // GPU targets get the aggregated platform path by default. `-v` opts out
+    // of the GPU-specific aggregation entirely and uses the same per-thread
+    // rendering as the rest of LLDB; this lets the user fall back to a
+    // detailed view (or filter the per-thread view via `-s`).
+    Target &target = process->GetTarget();
+    if (target.IsGPUTarget() && !m_options.m_verbose) {
+      PlatformSP platform_sp = target.GetPlatform();
+      if (platform_sp) {
+        size_t num_printed = platform_sp->GetGPUThreadStatus(
+            *process, strm, only_threads_with_stop_reason,
+            m_options.m_stop_reason_filter);
+        if (num_printed > 0)
+          return;
+      }
+    }
+
+    process->GetStatus(strm);
+
+    if (target.IsGPUTarget() && m_options.m_stop_reason_filter) {
+      // -v with --stop-reason on a GPU target: per-thread rendering, filtered
+      // to threads whose stop reason matches. Mirrors Process::GetThreadStatus
+      // but with the extra filter applied at iteration time.
+      auto matches = [&](Thread &thread) -> bool {
+        StopInfoSP stop_info_sp = thread.GetStopInfo();
+        if (!stop_info_sp)
+          return false;
+        return stop_info_sp->GetStopReason() == *m_options.m_stop_reason_filter;
+      };
+
+      llvm::SmallVector<ThreadSP, 64> threads;
+      {
+        std::lock_guard<std::recursive_mutex> guard(
+            process->GetThreadList().GetMutex());
+        ThreadList &thread_list = process->GetThreadList();
+        uint32_t num_threads = thread_list.GetSize();
+        threads.reserve(num_threads);
+        for (uint32_t i = 0; i < num_threads; ++i)
+          threads.push_back(thread_list.GetThreadAtIndex(i));
+      }
+      for (const ThreadSP &thread_sp : threads) {
+        if (!thread_sp || !matches(*thread_sp))
+          continue;
+        thread_sp->GetStatus(strm, /*start_frame=*/0, /*num_frames=*/0,
+                             /*num_frames_with_source=*/0, /*stop_format=*/false,
+                             /*show_hidden=*/true);
+      }
+      return;
+    }
+
     const uint32_t start_frame = 0;
     const uint32_t num_frames = 0;
     const uint32_t num_frames_with_source = 0;
-    process->GetStatus(strm);
     process->GetThreadStatus(strm, only_threads_with_stop_reason, start_frame,
                              num_frames, num_frames_with_source, false);
   }
+
+  CommandOptions m_options;
 };
 
 // CommandObjectThreadInfo

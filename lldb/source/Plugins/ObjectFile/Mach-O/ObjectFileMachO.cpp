@@ -1212,6 +1212,40 @@ AddressClass ObjectFileMachO::GetAddressClass(lldb::addr_t file_addr) {
         case eSectionTypeELFDynamicSymbols:
         case eSectionTypeELFRelocationEntries:
         case eSectionTypeELFDynamicLinkInfo:
+        // [NVIDIA] NVGPU section types
+        case eSectionTypeNVGPUGlobalMemory:
+        case eSectionTypeNVGPUManagedMemory:
+        case eSectionTypeNVGPULocalMemory:
+        case eSectionTypeNVGPUSharedMemory:
+        case eSectionTypeNVGPUParamMemory:
+        case eSectionTypeNVGPURegisters:
+        case eSectionTypeNVGPUPredicates:
+        case eSectionTypeNVGPUUniformRegisters:
+        case eSectionTypeNVGPUUniformPredicates:
+        case eSectionTypeNVGPURelocatedImage:
+        case eSectionTypeNVGPUUnrelocatedImage:
+        case eSectionTypeNVGPUBacktrace:
+        case eSectionTypeNVGPUDeviceTable:
+        case eSectionTypeNVGPUContextTable:
+        case eSectionTypeNVGPUSmTable:
+        case eSectionTypeNVGPUGridTable:
+        case eSectionTypeNVGPUCtaTable:
+        case eSectionTypeNVGPUWarpTable:
+        case eSectionTypeNVGPULaneTable:
+        case eSectionTypeNVGPUModuleTable:
+        case eSectionTypeNVGPUConstBankTable:
+        case eSectionTypeNVGPUMetadata:
+        case eSectionTypeNVGPUConvergenceBarrier:
+        case eSectionTypeNVGPURoot:
+        case eSectionTypeNVGPUDevice:
+        case eSectionTypeNVGPUContext:
+        case eSectionTypeNVGPUSm:
+        case eSectionTypeNVGPUGrid:
+        case eSectionTypeNVGPUCta:
+        case eSectionTypeNVGPUWarp:
+        case eSectionTypeNVGPULane:
+        case eSectionTypeNVGPUConstBank:
+        case eSectionTypeNVGPUBacktraceEntry:
         case eSectionTypeOther:
           return AddressClass::eUnknown;
         }

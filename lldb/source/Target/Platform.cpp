@@ -2250,3 +2250,82 @@ bool PlatformList::LoadPlatformBinaryAndSetup(Process *process,
   }
   return false;
 }
+
+Status Platform::ParseGPUCoordinate(llvm::StringRef input, GPUDim3 &dim) {
+  dim = GPUDim3();
+  input = input.trim();
+
+  // Check if input is wrapped in parentheses and remove them.
+  bool has_parens = false;
+  if (input.starts_with("(") && input.ends_with(")")) {
+    input = input.substr(1, input.size() - 2).trim();
+    has_parens = true;
+  }
+
+  // Try to parse as a simple integer first.
+  if (!has_parens) {
+    int value;
+    if (!input.getAsInteger(0, value)) {
+      dim.x = value;
+      return Status();
+    }
+  }
+
+  // Parse comma-separated or space-separated values with optional names.
+  llvm::SmallVector<llvm::StringRef, 3> parts;
+  input.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+
+  // If no commas, try splitting by spaces.
+  if (parts.size() == 1) {
+    parts.clear();
+    input.split(parts, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  }
+
+  for (llvm::StringRef part : parts) {
+    part = part.trim();
+    if (part.empty())
+      continue;
+
+    // Check if this is a named coordinate (e.g., "x=5").
+    size_t eq_pos = part.find('=');
+    if (eq_pos != llvm::StringRef::npos) {
+      llvm::StringRef name = part.substr(0, eq_pos).trim();
+      llvm::StringRef value_str = part.substr(eq_pos + 1).trim();
+      int value;
+      if (value_str.getAsInteger(0, value))
+        return Status::FromErrorStringWithFormat(
+            "Invalid coordinate value '%s'", value_str.str().c_str());
+
+      if (name == "x")
+        dim.x = value;
+      else if (name == "y")
+        dim.y = value;
+      else if (name == "z")
+        dim.z = value;
+      else
+        return Status::FromErrorStringWithFormat("Unknown coordinate name '%s'",
+                                                 name.str().c_str());
+    } else {
+      // Unnamed value, assign to x, y, z in order.
+      int value;
+      if (part.getAsInteger(0, value))
+        return Status::FromErrorStringWithFormat(
+            "Invalid coordinate value '%s'", part.str().c_str());
+
+      if (!dim.x)
+        dim.x = value;
+      else if (!dim.y)
+        dim.y = value;
+      else if (!dim.z)
+        dim.z = value;
+      else
+        return Status::FromErrorString(
+            "Too many coordinate values (max 3: x, y, z)");
+    }
+  }
+
+  if (dim.IsEmpty())
+    return Status::FromErrorString("No valid coordinates found");
+
+  return Status();
+}

@@ -1097,6 +1097,9 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     CopyCPUBreakpointsToGPUTarget(gpu_target_sp,
                                   GetTarget().shared_from_this());
 
+  gpu_target_sp->SetShouldStepOverBreakpointsOnResume(
+      connection_info.should_step_over_breakpoints_on_resume);
+
   PlatformSP platform_sp = gpu_target_sp->GetPlatform();
   if (!platform_sp)
     return Status::FromErrorString("invalid platform for target needed for "
@@ -3560,6 +3563,12 @@ lldb::addr_t ProcessGDBRemote::DoAllocateMemory(size_t size,
 
 Status ProcessGDBRemote::DoGetMemoryRegionInfo(addr_t load_addr,
                                                MemoryRegionInfo &region_info) {
+  // Don't send qMemoryRegionInfo packets for GPU targets as they may not
+  // support traditional memory region queries.
+  if (GetTarget().IsGPUTarget()) {
+    return Status::FromErrorString(
+        "qMemoryRegionInfo is not supported for GPU targets");
+  }
 
   Status error(m_gdb_comm.GetMemoryRegionInfo(load_addr, region_info));
   return error;
@@ -5291,6 +5300,7 @@ bool ParseRegisters(
                       .Case("vector-float32", eFormatVectorOfFloat32)
                       .Case("vector-uint64", eFormatVectorOfUInt64)
                       .Case("vector-uint128", eFormatVectorOfUInt128)
+                      .Case("address-info", eFormatAddressInfo)
                       .Default(eFormatInvalid);
           } else if (name == "group_id") {
             uint32_t set_id = UINT32_MAX;
