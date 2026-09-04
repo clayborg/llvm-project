@@ -1054,6 +1054,20 @@ static llvm::Error Evaluate_DW_OP_LLVM_user(DWARFExpression::Stack &stack,
     stack.back().GetScalar() += byte_offset.GetScalar();
     break;
   }
+  case DW_OP_LLVM_piece_end: {
+    if (opcode_offset != opcodes.GetByteSize())
+      return llvm::createStringError(
+          "DW_OP_LLVM_piece_end is only supported at the end of an "
+          "expression");
+
+    // LLDB already constructs one composite in `pieces`, so a terminal
+    // DW_OP_LLVM_piece_end is a no-op. TODO: Support multiple composites and
+    // DW_OP_piece_end once LLVM implements DWARF 6 locations on the stack.
+    // Extension:
+    // https://llvm.org/docs/AMDGPUDwarfExtensionsForHeterogeneousDebugging.html
+    // Standard: https://dwarfstd.org/issues/230524.1-orig.html
+    break;
+  }
   default:
     return llvm::createStringError("Unknown DW_OP_LLVM_user opcode: %" PRIu64,
                                    op);
