@@ -1,0 +1,10 @@
+include "../../../../include/lldb/Core/PropertiesBase.td"
+
+let Definition = "platformintelgtuser" in {
+  def LibIgaPath: Property<"libiga-path", "FileSpec">,
+    Global,
+    DefaultStringValue<"@INTELGT_LIBIGA_PATH@">,
+    Desc<"Custom path to the libiga64 shared library used for Intel GT GPU "
+    "disassembly. When not specified, LLDB will search for libiga64 in the "
+    "system in some predefined paths.">;
+}

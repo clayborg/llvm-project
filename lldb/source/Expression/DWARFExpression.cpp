@@ -150,13 +150,13 @@ GetOpcodeDataSize(const DataExtractor &data, const lldb::offset_t data_offset,
   case DW_OP_HP_mod_range:
   case DW_OP_HP_unmod_range:
   case DW_OP_HP_tls:
-  case DW_OP_INTEL_bit_piece:
   case DW_OP_WASM_location:
   case DW_OP_WASM_location_int:
   case DW_OP_APPLE_uninit:
   case DW_OP_PGI_omp_thread_num:
   case DW_OP_hi_user:
   case DW_OP_GNU_implicit_pointer:
+  case DW_OP_INTEL_bit_piece:
     break;
 
   case DW_OP_addr:
@@ -2301,10 +2301,85 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
       break;
     }
 
+    // Intel GT vendor opcodes 0xed/0xfe: fallback path for CFA expressions
+    // (dwarf_cu null). Variable locations go through SymbolFileIntelGT's
+    // vendor hook. Literals used directly since the plugin header sits
+    // above core and cannot be included here.
+    case 0xed: { // DW_OP_INTEL_push_simd_lane
+      uint32_t simd_lane = 0;
+      if (exe_ctx) {
+        if (Thread *thread = exe_ctx->GetThreadPtr()) {
+          std::optional<lldb::tid_t> lane = thread->GetLaneID();
+          if (lane)
+            simd_lane = static_cast<uint32_t>(*lane);
+        }
+      }
+      stack.push_back(Scalar(simd_lane));
+      LLDB_LOGF(log, "DW_OP_INTEL_push_simd_lane: lane=%u", simd_lane);
+      break;
+    }
+
+    case 0xfe: { // DW_OP_INTEL_regval_bits
+      if (stack.size() < 2)
+        return llvm::createStringError(
+            "DW_OP_INTEL_regval_bits (0xfe) requires 2 stack entries");
+      uint8_t bit_size = opcodes.GetU8(&offset);
+      uint64_t bit_offset = stack.back().GetScalar().ULongLong();
+      stack.pop_back();
+      uint32_t dwarf_reg_num = stack.back().GetScalar().UInt();
+      stack.pop_back();
+      if (!reg_ctx)
+        return llvm::createStringError(
+            "DW_OP_INTEL_regval_bits (0xfe) requires a register context");
+      uint32_t lldb_reg_num = reg_ctx->ConvertRegisterKindToRegisterNumber(
+          reg_kind, dwarf_reg_num);
+      if (lldb_reg_num == LLDB_INVALID_REGNUM)
+        return llvm::createStringError(
+            llvm::formatv("DW_OP_INTEL_regval_bits: invalid DWARF reg {0}",
+                          dwarf_reg_num));
+      const RegisterInfo *reg_info =
+          reg_ctx->GetRegisterInfoAtIndex(lldb_reg_num);
+      if (!reg_info)
+        return llvm::createStringError(
+            llvm::formatv("DW_OP_INTEL_regval_bits: no info for reg {0}",
+                          lldb_reg_num));
+      if (bit_offset + bit_size > reg_info->byte_size * 8)
+        return llvm::createStringError(
+            "DW_OP_INTEL_regval_bits: bit range exceeds register size");
+      RegisterValue reg_value;
+      if (!reg_ctx->ReadRegister(reg_info, reg_value))
+        return llvm::createStringError(
+            llvm::formatv("DW_OP_INTEL_regval_bits: failed to read {0}",
+                          reg_info->name));
+      constexpr lldb::ByteOrder kLE = lldb::eByteOrderLittle;
+      uint8_t reg_bytes[256];
+      if (reg_info->byte_size > sizeof(reg_bytes))
+        return llvm::createStringError("DW_OP_INTEL_regval_bits: register too large");
+      Status err;
+      if (reg_value.GetAsMemoryData(*reg_info, reg_bytes, reg_info->byte_size,
+                                    kLE, err) == 0)
+        return llvm::createStringError("DW_OP_INTEL_regval_bits: data extraction failed");
+      DataExtractor reg_data(reg_bytes, reg_info->byte_size, kLE, /*addr_size=*/8);
+      uint64_t byte_off = bit_offset / 8, bit_off_in_byte = bit_offset % 8;
+      uint64_t bytes_needed = (bit_off_in_byte + bit_size + 7) / 8;
+      if (byte_off + bytes_needed > reg_info->byte_size)
+        return llvm::createStringError("DW_OP_INTEL_regval_bits: out of bounds");
+      lldb::offset_t doff = byte_off;
+      uint64_t extracted = reg_data.GetMaxU64_unchecked(&doff, bytes_needed);
+      extracted >>= bit_off_in_byte;
+      extracted &= (bit_size >= 64) ? ~0ULL : ((1ULL << bit_size) - 1);
+      stack.push_back(Scalar(extracted));
+      LLDB_LOGF(log,
+                "DW_OP_INTEL_regval_bits: reg=%s bits[%" PRIu64
+                ":%" PRIu64 ") = 0x%" PRIx64,
+                reg_info->name, bit_offset, bit_offset + bit_size, extracted);
+      break;
+    }
+
     default:
       if (dwarf_cu) {
-        if (dwarf_cu->ParseVendorDWARFOpcode(op, opcodes, offset, reg_ctx,
-                                             reg_kind, stack)) {
+        if (dwarf_cu->ParseVendorDWARFOpcode(op, opcodes, offset, exe_ctx,
+                                             reg_ctx, reg_kind, stack)) {
           break;
         }
       }

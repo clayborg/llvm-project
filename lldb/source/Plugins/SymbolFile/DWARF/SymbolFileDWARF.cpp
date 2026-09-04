@@ -79,6 +79,7 @@
 #include "ManualDWARFIndex.h"
 #include "SymbolFileDWARFDebugMap.h"
 #include "SymbolFileDWARFDwo.h"
+#include "SymbolFileIntelGT.h"
 #include "lldb/lldb-private-enumerations.h"
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -335,9 +336,14 @@ llvm::StringRef SymbolFileDWARF::GetPluginDescriptionStatic() {
 }
 
 SymbolFile *SymbolFileDWARF::CreateInstance(ObjectFileSP objfile_sp) {
-  if (objfile_sp->GetArchitecture().GetTriple().isWasm())
+  const llvm::Triple &triple =
+      objfile_sp->GetArchitecture().GetTriple();
+  if (triple.isWasm())
     return new SymbolFileWasm(std::move(objfile_sp),
                               /*dwo_section_list*/ nullptr);
+  if (triple.isSPIRV())
+    return new SymbolFileIntelGT(std::move(objfile_sp),
+                                 /*dwo_section_list*/ nullptr);
   return new SymbolFileDWARF(std::move(objfile_sp),
                              /*dwo_section_list*/ nullptr);
 }

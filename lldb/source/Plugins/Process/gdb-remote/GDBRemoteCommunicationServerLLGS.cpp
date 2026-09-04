@@ -1137,6 +1137,16 @@ GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
     }
   }
 
+  // IntelGT specific behaviour
+  if (m_plugin_instance && m_plugin_instance->GetPluginName() == "intelgt" ) {
+    if (std::optional<GPUActions> gpu_actions =
+            m_plugin_instance->NativeProcessIsStopping()) {
+      response.PutCString("gpu-actions:");
+      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+      response.PutChar(';');
+    }
+  }
+
   if (m_non_stop && !force_synchronous) {
     PacketResult ret = SendNotificationPacketNoLock(
         "Stop", m_stop_notification_queue, response.GetString());

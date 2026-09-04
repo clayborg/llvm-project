@@ -928,6 +928,9 @@ public:
 
   bool isAMDGPU() const { return getArch() == Triple::r600 || isAMDGCN(); }
 
+  /// Tests whether the target is Intel GPU
+  bool isIntelGPU() const { return getArch() == Triple::spirv64; }
+
   /// Tests whether the target is Thumb (little and big endian).
   bool isThumb() const {
     return getArch() == Triple::thumb || getArch() == Triple::thumbeb;

@@ -49,6 +49,7 @@ SymbolFileWasm::GetVendorDWARFOpcodeSize(const DataExtractor &data,
 bool SymbolFileWasm::ParseVendorDWARFOpcode(uint8_t op,
                                             const DataExtractor &opcodes,
                                             lldb::offset_t &offset,
+                                            ExecutionContext *exe_ctx,
                                             RegisterContext *reg_ctx,
                                             lldb::RegisterKind reg_kind,
                                             std::vector<Value> &stack) const {
