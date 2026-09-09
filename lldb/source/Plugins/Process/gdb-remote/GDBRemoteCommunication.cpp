@@ -71,7 +71,7 @@ GDBRemoteCommunication::~GDBRemoteCommunication() {
 
 #if HAVE_LIBCOMPRESSION
   if (m_decompression_scratch)
-    free(m_decompression_scratch);
+    free (m_decompression_scratch);
 #endif
 }
 
@@ -149,8 +149,7 @@ GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
     ConnectionStatus status = eConnectionStatusSuccess;
     const char *packet_data = packet.data();
     const size_t packet_length = packet.size();
-    size_t bytes_written =
-        WriteAll(packet_data, packet_length, status, nullptr);
+    size_t bytes_written = WriteAll(packet_data, packet_length, status, nullptr);
     if (log) {
       size_t binary_start_offset = 0;
       if (strncmp(packet_data, "$vFile:pwrite:", strlen("$vFile:pwrite:")) ==
@@ -533,24 +532,21 @@ bool GDBRemoteCommunication::DecompressPacket() {
 
     if (m_decompression_scratch_type != m_compression_type) {
       if (m_decompression_scratch) {
-        free(m_decompression_scratch);
+        free (m_decompression_scratch);
         m_decompression_scratch = nullptr;
       }
       size_t scratchbuf_size = 0;
       if (m_compression_type == CompressionType::LZFSE)
-        scratchbuf_size =
-            compression_decode_scratch_buffer_size(COMPRESSION_LZFSE);
+        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZFSE);
       else if (m_compression_type == CompressionType::LZ4)
-        scratchbuf_size =
-            compression_decode_scratch_buffer_size(COMPRESSION_LZ4_RAW);
+        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZ4_RAW);
       else if (m_compression_type == CompressionType::ZlibDeflate)
-        scratchbuf_size =
-            compression_decode_scratch_buffer_size(COMPRESSION_ZLIB);
+        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_ZLIB);
       else if (m_compression_type == CompressionType::LZMA)
         scratchbuf_size =
             compression_decode_scratch_buffer_size(COMPRESSION_LZMA);
       if (scratchbuf_size > 0) {
-        m_decompression_scratch = (void *)malloc(scratchbuf_size);
+        m_decompression_scratch = (void*) malloc (scratchbuf_size);
         m_decompression_scratch_type = m_compression_type;
       }
     }

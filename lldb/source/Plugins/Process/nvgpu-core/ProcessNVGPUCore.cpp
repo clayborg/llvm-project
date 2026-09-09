@@ -378,8 +378,7 @@ size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
 /// 0 if the section is null/empty or `addr` is outside its file-address
 /// range.
 static size_t ReadFromMemorySection(SectionSP mem_section, addr_t addr,
-                                    void *buf, size_t size,
-                                    ObjectFile *core) {
+                                    void *buf, size_t size, ObjectFile *core) {
   if (!mem_section || !mem_section->ContainsFileAddress(addr))
     return 0;
   DataExtractor data;
@@ -502,8 +501,7 @@ static bool IsAddressInGenericWindow(addr_t addr, addr_t window_base) {
   // active mode or window sizes, so keep the legacy size until that ambiguity
   // can be resolved. The local window remains 16 MiB.
   constexpr addr_t kGenericMemoryWindowSize = 16 * 1024 * 1024;
-  return addr >= window_base &&
-         addr - window_base < kGenericMemoryWindowSize;
+  return addr >= window_base && addr - window_base < kGenericMemoryWindowSize;
 }
 
 size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
@@ -599,9 +597,8 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
       return FailAddressSpaceRead(info, addr, error);
     SectionSP param_sp = nvgpu_core::FindChildByType(
         *grid->section, eSectionTypeNVGPUParamMemory);
-    size_t bytes =
-        ReadFromSectionData(param_sp, addr - grid->entry.paramsOffset, buf,
-                            size, core);
+    size_t bytes = ReadFromSectionData(
+        param_sp, addr - grid->entry.paramsOffset, buf, size, core);
     if (bytes != 0)
       return bytes;
     return FailAddressSpaceRead(info, addr, error);
