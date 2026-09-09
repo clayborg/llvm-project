@@ -27,12 +27,14 @@
 #include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/AddressSpace.h"
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/Stream.h"
 
+#include "lldb/API/SBAddress.h"
 #include "lldb/API/SBBroadcaster.h"
 #include "lldb/API/SBCommandReturnObject.h"
 #include "lldb/API/SBDebugger.h"
@@ -906,9 +908,9 @@ size_t SBProcess::ReadMemory(addr_t addr, void *dst, size_t dst_len,
   return bytes_read;
 }
 
-size_t SBProcess::ReadMemoryFromSpec(SBAddressSpec addr_spec, void *dst, 
-                                     size_t dst_len, SBError &sb_error) {
-  LLDB_INSTRUMENT_VA(this, addr_spec, dst, dst_len, sb_error);
+size_t SBProcess::ReadMemory(SBProcessAddress process_addr, void *dst,
+                             size_t dst_len, SBError &sb_error) {
+  LLDB_INSTRUMENT_VA(this, process_addr, dst, dst_len, sb_error);
 
   if (!dst) {
     sb_error = Status::FromErrorStringWithFormat(
@@ -916,26 +918,49 @@ size_t SBProcess::ReadMemoryFromSpec(SBAddressSpec addr_spec, void *dst,
     return 0;
   }
 
-  size_t bytes_read = 0;
   ProcessSP process_sp(GetSP());
-  if (process_sp) {
-    Process::StopLocker stop_locker;
-    if (stop_locker.TryLock(&process_sp->GetRunLock())) {
-      std::lock_guard<std::recursive_mutex> guard(
-          process_sp->GetTarget().GetAPIMutex());
-      bytes_read = process_sp->ReadMemory(addr_spec.ref(), dst, dst_len, 
-                                          sb_error.ref());
-    } else {
-      sb_error = Status::FromErrorString("process is running");
-    }
-  } else {
+  if (!process_sp) {
     sb_error = Status::FromErrorString("SBProcess is invalid");
+    return 0;
   }
 
-  return bytes_read;
+  Process::StopLocker stop_locker;
+  if (!stop_locker.TryLock(&process_sp->GetRunLock())) {
+    sb_error = Status::FromErrorString("process is running");
+    return 0;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(
+      process_sp->GetTarget().GetAPIMutex());
+  return process_sp->ReadMemory(process_addr.ref(), dst, dst_len,
+                                sb_error.ref());
 }
 
+lldb::addr_space_t SBProcess::GetAddressSpaceID(const char *name,
+                                                SBError &sb_error) {
+  LLDB_INSTRUMENT_VA(this, name, sb_error);
 
+  ProcessSP process_sp(GetSP());
+  if (!process_sp) {
+    sb_error = Status::FromErrorString("SBProcess is invalid");
+    return LLDB_INVALID_ADDRESS_SPACE_ID;
+  }
+
+  if (!name || !name[0]) {
+    sb_error = Status::FromErrorString("an address space name is required");
+    return LLDB_INVALID_ADDRESS_SPACE_ID;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(
+      process_sp->GetTarget().GetAPIMutex());
+  llvm::Expected<AddressSpaceInfo> info = process_sp->GetAddressSpaceInfo(name);
+  if (!info) {
+    sb_error = Status::FromError(info.takeError());
+    return LLDB_INVALID_ADDRESS_SPACE_ID;
+  }
+  sb_error.Clear();
+  return info->space_id;
+}
 
 size_t SBProcess::ReadCStringFromMemory(addr_t addr, void *buf, size_t size,
                                         lldb::SBError &sb_error) {

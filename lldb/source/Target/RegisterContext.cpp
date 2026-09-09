@@ -346,10 +346,9 @@ Status RegisterContext::ReadRegisterValueFromMemory(
       lldb::addr_space_t stack_addr_space = abi->GetDefaultStackAddressSpace();
       if (!abi->IsDefaultAddressSpace(stack_addr_space)) {
         // Use the ABI-specified address space
-        ThreadSP thread_sp = m_thread.shared_from_this();
-        AddressSpec addr_spec(src_addr, stack_addr_space, thread_sp);
-        bytes_read =
-            process_sp->ReadMemory(addr_spec, src.data(), src_len, error);
+        bytes_read = process_sp->ReadMemory(
+            ProcessAddress(src_addr, stack_addr_space, m_thread.GetID()),
+            src.data(), src_len, error);
       } else {
         // Standard memory read for architectures without special address spaces
         bytes_read =

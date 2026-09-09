@@ -137,7 +137,7 @@ public:
   ///
   /// \return
   ///     Status indicating success or failure of the read operation.
-  Status ReadMemory(lldb::addr_t addr, void *buf, size_t size,
+  Status ReadMemory(const ProcessAddress &process_addr, void *buf, size_t size,
                     size_t &bytes_read) override;
 
   /// Write memory to the GPU address space.
@@ -304,10 +304,6 @@ public:
   DeviceStateRegistry &GetAllDevices() { return m_devices; }
 
   std::vector<AddressSpaceInfo> GetAddressSpaces() override;
-
-  Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
-                             NativeThreadProtocol *thread, void *buf,
-                             size_t size, size_t &bytes_readn) override;
 
   /// Handle the native process exit event.
   ///

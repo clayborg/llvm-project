@@ -16,9 +16,10 @@
 #include "lldb/Host/MainLoop.h"
 #include "lldb/Utility/AddressSpace.h"
 #include "lldb/Utility/ArchSpec.h"
-#include "lldb/Utility/Iterable.h"
-#include "lldb/Utility/Status.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
+#include "lldb/Utility/Iterable.h"
+#include "lldb/Utility/ProcessAddress.h"
+#include "lldb/Utility/Status.h"
 #include "lldb/Utility/TraceGDBRemotePackets.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "lldb/lldb-private-forward.h"
@@ -91,20 +92,15 @@ public:
   virtual Status GetMemoryRegionInfo(lldb::addr_t load_addr,
                                      MemoryRegionInfo &range_info);
 
-  virtual Status ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                            size_t &bytes_read) = 0;
-
+  /// Served over the "jAddressSpacesInfo" packet.
   virtual std::vector<AddressSpaceInfo> GetAddressSpaces() { return {}; }
 
-  virtual Status ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
-                                     NativeThreadProtocol *thread,
-                                     void *buf, size_t size,
-                                     size_t &bytes_read) {
-    return Status::FromErrorString("ReadMemoryWithSpace not supported");
-  };
+  /// Plugins without address spaces should error on a non-default one.
+  virtual Status ReadMemory(const ProcessAddress &addr, void *buf, size_t size,
+                            size_t &bytes_read) = 0;
 
-  Status ReadMemoryWithoutTrap(lldb::addr_t addr, void *buf, size_t size,
-                               size_t &bytes_read);
+  Status ReadMemoryWithoutTrap(const ProcessAddress &addr, void *buf,
+                               size_t size, size_t &bytes_read);
 
   virtual Status ReadMemoryTags(int32_t type, lldb::addr_t addr, size_t len,
                                 std::vector<uint8_t> &tags);
