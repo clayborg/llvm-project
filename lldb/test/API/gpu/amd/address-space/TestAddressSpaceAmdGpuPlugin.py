@@ -42,9 +42,10 @@ class AddressSpaceAmdGpuTestCase(AmdGpuTestCaseBase):
         self, address_space: str, loc: Location, thread: lldb.SBThread
     ):
         """Helper function to validate memory read from an address space"""
-        addr_spec = lldb.SBAddressSpec(loc.address, address_space, thread)
         error = lldb.SBError()
-        data = self.gpu_process.ReadMemoryFromSpec(addr_spec, loc.size_in_bytes, error)
+        space_id = self.gpu_process.GetAddressSpaceID(address_space, error)
+        process_addr = lldb.SBProcessAddress(loc.address, space_id, thread)
+        data = self.gpu_process.ReadMemory(process_addr, loc.size_in_bytes, error)
         self.assertTrue(
             error.Success(),
             f"{loc.name} reading from address space '{address_space}' failed: {str(error)}",
@@ -121,9 +122,10 @@ class AddressSpaceAmdGpuTestCase(AmdGpuTestCaseBase):
         """Test that we fail to read from the region address space. It is not supported on this architecture (MI300/MI350)."""
         self.run_to_first_gpu_breakpoint()
 
-        addr_spec = lldb.SBAddressSpec(0, "region")
         error = lldb.SBError()
-        self.gpu_process.ReadMemoryFromSpec(addr_spec, 1, error)
+        space_id = self.gpu_process.GetAddressSpaceID("region", error)
+        process_addr = lldb.SBProcessAddress(0, space_id)
+        self.gpu_process.ReadMemory(process_addr, 1, error)
 
         self.assertFalse(error.Success(), "Read from region address space should fail")
         self.assertEqual(

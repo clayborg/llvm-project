@@ -36,8 +36,8 @@ public:
 
   ~ProcessFreeBSDKernelFVC();
 
-  size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                      lldb_private::Status &error) override;
+  size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
+                      size_t size, lldb_private::Status &error) override;
 
 private:
   fvc_t *m_fvc;
@@ -54,8 +54,8 @@ public:
 
   ~ProcessFreeBSDKernelKVM();
 
-  size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                      lldb_private::Status &error) override;
+  size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
+                      size_t size, lldb_private::Status &error) override;
 
 private:
   kvm_t *m_kvm;
@@ -286,8 +286,10 @@ ProcessFreeBSDKernelFVC::~ProcessFreeBSDKernelFVC() {
     fvc_close(m_fvc);
 }
 
-size_t ProcessFreeBSDKernelFVC::DoReadMemory(lldb::addr_t addr, void *buf,
-                                             size_t size, Status &error) {
+size_t ProcessFreeBSDKernelFVC::DoReadMemory(const ProcessAddress &process_addr,
+                                             void *buf, size_t size,
+                                             Status &error) {
+  lldb::addr_t addr = process_addr.GetValue();
   ssize_t rd = 0;
   rd = fvc_read(m_fvc, addr, buf, size);
   if (rd < 0 || static_cast<size_t>(rd) != size) {
@@ -315,8 +317,10 @@ ProcessFreeBSDKernelKVM::~ProcessFreeBSDKernelKVM() {
     kvm_close(m_kvm);
 }
 
-size_t ProcessFreeBSDKernelKVM::DoReadMemory(lldb::addr_t addr, void *buf,
-                                             size_t size, Status &error) {
+size_t ProcessFreeBSDKernelKVM::DoReadMemory(const ProcessAddress &process_addr,
+                                             void *buf, size_t size,
+                                             Status &error) {
+  lldb::addr_t addr = process_addr.GetValue();
   ssize_t rd = 0;
   rd = kvm_read2(m_kvm, addr, buf, size);
   if (rd < 0 || static_cast<size_t>(rd) != size) {
