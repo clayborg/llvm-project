@@ -171,9 +171,10 @@ public:
 
   void RefreshStateAfterStop() override {}
 
-  size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
+  size_t DoReadMemory(const lldb_private::ProcessAddress &process_addr,
+                      void *buf, size_t size,
                       lldb_private::Status &error) override {
-    return GetCpuProcess()->ReadMemory(addr, buf, size, error);
+    return GetCpuProcess()->ReadMemory(process_addr, buf, size, error);
   }
 
   // Plugin code

@@ -199,25 +199,12 @@ public:
 
   size_t ReadMemory(addr_t addr, void *buf, size_t size, lldb::SBError &error);
 
-  /// Read memory from an address space.
-  ///
-  /// \param [in] addr_spec
-  ///   An address space specification that describes the memory to read from.
-  ///
-  /// \param [in] buf
-  ///   A pointer to a buffer to place the memory that is read.
-  ///
-  /// \param [in] size
-  ///   The number of bytes to read from memory.
-  ///
-  /// \param [out] error
-  ///   An error object that gets modified to indicate the success or failure
-  ///   of the memory read.
-  ///
-  /// \return
-  ///   The number of bytes that were successfully read into \a buf.
-  size_t ReadMemoryFromSpec(SBAddressSpec addr_spec, void *buf, size_t size, 
-                            lldb::SBError &error);
+  /// Read memory that may be in a non-default address space.
+  size_t ReadMemory(SBProcessAddress process_addr, void *buf, size_t size,
+                    lldb::SBError &error);
+
+  /// Resolve an address space name to its id, or LLDB_INVALID_ADDRESS_SPACE_ID.
+  lldb::addr_space_t GetAddressSpaceID(const char *name, lldb::SBError &error);
 
   size_t WriteMemory(addr_t addr, const void *buf, size_t size,
                      lldb::SBError &error);

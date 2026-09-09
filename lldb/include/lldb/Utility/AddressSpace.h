@@ -1,4 +1,4 @@
-//===-- AddressSpace.h ------------------------------------------*- C++ -*-===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -14,13 +14,13 @@
 #include <string>
 #include <vector>
 
-/// See docs/lldb-gdb-remote.txt for more information.
 namespace lldb_private {
 
+/// A single address space reported by a process.
 struct AddressSpaceInfo {
-  std::string name; ///< The name of the address space.
-  uint64_t value; ///< The integer identifier of the address space.
-  bool is_thread_specific; ///< True if the address space is thread specific.
+  std::string name;
+  lldb::addr_space_t space_id = 0;
+  bool is_thread_specific = false;
 };
 
 bool fromJSON(const llvm::json::Value &value, AddressSpaceInfo &data,
