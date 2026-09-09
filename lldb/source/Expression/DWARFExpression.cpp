@@ -104,7 +104,6 @@ DWARFExpression::ReadRegisterValueAsScalar(RegisterContext *reg_ctx,
   // register support.
   RegisterValue reg_value;
   llvm::Error error = reg_ctx->ReadRegister(reg_kind, reg_num, reg_value);
-
   if (error) {
     TargetSP target_sp = reg_ctx->CalculateTarget();
     if (!target_sp)
@@ -881,8 +880,7 @@ ResolveLoadAddress(ExecutionContext *exe_ctx, lldb::ModuleSP &module_sp,
   return load_addr;
 }
 
-/// Helper function to move common code used to load sized data from a uint8_t
-/// buffer.
+/// @brief Helper function to load sized data from a uint8_t buffer.
 ///
 /// @param addr_bytes The buffer containing raw data.
 /// @param size_addr_bytes How large is the underlying raw data.
@@ -2123,7 +2121,8 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
                 } else {
                   bytes_read = target->ReadMemory(
                       addr, curr_piece.GetBuffer().GetBytes(), piece_byte_size,
-                      error, /*force_live_memory=*/false);
+                      error,
+                      /*force_live_memory=*/false);
                 }
                 if (error.Fail() || bytes_read != piece_byte_size) {
                   const char *addr_type = (curr_piece_source_value_type ==

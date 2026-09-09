@@ -22,7 +22,8 @@ class ThreadNVGPU : public NativeThreadProtocol {
 public:
   ThreadNVGPU(ProcessNVGPU &gpu, const ThreadState *thread_state);
 
-  ThreadNVGPU(ProcessNVGPU &gpu, const ThreadState *thread_state, lldb::tid_t tid);
+  ThreadNVGPU(ProcessNVGPU &gpu, const ThreadState *thread_state,
+              lldb::tid_t tid);
 
   std::string GetName() override;
 
@@ -89,7 +90,8 @@ public:
 private:
   friend class ProcessNVGPU;
 
-  /// Set the physical coordinates and thread index of the thread within its block.
+  /// Set the physical coordinates and thread index of the thread within its
+  /// block.
   void SetThreadState(const ThreadState *thread_state) {
     m_thread_state = thread_state;
   }

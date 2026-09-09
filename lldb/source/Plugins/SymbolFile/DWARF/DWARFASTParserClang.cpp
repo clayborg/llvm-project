@@ -975,8 +975,8 @@ DWARFASTParserClang::ParseTypeModifier(const SymbolContext &sc,
 
   return dwarf->MakeType(die.GetID(), attrs.name, attrs.byte_size, nullptr,
                          attrs.type.Reference().GetID(), encoding_data_type,
-                         &attrs.decl, clang_type, resolve_state,
-                         payload, optional_addr_space);
+                         &attrs.decl, clang_type, resolve_state, payload,
+                         optional_addr_space);
 }
 
 std::string DWARFASTParserClang::GetDIEClassTemplateParams(DWARFDIE die) {

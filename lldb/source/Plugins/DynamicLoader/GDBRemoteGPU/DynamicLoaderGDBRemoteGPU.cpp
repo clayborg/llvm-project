@@ -133,11 +133,14 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
       LLDB_LOG(log, "[DynamicLoaderGDBRemoteGPU] Converting base64 elf image");
       std::vector<char> decoded_data;
       llvm::StringRef elf_data_ref(*info.elf_image_base64_sp);
-      if (llvm::Error decode_error = llvm::decodeBase64(elf_data_ref, decoded_data))
-        Debugger::ReportError("Failed to decode Base64 NVIDIA ELF image data: " +
-                              llvm::toString(std::move(decode_error)));
+      if (llvm::Error decode_error =
+              llvm::decodeBase64(elf_data_ref, decoded_data))
+        Debugger::ReportError(
+            "Failed to decode Base64 NVIDIA ELF image data: " +
+            llvm::toString(std::move(decode_error)));
       else
-        data_sp = std::make_shared<DataBufferHeap>(decoded_data.data(), decoded_data.size());
+        data_sp = std::make_shared<DataBufferHeap>(decoded_data.data(),
+                                                   decoded_data.size());
     }
     // Extract the UUID if available.
     UUID uuid;
