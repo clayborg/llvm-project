@@ -19,7 +19,7 @@ endif()
 
 
 target_include_directories(lldbServerPluginNVGPU PRIVATE
-  "${LLDB_SOURCE_DIR}/source" 
+  "${LLDB_SOURCE_DIR}/source"
   "../.."
 )
 

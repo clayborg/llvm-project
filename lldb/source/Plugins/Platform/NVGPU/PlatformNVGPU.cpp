@@ -1,4 +1,4 @@
-//===----------------------------------------------------------------------===//
+//===-- PlatformNVGPU.cpp ------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -209,7 +209,8 @@ llvm::Error PlatformNVGPU::LocationToValue(RegisterContext *reg_ctx,
         return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                        "failed to calculate stack frame");
       }
-      value_addr = frame_sp->GetStackID().GetCallFrameAddressWithoutMetadata() + offset;
+      value_addr =
+          frame_sp->GetStackID().GetCallFrameAddressWithoutMetadata() + offset;
     }
 
     ThreadSP thread_sp = reg_ctx->GetThread().shared_from_this();
@@ -573,8 +574,10 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
   PTXPRegMap &ptx_reg_map = m_entries[module_sp];
   auto map_iter = ptx_reg_map.find(reg_num);
   if (map_iter == ptx_reg_map.end()) {
-    LLDB_LOG(log, "RecordLoadedModule: PTX register mapping not found in the module {0}",
-             module_name);
+    LLDB_LOG(
+        log,
+        "RecordLoadedModule: PTX register mapping not found in the module {0}",
+        module_name);
     return 0;
   }
 

@@ -127,7 +127,6 @@ ifneq "$(strip $(NVCC_SOURCES))" ""
 	NVCC_ARCHFLAGS ?= -arch=native
 endif
 
-
 #----------------------------------------------------------------------
 # CC defaults to clang.
 #
