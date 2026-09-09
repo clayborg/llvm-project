@@ -168,19 +168,17 @@ struct MockProcess : Process {
     std::memcpy(buf, expected_memory->data(), expected_memory->size());
     return size;
   }
-  size_t DoReadMemory(addr_t vm_addr, void *buf, size_t size,
-                      Status &error) override {
-    return DoReadMemoryImpl(vm_addr, {}, buf, size, error);
+  size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
+                      size_t size, Status &error) override {
+    std::optional<uint64_t> address_space;
+    if (!process_addr.IsInDefaultAddressSpace())
+      address_space = process_addr.GetAddressSpace();
+    return DoReadMemoryImpl(process_addr.GetValue(), address_space, buf, size,
+                            error);
   }
-  size_t DoReadMemory(const AddressSpec &addr_spec,
-                      const AddressSpaceInfo &info, void *buf, size_t size,
-                      Status &error) override {
-    return DoReadMemoryImpl(addr_spec.GetValue(), addr_spec.GetSpaceId(), buf,
-                            size, error);
-  }
-  size_t ReadMemory(addr_t addr, void *buf, size_t size,
+  size_t ReadMemory(const ProcessAddress &process_addr, void *buf, size_t size,
                     Status &status) override {
-    return DoReadMemory(addr, buf, size, status);
+    return DoReadMemory(process_addr, buf, size, status);
   }
   bool CanDebug(lldb::TargetSP, bool) override { return true; }
   Status DoDestroy() override { return Status(); }
