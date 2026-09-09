@@ -14,7 +14,8 @@
 
 using namespace lldb_private;
 
-llvm::StringRef lldb_private::CUDAExceptionToString(CUDBGException_t exception) {
+llvm::StringRef
+lldb_private::CUDAExceptionToString(CUDBGException_t exception) {
   switch (exception) {
   case CUDBG_EXCEPTION_NONE:
     return "No exception";
@@ -42,10 +43,10 @@ llvm::StringRef lldb_private::CUDAExceptionToString(CUDBGException_t exception) 
     return "Cluster Out-of-range Address";
   case CUDBG_EXCEPTION_WARP_STACK_CANARY:
     return "Warp Stack Canary";
-  // Exception codes 20-22 first appear in CUDBG API revision 163 (CUDA 13.0
-  // / driver r580). Guard so the plugin still builds against older in-major
-  // headers that lack these enumerators; unknown codes fall through to the
-  // default below.
+    // Exception codes 20-22 first appear in CUDBG API revision 163 (CUDA 13.0
+    // / driver r580). Guard so the plugin still builds against older in-major
+    // headers that lack these enumerators; unknown codes fall through to the
+    // default below.
 #if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(163)
   case CUDBG_EXCEPTION_WARP_TMEM_ACCESS_CHECK:
     return "Warp Tensor Memory Access Check";
@@ -54,8 +55,8 @@ llvm::StringRef lldb_private::CUDAExceptionToString(CUDBGException_t exception) 
   case CUDBG_EXCEPTION_WARP_CALL_REQUIRES_NEWER_DRIVER:
     return "Warp Call Requires Newer Driver";
 #endif
-  // Exception codes 23-35 first appear in CUDBG API revision 167 (CUDA 13.1
-  // / driver r590).
+    // Exception codes 23-35 first appear in CUDBG API revision 167 (CUDA 13.1
+    // / driver r590).
 #if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
   case CUDBG_EXCEPTION_WARP_MISALIGNED_PC:
     return "Warp Misaligned PC";

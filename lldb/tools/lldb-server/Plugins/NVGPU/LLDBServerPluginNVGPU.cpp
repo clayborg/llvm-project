@@ -221,17 +221,16 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     return main_loop_event_notifier.takeError();
   m_main_loop_event_notifier_up = std::move(*main_loop_event_notifier);
 
-  CUDBGResult res = (*m_cuda_api)
-                        ->setNotifyNewEventCallback31(
-                            [](void *data) {
-                              Log *log = GetLog(GDBRLog::Plugin);
-                              LLDB_LOGV(
-                                  log,
-                                  "CUDA Debugger API event notifier callback");
-                              static_cast<LLDBServerPluginNVGPU *>(data)
-                                  ->m_main_loop_event_notifier_up->FireEvent();
-                            },
-                            this);
+  CUDBGResult res =
+      (*m_cuda_api)
+          ->setNotifyNewEventCallback31(
+              [](void *data) {
+                Log *log = GetLog(GDBRLog::Plugin);
+                LLDB_LOGV(log, "CUDA Debugger API event notifier callback");
+                static_cast<LLDBServerPluginNVGPU *>(data)
+                    ->m_main_loop_event_notifier_up->FireEvent();
+              },
+              this);
   if (res != CUDBG_SUCCESS)
     return createStringError(
         "Failed to set the event callback for the CUDA Debugger API. {}",

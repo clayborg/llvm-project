@@ -756,9 +756,9 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
         } else {
           Address target_addr;
           target_addr.SetLoadAddress(addr + offset, target);
-          bytes_read = target->ReadMemory(target_addr, heap_buf_ptr->GetBytes(),
-                                          bytes, error,
-                                          /*force_live_memory=*/true);
+          bytes_read =
+              target->ReadMemory(target_addr, heap_buf_ptr->GetBytes(), bytes,
+                                 error, /*force_live_memory=*/true);
         }
         if (error.Success() || bytes_read > 0) {
           data.SetData(data_sp);
