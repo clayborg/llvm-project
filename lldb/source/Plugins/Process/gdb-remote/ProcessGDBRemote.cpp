@@ -1238,6 +1238,7 @@ Status ProcessGDBRemote::ConnectToDebugserver(llvm::StringRef connect_url) {
       }
     }
   }
+  // Empty unless the server advertised "address-spaces+" in qSupported.
   m_address_spaces = m_gdb_comm.GetAddressSpaces();
 
   // First dispatch any commands from the platform:
@@ -3100,9 +3101,17 @@ void ProcessGDBRemote::WillPublicStop() {
 }
 
 // Process Memory
-size_t ProcessGDBRemote::DoReadMemory(addr_t addr, void *buf, size_t size,
-                                      Status &error) {
+size_t ProcessGDBRemote::DoReadMemory(const ProcessAddress &process_addr,
+                                      void *buf, size_t size, Status &error) {
   using xPacketState = GDBRemoteCommunicationClient::xPacketState;
+
+  lldb::addr_t addr = process_addr.GetValue();
+  lldb::addr_space_t addr_space = process_addr.GetAddressSpace();
+  if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE_ID &&
+      !m_gdb_comm.GetAddressSpacesSupported()) {
+    error = Status::FromErrorString("address spaces are not supported");
+    return 0;
+  }
 
   GetMaxMemorySize();
   xPacketState x_state = m_gdb_comm.GetxPacketState();
@@ -3118,11 +3127,35 @@ size_t ProcessGDBRemote::DoReadMemory(addr_t addr, void *buf, size_t size,
     size = max_memory_size;
   }
 
-  char packet[64];
-  int packet_len;
-  packet_len = ::snprintf(packet, sizeof(packet), "%c%" PRIx64 ",%" PRIx64,
-                          x_state != xPacketState::Unimplemented ? 'x' : 'm',
-                          (uint64_t)addr, (uint64_t)size);
+  // A non-default address space rides on an "address_space:<hex-id>;" suffix,
+  // followed by "thread:<hex-tid>;" when that space is thread specific.
+  std::string suffix;
+  if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE_ID) {
+    llvm::Expected<AddressSpaceInfo> info = GetAddressSpaceInfo(addr_space);
+    if (!info) {
+      error = Status::FromError(info.takeError());
+      return 0;
+    }
+    suffix =
+        llvm::formatv(";address_space:{0};", llvm::utohexstr(addr_space, true));
+    if (info->is_thread_specific) {
+      std::optional<lldb::tid_t> tid = process_addr.GetThreadID();
+      if (!tid) {
+        error = Status::FromErrorStringWithFormat(
+            "address space \"%s\" is thread specific, but no thread was "
+            "specified",
+            info->name.c_str());
+        return 0;
+      }
+      suffix += llvm::formatv("thread:{0};", llvm::utohexstr(*tid, true));
+    }
+  }
+
+  char packet[128];
+  int packet_len =
+      ::snprintf(packet, sizeof(packet), "%c%" PRIx64 ",%" PRIx64 "%s",
+                 x_state != xPacketState::Unimplemented ? 'x' : 'm',
+                 (uint64_t)addr, (uint64_t)size, suffix.c_str());
   assert(packet_len + 1 < (int)sizeof(packet));
   UNUSED_IF_ASSERT_DISABLED(packet_len);
   StringExtractorGDBRemote response;
@@ -3272,13 +3305,6 @@ ProcessGDBRemote::ParseMultiMemReadPacket(llvm::StringRef response_str,
 
   return read_results;
 }
-
-size_t ProcessGDBRemote::DoReadMemory(const AddressSpec &addr_spec, 
-                                      const AddressSpaceInfo &info, void *buf, 
-                                      size_t size, Status &error) {
-  return m_gdb_comm.ReadMemory(this, addr_spec, info, buf, size, error);
-}
-
 
 bool ProcessGDBRemote::SupportsMemoryTagging() {
   return m_gdb_comm.GetMemoryTaggingSupported();

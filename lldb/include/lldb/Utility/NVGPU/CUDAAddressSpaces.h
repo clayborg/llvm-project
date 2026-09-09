@@ -16,8 +16,8 @@
 #define LLDB_UTILITY_NVGPU_CUDAADDRESSSPACES_H
 
 #include "lldb/Utility/AddressSpace.h"
+#include "llvm/ADT/ArrayRef.h"
 #include <cstdint>
-#include <vector>
 
 namespace lldb_private::nvgpu {
 
@@ -63,9 +63,16 @@ enum AddressSpace : uint64_t {
 /// the same address space configuration.
 ///
 /// \return
-///     The address space table. is_thread_specific is true for address
-///     spaces that may return different values per thread.
-std::vector<AddressSpaceInfo> GetAddressSpaceInfos();
+///     A view of the address space table. is_thread_specific is true for
+///     address spaces that may return different values per thread.
+llvm::ArrayRef<AddressSpaceInfo> GetAddressSpaceInfos();
+
+/// Find the CUDA address space descriptor with the given numeric identifier.
+///
+/// \return
+///     A pointer into the static address space table, or nullptr if the
+///     identifier is not a supported CUDA address space.
+const AddressSpaceInfo *FindAddressSpaceInfo(lldb::addr_space_t space_id);
 
 } // namespace lldb_private::nvgpu
 

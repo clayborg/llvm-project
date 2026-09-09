@@ -749,10 +749,12 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
 
         size_t bytes_read = 0;
         if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
-          AddressSpec addr_spec(addr + offset, addr_space,
-                                exe_ctx.GetThreadSP());
+          std::optional<lldb::tid_t> tid;
+          if (Thread *thread = exe_ctx.GetThreadPtr())
+            tid = thread->GetID();
           bytes_read = exe_ctx.GetProcessPtr()->ReadMemory(
-              addr_spec, heap_buf_ptr->GetBytes(), bytes, error);
+              ProcessAddress(addr + offset, addr_space, tid),
+              heap_buf_ptr->GetBytes(), bytes, error);
         } else {
           Address target_addr;
           target_addr.SetLoadAddress(addr + offset, target);

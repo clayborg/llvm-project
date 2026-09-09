@@ -441,23 +441,44 @@ const CUDBGAPI_st &ProcessNVGPU::GetCudaAPI() {
 }
 
 std::vector<AddressSpaceInfo> ProcessNVGPU::GetAddressSpaces() {
-  return nvgpu::GetAddressSpaceInfos();
+  llvm::ArrayRef<AddressSpaceInfo> infos = nvgpu::GetAddressSpaceInfos();
+  return {infos.begin(), infos.end()};
 }
 
-Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
-                                         NativeThreadProtocol *thread,
-                                         void *buf, size_t size,
-                                         size_t &bytes_readn) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGV(log, "NVGPU::ReadMemoryWithSpace(). addr: {}, size: {}", addr,
-            size);
+Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
+                                size_t size, size_t &bytes_read) {
+  const lldb::addr_t addr = process_addr.GetValue();
+  const lldb::addr_space_t addr_space =
+      process_addr.IsInDefaultAddressSpace()
+          ? static_cast<lldb::addr_space_t>(AddressSpace::GlobalStorage)
+          : process_addr.GetAddressSpace();
 
-  auto GetPhysicalCoords = [&thread]() -> const ThreadCoords & {
+  const AddressSpaceInfo *info = nvgpu::FindAddressSpaceInfo(addr_space);
+  if (!info)
+    return Status::FromErrorStringWithFormatv("Invalid address space '{}'",
+                                              addr_space);
+
+  NativeThreadProtocol *thread = nullptr;
+  if (std::optional<lldb::tid_t> tid = process_addr.GetThreadID()) {
+    thread = GetThreadByID(*tid);
+    if (!thread)
+      return Status::FromErrorStringWithFormatv("Invalid thread ID 0x{0:x}",
+                                                *tid);
+  }
+
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOGV(log, "NVGPU::ReadMemory(). addr: {}, address space: {}, size: {}",
+            addr, addr_space, size);
+
+  if (!thread && info->is_thread_specific)
+    return Status::FromErrorStringWithFormatv(
+        "Reading from address space '{}' requires a thread", addr_space);
+
+  auto GetPhysicalCoords = [thread]() -> const ThreadCoords & {
     ThreadNVGPU &nv_thread = *static_cast<ThreadNVGPU *>(thread);
     const ThreadState *thread_state = nv_thread.GetThreadState();
     if (!thread_state)
-      logAndReportFatalError(
-          "NVGPU::ReadMemoryWithSpace(). ThreadState is null");
+      logAndReportFatalError("NVGPU::ReadMemory(). ThreadState is null");
     return thread_state->GetCoords();
   };
   CUDBGResult res;
@@ -501,20 +522,12 @@ Status ProcessNVGPU::ReadMemoryWithSpace(lldb::addr_t addr, uint64_t addr_space,
   }
 
   if (res != CUDBG_SUCCESS) {
-    bytes_readn = 0;
+    bytes_read = 0;
     return Status::FromErrorString(cudbgGetErrorString(res));
   }
 
-  bytes_readn = size;
+  bytes_read = size;
   return Status();
-}
-
-Status ProcessNVGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                                size_t &bytes_read) {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOGV(log, "NVGPU::ReadMemory(). addr: {}, size: {}", addr, size);
-  return ReadMemoryWithSpace(addr, AddressSpace::GlobalStorage,
-                             /*thread=*/nullptr, buf, size, bytes_read);
 }
 
 void ProcessNVGPU::OnNativeProcessExit(const WaitStatus &exit_status) {

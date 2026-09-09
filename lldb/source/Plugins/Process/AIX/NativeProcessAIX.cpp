@@ -189,7 +189,8 @@ Status NativeProcessAIX::Interrupt() { return Status("unsupported"); }
 
 Status NativeProcessAIX::Kill() { return Status("unsupported"); }
 
-Status NativeProcessAIX::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
+Status NativeProcessAIX::ReadMemory(const ProcessAddress &process_addr,
+                                    void *buf, size_t size,
                                     size_t &bytes_read) {
   return Status("unsupported");
 }

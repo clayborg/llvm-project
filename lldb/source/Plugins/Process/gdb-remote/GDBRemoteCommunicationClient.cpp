@@ -74,7 +74,7 @@ GDBRemoteCommunicationClient::GDBRemoteCommunicationClient()
       m_supports_jThreadsInfo(true), m_supports_jModulesInfo(true),
       m_supports_vFileSize(true), m_supports_vFileMode(true),
       m_supports_vFileExists(true), m_supports_vRun(true),
-      m_supports_address_spaces(false), m_supports_jGPUGetKernelInfos(true),
+      m_supports_jGPUGetKernelInfos(true),
 
       m_host_arch(), m_host_distribution_id(), m_process_arch(), m_os_build(),
       m_os_kernel(), m_hostname(), m_gdb_server_name(),
@@ -307,6 +307,7 @@ void GDBRemoteCommunicationClient::ResetDiscoverableSettings(bool did_exec) {
     m_attach_or_wait_reply = eLazyBoolCalculate;
     m_avoid_g_packets = eLazyBoolCalculate;
     m_supports_multiprocess = eLazyBoolCalculate;
+    m_supports_address_spaces = false;
     m_supports_qSaveCore = eLazyBoolCalculate;
     m_supports_qXfer_auxv_read = eLazyBoolCalculate;
     m_supports_qXfer_libraries_read = eLazyBoolCalculate;
@@ -321,7 +322,6 @@ void GDBRemoteCommunicationClient::ResetDiscoverableSettings(bool did_exec) {
     m_supports_reverse_step = eLazyBoolCalculate;
     m_supports_gpu_plugins = eLazyBoolCalculate;
     m_supports_lldb_settings = eLazyBoolCalculate;
-    m_supports_address_spaces = false;
     m_supports_jGPUGetKernelInfos = true;
     m_supports_qProcessInfoPID = true;
     m_supports_qfProcessInfo = true;
@@ -376,6 +376,7 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
   m_supports_QPassSignals = eLazyBoolNo;
   m_supports_memory_tagging = eLazyBoolNo;
   m_supports_qSaveCore = eLazyBoolNo;
+  m_supports_address_spaces = false;
   m_uses_native_signals = eLazyBoolNo;
   m_x_packet_state.reset();
   m_supports_reverse_continue = eLazyBoolNo;
@@ -383,7 +384,6 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
   m_supports_multi_mem_read = eLazyBoolNo;
   m_supports_gpu_plugins = eLazyBoolNo;
   m_supports_lldb_settings = eLazyBoolNo;
-  m_supports_address_spaces = false;
   m_max_packet_size = UINT64_MAX; // It's supposed to always be there, but if
                                   // not, we assume no limit
 
@@ -434,6 +434,8 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
         m_supports_memory_tagging = eLazyBoolYes;
       else if (x == "qSaveCore+")
         m_supports_qSaveCore = eLazyBoolYes;
+      else if (x == "address-spaces+")
+        m_supports_address_spaces = true;
       else if (x == "native-signals+")
         m_uses_native_signals = eLazyBoolYes;
       else if (x == "binary-upload+")
@@ -444,8 +446,6 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
         m_supports_gpu_plugins = eLazyBoolYes;
       else if (x == "lldb-settings+")
         m_supports_lldb_settings = eLazyBoolYes;
-      else if (x == "address-spaces+")
-        m_supports_address_spaces = true;
       else if (x == "ReverseContinue+")
         m_supports_reverse_continue = eLazyBoolYes;
       else if (x == "ReverseStep+")
@@ -1256,6 +1256,34 @@ GDBRemoteCommunicationClient::GetProcessStandaloneBinaries() {
   if (m_qProcessInfo_is_valid == eLazyBoolCalculate)
     GetCurrentProcessInfo();
   return m_binary_addresses;
+}
+
+std::vector<AddressSpaceInfo> GDBRemoteCommunicationClient::GetAddressSpaces() {
+  if (!m_supports_address_spaces)
+    return {};
+
+  StringExtractorGDBRemote response;
+  response.SetResponseValidatorToJSON();
+  if (SendPacketAndWaitForResponse("jAddressSpacesInfo", response) !=
+      PacketResult::Success)
+    return {};
+
+  if (response.IsUnsupportedResponse() || response.IsErrorResponse()) {
+    m_supports_address_spaces = false;
+    return {};
+  }
+
+  llvm::Expected<std::vector<AddressSpaceInfo>> info =
+      llvm::json::parse<std::vector<AddressSpaceInfo>>(response.Peek(),
+                                                       "AddressSpaceInfo");
+  if (info)
+    return std::move(*info);
+
+  Log *log = GetLog(GDBRLog::Process);
+  LLDB_LOG_ERROR(log, info.takeError(),
+                 "malformed jAddressSpacesInfo response '{1}': {0}",
+                 response.GetStringRef());
+  return {};
 }
 
 bool GDBRemoteCommunicationClient::GetGDBServerVersion() {
@@ -4573,87 +4601,3 @@ llvm::Expected<int> GDBRemoteCommunicationClient::KillProcess(lldb::pid_t pid) {
 }
 
 void GDBRemoteCommunicationClient::SetFilePassingFD(int fd) {}
-
-
-std::vector<AddressSpaceInfo> 
-GDBRemoteCommunicationClient::GetAddressSpaces() {
-  // Get JSON information containing information about the process address 
-  // spaces.
-  if (!m_supports_address_spaces)
-    return {};
-
-  StringExtractorGDBRemote response;
-  response.SetResponseValidatorToJSON();
-  if (SendPacketAndWaitForResponse("jAddressSpacesInfo", response) ==
-      PacketResult::Success) {
-    if (response.IsUnsupportedResponse()) {
-      m_supports_address_spaces = false;
-      return {};
-    }
-    if (response.IsErrorResponse()) {
-      Debugger::ReportError(response.GetStatus().AsCString());
-      return {};
-    }
-    if (llvm::Expected<std::vector<AddressSpaceInfo>> info =
-            llvm::json::parse<std::vector<AddressSpaceInfo>>(response.Peek(),
-                                                             "AddressSpaceInfo")) {
-      return std::move(*info);
-    } else {
-      // We don't show JSON parsing errors to the user because they won't
-      // make sense to them.
-      llvm::consumeError(info.takeError());
-      Debugger::ReportError(
-          llvm::formatv("malformed jAddressSpacesInfo response packet. {0}",
-                        response.GetStringRef()));
-    }
-  }
-  return {};
-}
-
-
-size_t GDBRemoteCommunicationClient::ReadMemory(
-    ProcessGDBRemote *process, const AddressSpec &addr_spec, 
-    const AddressSpaceInfo &info, void *buf, size_t size, Status &error) {
-  // Make sure this packet is supported.
-  if (!m_supports_address_spaces) {
-    error = Status::FromErrorString("address spaces are not supported");
-    return 0;
-  }
-  StreamString packet;
-  packet.PutCString("qMemRead:");
-  packet.PutCString("addr:");
-  packet.PutHex64(addr_spec.GetValue());
-  packet.PutChar(';');
-  packet.PutCString("space:");
-  packet.PutHex64(info.value);
-  packet.PutChar(';');
-  packet.PutCString("length:");
-  packet.PutHex64(size);
-  packet.PutChar(';');
-  if (info.is_thread_specific) {
-    if (llvm::Expected<lldb::ThreadSP> thread = addr_spec.GetThread()) {
-      packet.PutCString("tid:");
-      packet.PutHex64((*thread)->GetID());
-      packet.PutChar(';');
-    } else {
-      error = Status::FromError(thread.takeError());
-    }
-  }
-
-  StringExtractorGDBRemote response;
-  if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
-      PacketResult::Success) {
-    if (response.IsUnsupportedResponse()) {
-      m_supports_address_spaces = false;
-      error = Status::FromErrorString("address spaces are not supported");
-    } else if (response.IsErrorResponse()) {
-      error = response.GetStatus();
-    } else {
-      return response.GetHexBytes(
-          llvm::MutableArrayRef<uint8_t>((uint8_t *)buf, size), '\xdd');
-    }
-  } else {
-    error = Status::FromErrorString("failed to send qMemRead packet");
-  }
-  return 0;
-}

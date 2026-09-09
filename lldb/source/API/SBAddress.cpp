@@ -8,7 +8,6 @@
 
 #include "lldb/API/SBAddress.h"
 #include "Utils.h"
-#include "lldb/API/SBProcess.h"
 #include "lldb/API/SBSection.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBThread.h"
@@ -269,44 +268,38 @@ SBLineEntry SBAddress::GetLineEntry() {
   return sb_line_entry;
 }
 
-
-SBAddressSpec::SBAddressSpec() : 
-    m_opaque_up(new AddressSpec(LLDB_INVALID_ADDRESS)) {
-  LLDB_INSTRUMENT_VA(this);
-}
-
-SBAddressSpec::SBAddressSpec(const SBAddressSpec &rhs) : 
-  m_opaque_up(new AddressSpec(rhs.ref())) {
+SBProcessAddress::SBProcessAddress(const SBProcessAddress &rhs)
+    : m_opaque_up(new ProcessAddress(rhs.ref())) {
   LLDB_INSTRUMENT_VA(this, rhs);
 }
 
-SBAddressSpec::~SBAddressSpec() = default;
-
-SBAddressSpec::SBAddressSpec(lldb::addr_t load_addr) : 
-    m_opaque_up(new AddressSpec(load_addr)) {
-  LLDB_INSTRUMENT_VA(this);
+SBProcessAddress::SBProcessAddress(lldb::addr_t load_addr)
+    : m_opaque_up(new ProcessAddress(load_addr)) {
+  LLDB_INSTRUMENT_VA(this, load_addr);
 }
 
-SBAddressSpec::SBAddressSpec(lldb::addr_t addr, const char *address_space) :
-    m_opaque_up(new AddressSpec(addr, address_space)) {
-  LLDB_INSTRUMENT_VA(this, addr, address_space);
+SBProcessAddress::SBProcessAddress(lldb::addr_t addr,
+                                   lldb::addr_space_t address_space_id)
+    : m_opaque_up(new ProcessAddress(addr, address_space_id)) {
+  LLDB_INSTRUMENT_VA(this, addr, address_space_id);
 }
 
-SBAddressSpec::SBAddressSpec(lldb::addr_t addr, const char *address_space, 
-                             lldb::SBThread thread) :
-    m_opaque_up(new AddressSpec(addr, address_space, thread.GetSP())) {
-  LLDB_INSTRUMENT_VA(this, addr, address_space, thread);
+SBProcessAddress::SBProcessAddress(lldb::addr_t addr,
+                                   lldb::addr_space_t address_space_id,
+                                   lldb::SBThread thread)
+    : m_opaque_up(
+          new ProcessAddress(addr, address_space_id, thread.GetThreadID())) {
+  LLDB_INSTRUMENT_VA(this, addr, address_space_id, thread);
 }
 
-AddressSpec &SBAddressSpec::ref() {
-  return *m_opaque_up;
-}
+SBProcessAddress::~SBProcessAddress() = default;
 
-const AddressSpec &SBAddressSpec::ref() const {
-  return *m_opaque_up;
-}
+ProcessAddress &SBProcessAddress::ref() { return *m_opaque_up; }
 
-const SBAddressSpec &SBAddressSpec::operator=(const SBAddressSpec &rhs) {
+const ProcessAddress &SBProcessAddress::ref() const { return *m_opaque_up; }
+
+const SBProcessAddress &
+SBProcessAddress::operator=(const SBProcessAddress &rhs) {
   LLDB_INSTRUMENT_VA(this, rhs);
   if (this != &rhs)
     m_opaque_up = clone(rhs.m_opaque_up);

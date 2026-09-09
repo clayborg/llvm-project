@@ -1344,10 +1344,12 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
                 stack.back().GetAddressSpace();
             if (addr_space.has_value() &&
                 *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
-              AddressSpec addr_spec(pointer_addr, *addr_space,
-                                    exe_ctx->GetThreadSP());
-              bytes_read =
-                  process->ReadMemory(addr_spec, &addr_bytes, size, error);
+              std::optional<lldb::tid_t> tid;
+              if (Thread *thread = exe_ctx->GetThreadPtr())
+                tid = thread->GetID();
+              bytes_read = process->ReadMemory(
+                  ProcessAddress(pointer_addr, *addr_space, tid), &addr_bytes,
+                  size, error);
             } else {
               bytes_read =
                   process->ReadMemory(pointer_addr, &addr_bytes, size, error);
@@ -2113,11 +2115,13 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
                 if (exe_ctx && exe_ctx->GetProcessSP() &&
                     addr_space.has_value() &&
                     *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
-                  AddressSpec addr_spec(addr, *addr_space,
-                                        exe_ctx->GetThreadSP());
+                  std::optional<lldb::tid_t> tid;
+                  if (Thread *thread = exe_ctx->GetThreadPtr())
+                    tid = thread->GetID();
                   bytes_read = exe_ctx->GetProcessSP()->ReadMemory(
-                      addr_spec, curr_piece.GetBuffer().GetBytes(),
-                      piece_byte_size, error);
+                      ProcessAddress(addr, *addr_space, tid),
+                      curr_piece.GetBuffer().GetBytes(), piece_byte_size,
+                      error);
                 } else {
                   bytes_read = target->ReadMemory(
                       addr, curr_piece.GetBuffer().GetBytes(), piece_byte_size,

@@ -63,26 +63,23 @@ Status ProcessMockGPU::Interrupt() { return Halt(); }
 
 Status ProcessMockGPU::Kill() { return Status(); }
 
-Status ProcessMockGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                                  size_t &bytes_read) {
-  return Status::FromErrorString("unimplemented");
-}
-
 #define ADDR_SPACE_1 1
 #define ADDR_SPACE_2 2
 
-std::vector<AddressSpaceInfo> ProcessMockGPU::GetAddressSpaces() {
-  std::vector<AddressSpaceInfo> result;
-  result.push_back({"Global", ADDR_SPACE_1, false});
-  result.push_back({"Thread", ADDR_SPACE_2, true});
-  return result;
-}
+Status ProcessMockGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
+                                  size_t size, size_t &bytes_read) {
+  if (process_addr.IsInDefaultAddressSpace())
+    return Status::FromErrorString("unimplemented");
 
-Status ProcessMockGPU::ReadMemoryWithSpace(lldb::addr_t addr, 
-                                           uint64_t addr_space, 
-                                           NativeThreadProtocol *thread, 
-                                           void *buf, size_t size, 
-                                           size_t &bytes_read) {
+  const lldb::addr_space_t addr_space = process_addr.GetAddressSpace();
+  NativeThreadProtocol *thread = nullptr;
+  if (std::optional<lldb::tid_t> tid = process_addr.GetThreadID()) {
+    thread = GetThreadByID(*tid);
+    if (!thread)
+      return Status::FromErrorStringWithFormat("invalid thread ID 0x%" PRIx64,
+                                               *tid);
+  }
+
   bytes_read = 0;
   switch (addr_space) {
   case ADDR_SPACE_1:
@@ -91,7 +88,7 @@ Status ProcessMockGPU::ReadMemoryWithSpace(lldb::addr_t addr,
     return Status();
 
   case ADDR_SPACE_2:
-    // Address space 1 requires a thread
+    // Address space 2 requires a thread.
     if (thread == nullptr)
       return Status::FromErrorString("reading from address space \"Thread\" "
                                      "requires a thread");
@@ -100,11 +97,17 @@ Status ProcessMockGPU::ReadMemoryWithSpace(lldb::addr_t addr,
     return Status();
 
   default:
-    return Status::FromErrorStringWithFormat("invalid address space %" PRIu64, 
+    return Status::FromErrorStringWithFormat("invalid address space %" PRIu64,
                                              addr_space);
   }
 }
 
+std::vector<AddressSpaceInfo> ProcessMockGPU::GetAddressSpaces() {
+  std::vector<AddressSpaceInfo> result;
+  result.push_back({"Global", ADDR_SPACE_1, false});
+  result.push_back({"Thread", ADDR_SPACE_2, true});
+  return result;
+}
 
 Status ProcessMockGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                    size_t size, size_t &bytes_written) {

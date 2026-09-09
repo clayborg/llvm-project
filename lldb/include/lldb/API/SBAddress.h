@@ -130,51 +130,34 @@ private:
 bool LLDB_API operator==(const SBAddress &lhs, const SBAddress &rhs);
 #endif
 
-
-/// A class that represents a specification for an address that can include an
-/// address space and other info needed to read or write to a memory address.
-///
-/// This object is uses to read and write to memory addresses that need more 
-/// data to describe a location in memory.  For example, a memory address in a 
-/// process can be described by a single load address, but a memory address in a 
-/// GPU might require an address space identifier and possibly a thread for 
-/// address spaces that are thread specific.
-class LLDB_API SBAddressSpec {
+/// A memory address, optionally in a non-default address space.
+class LLDB_API SBProcessAddress {
 public:
-  /// Create an invalid address spec.
-  SBAddressSpec();
+  SBProcessAddress(const SBProcessAddress &rhs);
 
-  /// Copy constructor.
-  SBAddressSpec(const SBAddressSpec &rhs);
+  /// A load address in the default address space.
+  SBProcessAddress(lldb::addr_t load_addr);
 
-  /// Create from a load address.
-  ///
-  /// This represents a load address in memory and is equivalent to calling the
-  /// ReadMemory(...) methods that take a single lldb::addr_t value.
-  SBAddressSpec(lldb::addr_t load_addr);
+  /// An address in the address space with the given id (0 = default).
+  SBProcessAddress(lldb::addr_t addr, lldb::addr_space_t address_space_id);
 
-  /// Create and instance from a address and address space name.
-  SBAddressSpec(lldb::addr_t addr, const char *address_space);
+  /// An address in a thread specific address space.
+  SBProcessAddress(lldb::addr_t addr, lldb::addr_space_t address_space_id,
+                   lldb::SBThread thread);
 
-  /// Create and instance from a load address and address space that is thread
-  /// specific.
-  SBAddressSpec(lldb::addr_t addr, const char *address_space, 
-                lldb::SBThread thread);
+  ~SBProcessAddress();
 
-  ~SBAddressSpec();
-
-  /// Assignment operator.
-  const lldb::SBAddressSpec &operator=(const lldb::SBAddressSpec &rhs);
+  const lldb::SBProcessAddress &operator=(const lldb::SBProcessAddress &rhs);
 
 protected:
   friend class SBProcess;
-  
-  lldb_private::AddressSpec &ref();
 
-  const lldb_private::AddressSpec &ref() const;
+  lldb_private::ProcessAddress &ref();
+
+  const lldb_private::ProcessAddress &ref() const;
 
 private:
-  std::unique_ptr<lldb_private::AddressSpec> m_opaque_up;
+  std::unique_ptr<lldb_private::ProcessAddress> m_opaque_up;
 };
 
 } // namespace lldb

@@ -2690,6 +2690,25 @@ GDBRemoteCommunicationServerLLGS::Handle_memory_read(
     return SendOKResponse();
   }
 
+  // Optional "address_space:<hex-id>;" suffix, with "thread:<hex-tid>;" for a
+  // thread specific address space (see the "address-spaces" feature).
+  lldb::addr_space_t address_space = LLDB_DEFAULT_ADDRESS_SPACE_ID;
+  std::optional<lldb::tid_t> tid;
+  if (m_address_space_suffix_supported && packet.GetBytesLeft() > 0 &&
+      packet.GetChar() == ';') {
+    llvm::StringRef name, value;
+    while (packet.GetNameColonValue(name, value)) {
+      if (name == "address_space" && value.getAsInteger(16, address_space))
+        return SendIllFormedResponse(packet, "invalid address_space suffix");
+      if (name == "thread") {
+        lldb::tid_t parsed_tid = LLDB_INVALID_THREAD_ID;
+        if (value.getAsInteger(16, parsed_tid))
+          return SendIllFormedResponse(packet, "invalid thread suffix");
+        tid = parsed_tid;
+      }
+    }
+  }
+
   // Allocate the response buffer.
   std::string buf(byte_count, '\0');
   if (buf.empty())
@@ -2698,11 +2717,13 @@ GDBRemoteCommunicationServerLLGS::Handle_memory_read(
   // Retrieve the process memory.
   size_t bytes_read = 0;
   Status error = m_current_process->ReadMemoryWithoutTrap(
-      read_addr, &buf[0], byte_count, bytes_read);
-  LLDB_LOG(
-      log,
-      "ReadMemoryWithoutTrap({0}) read {1} of {2} requested bytes (error: {3})",
-      read_addr, byte_count, bytes_read, error);
+      ProcessAddress(read_addr, address_space, tid), &buf[0], byte_count,
+      bytes_read);
+  LLDB_LOG(log,
+           "read {2} of {1} requested bytes at {0:x} in address_space {4} "
+           "thread {5} (error: {3})",
+           read_addr, byte_count, bytes_read, error, address_space,
+           tid ? *tid : LLDB_INVALID_THREAD_ID);
   if (bytes_read == 0)
     return SendErrorResponse(0x08);
 
@@ -4351,10 +4372,12 @@ GDBRemoteCommunicationServerLLGS::Handle_qMemRead(
   size_t bytes_read = 0;
   std::string buf(*length, '\0');
 
-  Status error = m_current_process->ReadMemoryWithSpace(*addr, 
-                                                        space.value_or(0), 
-                                                        thread, buf.data(), 
-                                                        *length, bytes_read);
+  std::optional<lldb::tid_t> tid;
+  if (thread)
+    tid = thread->GetID();
+  Status error = m_current_process->ReadMemory(
+      ProcessAddress(*addr, space.value_or(LLDB_DEFAULT_ADDRESS_SPACE_ID), tid),
+      buf.data(), *length, bytes_read);
   if (error.Fail())
     return SendErrorResponse(error);
 
@@ -4687,8 +4710,10 @@ std::vector<std::string> GDBRemoteCommunicationServerLLGS::HandleFeatures(
     ret.push_back("gpu-plugins+");
   if (bool(plugin_features & Extension::lldb_settings))
     ret.push_back("lldb-settings+");
-  if (bool(plugin_features & Extension::address_spaces))
+  if (bool(plugin_features & Extension::address_spaces)) {
     ret.push_back("address-spaces+");
+    m_address_space_suffix_supported = true;
+  }
 
   // check for client features
   m_extensions_supported = {};

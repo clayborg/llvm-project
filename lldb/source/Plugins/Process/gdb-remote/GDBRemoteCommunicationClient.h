@@ -19,9 +19,8 @@
 #include <vector>
 
 #include "lldb/Host/File.h"
-#include "lldb/Target/Process.h"
-#include "lldb/Utility/AddressableBits.h"
 #include "lldb/Utility/AddressSpace.h"
+#include "lldb/Utility/AddressableBits.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/GDBRemote.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
@@ -214,6 +213,12 @@ public:
                                   bool &value_is_offset);
 
   std::vector<lldb::addr_t> GetProcessStandaloneBinaries();
+
+  /// Empty if the server does not support "jAddressSpacesInfo".
+  std::vector<AddressSpaceInfo> GetAddressSpaces();
+
+  /// Whether the server advertised address-space support ("address-spaces+").
+  bool GetAddressSpacesSupported() const { return m_supports_address_spaces; }
 
   void GetRemoteQSupported();
 
@@ -475,12 +480,6 @@ public:
   Status WriteMemoryTags(lldb::addr_t addr, size_t len, int32_t type,
                          const std::vector<uint8_t> &tags);
 
-  std::vector<AddressSpaceInfo> GetAddressSpaces();
-
-  size_t ReadMemory(ProcessGDBRemote *process, const AddressSpec &addr_spec, 
-                    const AddressSpaceInfo &info, void *buf, size_t size,
-                    Status &error);
-
   /// Use qOffsets to query the offset used when relocating the target
   /// executable. If successful, the returned structure will contain at least
   /// one value in the offsets field.
@@ -606,6 +605,7 @@ protected:
   LazyBool m_supports_error_string_reply = eLazyBoolCalculate;
   LazyBool m_supports_multiprocess = eLazyBoolCalculate;
   LazyBool m_supports_memory_tagging = eLazyBoolCalculate;
+  bool m_supports_address_spaces = false;
   LazyBool m_supports_qSaveCore = eLazyBoolCalculate;
   LazyBool m_uses_native_signals = eLazyBoolCalculate;
   std::optional<xPacketState> m_x_packet_state;
@@ -623,7 +623,7 @@ protected:
       m_supports_qModuleInfo : 1, m_supports_jThreadsInfo : 1,
       m_supports_jModulesInfo : 1, m_supports_vFileSize : 1,
       m_supports_vFileMode : 1, m_supports_vFileExists : 1, m_supports_vRun : 1,
-      m_supports_address_spaces : 1, m_supports_jGPUGetKernelInfos : 1;
+      m_supports_jGPUGetKernelInfos : 1;
 
   /// Current gdb remote protocol process identifier for all other operations
   lldb::pid_t m_curr_pid = LLDB_INVALID_PROCESS_ID;

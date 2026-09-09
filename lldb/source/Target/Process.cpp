@@ -1924,50 +1924,29 @@ Status Process::DisableSoftwareBreakpoint(BreakpointSite *bp_site) {
   return error;
 }
 
-
-size_t Process::ReadMemory(const AddressSpec &addr_spec, void *buf, 
-                           size_t size, Status &error) {
-  error.Clear();
-  if (addr_spec.IsInDefaultAddressSpace()) {
-    llvm::Expected<lldb::addr_t> load_addr = 
-        addr_spec.ResolveAddressInDefaultAddressSpace(*this);
-    if (load_addr) {
-      // We were able to resolve the address to an address in the default
-      // address space. Just call our standard read memory method which goes
-      // through memory caching and ABI address fixing.
-      return ReadMemory(*load_addr, buf, size, error);
-    }
-    error = Status::FromError(load_addr.takeError());
-    return 0;
-  }
-  // We have an address that can't be resolved in the default address space, so
-  // we need to call the overload that knows how to read from an address space.
-  llvm::Expected<AddressSpaceInfo> info = addr_spec.GetAddressSpaceInfo(*this);
-
-  if (info)
-    return DoReadMemory(addr_spec, *info, buf, size, error);
-  error = Status::FromError(info.takeError());
-  return 0;
-}
-
-size_t Process::DoReadMemory(const AddressSpec &addr_spec, 
-                             const AddressSpaceInfo &info, void *buf, 
-                             size_t size, Status &error) {
-  error = 
-      Status::FromErrorString("AddressSpec memory reading is not supported");
-  return 0;
-}
-
-
 // Uncomment to verify memory caching works after making changes to caching
 // code
 //#define VERIFY_MEMORY_READS
 
-size_t Process::ReadMemory(addr_t addr, void *buf, size_t size, Status &error) {
+size_t Process::ReadMemory(const ProcessAddress &process_addr, void *buf,
+                           size_t size, Status &error) {
+  error.Clear();
+
+  // Non-default address spaces bypass the flat memory cache.
+  if (!process_addr.IsInDefaultAddressSpace()) {
+    llvm::Expected<AddressSpaceInfo> info =
+        GetAddressSpaceInfo(process_addr.GetAddressSpace());
+    if (!info) {
+      error = Status::FromError(info.takeError());
+      return 0;
+    }
+    return DoReadMemory(process_addr, buf, size, error);
+  }
+
+  lldb::addr_t addr = process_addr.GetValue();
   if (ABISP abi_sp = GetABI())
     addr = abi_sp->FixAnyAddress(addr);
 
-  error.Clear();
   if (!GetDisableMemoryCache()) {
 #if defined(VERIFY_MEMORY_READS)
     // Memory caching is enabled, with debug verification
@@ -2344,14 +2323,6 @@ addr_t Process::ReadPointerFromMemory(lldb::addr_t vm_addr, Status &error) {
   return LLDB_INVALID_ADDRESS;
 }
 
-addr_t Process::ReadPointerFromMemory(AddressSpec addr, Status &error) {
-  Scalar scalar;
-  if (ReadScalarIntegerFromMemory(addr, GetAddressByteSize(), false, scalar,
-                                  error))
-    return scalar.ULongLong(LLDB_INVALID_ADDRESS);
-  return LLDB_INVALID_ADDRESS;
-}
-
 bool Process::WritePointerToMemory(lldb::addr_t vm_addr, lldb::addr_t ptr_value,
                                    Status &error) {
   Scalar scalar;
@@ -2502,36 +2473,6 @@ size_t Process::ReadScalarIntegerFromMemory(addr_t addr, uint32_t byte_size,
         scalar.MakeSigned();
         scalar.SignExtend(byte_size * 8);
       }
-      return bytes_read;
-    }
-  } else {
-    error = Status::FromErrorStringWithFormat(
-        "byte size of %u is too large for integer scalar type", byte_size);
-  }
-  return 0;
-}
-
-size_t Process::ReadScalarIntegerFromMemory(AddressSpec addr,
-                                            uint32_t byte_size, bool is_signed,
-                                            Scalar &scalar, Status &error) {
-  uint64_t uval = 0;
-  if (byte_size == 0) {
-    error = Status::FromErrorString("byte size is zero");
-  } else if (byte_size & (byte_size - 1)) {
-    error = Status::FromErrorStringWithFormat(
-        "byte size %u is not a power of 2", byte_size);
-  } else if (byte_size <= sizeof(uval)) {
-    const size_t bytes_read = ReadMemory(addr, &uval, byte_size, error);
-    if (bytes_read == byte_size) {
-      DataExtractor data(&uval, sizeof(uval), GetByteOrder(),
-                         GetAddressByteSize());
-      lldb::offset_t offset = 0;
-      if (byte_size <= 4)
-        scalar = data.GetMaxU32(&offset, byte_size);
-      else
-        scalar = data.GetMaxU64(&offset, byte_size);
-      if (is_signed)
-        scalar.SignExtend(byte_size * 8);
       return bytes_read;
     }
   } else {
@@ -6979,123 +6920,44 @@ void Process::SetAddressableBitMasks(AddressableBits bit_masks) {
   }
 }
 
-// Check if a weak_ptr was never initialized.
-// This is useful to distinguish between a weak_ptr that was never initialized
-// and a weak_ptr that was initialized and then expired.
-// https://stackoverflow.com/questions/45507041/how-to-check-if-weak-ptr-is-empty-non-assigned
-template <typename T>
-static bool weak_ptr_is_uninitialized(std::weak_ptr<T> const &weak) {
-  using wt = std::weak_ptr<T>;
-  return !weak.owner_before(wt{}) && !wt{}.owner_before(weak);
-}
-
-llvm::Expected<lldb::ModuleSP> AddressSpec::GetModule() const {
-  if (m_module_wp.expired() && !weak_ptr_is_uninitialized(m_module_wp))
-    return llvm::createStringError("module has expired");
-  return m_module_wp.lock();
-}
-
-llvm::Expected<lldb::ThreadSP> AddressSpec::GetThread() const {
-  if (m_thread_wp.expired() && !weak_ptr_is_uninitialized(m_thread_wp))
-    return llvm::createStringError("module has expired");
-  return m_thread_wp.lock();
-}
-
 llvm::Expected<AddressSpaceInfo>
-AddressSpec::GetAddressSpaceInfo(lldb_private::Process &process) const {
-  if (m_addr_space_id.has_value())
-    return process.GetAddressSpaceInfo(*m_addr_space_id);
-  if (m_addr_space_name.has_value())
-    return process.GetAddressSpaceInfo(GetSpaceName());
-  return llvm::createStringError("AddressSpec has no address space info");
-}
-
-llvm::Expected<lldb::addr_t> AddressSpec::ResolveAddressInDefaultAddressSpace(
-    lldb_private::Process &process) const {
-  if (!IsInDefaultAddressSpace())
-      return llvm::createStringError("address is not in the default address "
-                                    "space");
-  // This object holds a weak pointer to a module. We need to make sure the
-  // module hasn't been destroyed. 
-  auto exp_module = GetModule();
-  if (!exp_module)
-    return exp_module.takeError();
-  ModuleSP module_sp = *exp_module;
-  if (module_sp) {
-    // This object holds a weak pointer to a thread and we need to make sure
-    // thread is still around.
-    auto exp_thread = GetThread();
-    if (!exp_thread)
-      return exp_thread.takeError();
-    ThreadSP thread_sp = *exp_thread;
-    if (thread_sp) {
-      // We have thread local storage address specification. Try to resolve the
-      // TLS address via the dynamic loader.
-      DynamicLoader *dyld = process.GetDynamicLoader();
-      if (dyld) {
-        addr_t load_addr = 
-            dyld->GetThreadLocalData(module_sp, thread_sp, m_value);
-        if (load_addr != LLDB_INVALID_ADDRESS)
-          return load_addr;
-        return llvm::createStringError(
-            "dynamic loader was unable to resolve the thread local address");
-      }
-      return llvm::createStringError(
-            "no dynamic loader, unable to resolve the thread local address");
-    } else {
-      // m_value is a file address within a module.
-      Address so_addr;
-      if (module_sp->ResolveFileAddress(m_value, so_addr)) {
-        addr_t load_addr = so_addr.GetLoadAddress(&process.GetTarget());
-        if (load_addr != LLDB_INVALID_ADDRESS)
-          return load_addr;
-        return llvm::createStringError(
-            "section for module file address is not loaded in the target");
-      }
-      return llvm::createStringError(
-          "unable to resolve file address in module");      
-    }
-  }
-  // We just have a plain load address already
-  return m_value;
-}
-
-llvm::Expected<AddressSpaceInfo> 
 Process::GetAddressSpaceInfo(llvm::StringRef address_space_name) {
   if (m_address_spaces.empty())
     return llvm::createStringError("process doesn't support address spaces");
 
-  for (const auto &address_space_info: m_address_spaces) {
-    if (address_space_info.name == address_space_name.str())
-      return address_space_info;
+  for (const AddressSpaceInfo &info : m_address_spaces) {
+    if (address_space_name == info.name)
+      return info;
   }
 
-  std::string error_str("invalid address space \"");
-  error_str.append(address_space_name.str());
-  error_str.append("\", address space must be one of:");
-  bool first = true;
-  for (const auto &addr_space_info: m_address_spaces) {
-    if (!first)
-      error_str.append(",");
-    error_str.append(" \"");
-    error_str.append(addr_space_info.name);
-    error_str.append("\"");
-    first = false;
-  }
-  return llvm::createStringError(error_str.c_str());
+  std::string names = llvm::join(
+      llvm::map_range(m_address_spaces,
+                      [](const AddressSpaceInfo &info) { return info.name; }),
+      ", ");
+  return llvm::createStringError(
+      "invalid address space \"%s\", expected one of: %s",
+      address_space_name.str().c_str(), names.c_str());
 }
 
-
-llvm::Expected<AddressSpaceInfo> 
-Process::GetAddressSpaceInfo(uint64_t address_space_id) {
+llvm::Expected<AddressSpaceInfo>
+Process::GetAddressSpaceInfo(lldb::addr_space_t address_space_id) {
   if (m_address_spaces.empty())
     return llvm::createStringError("process doesn't support address spaces");
 
-  for (const auto &address_space_info: m_address_spaces) {
-    if (address_space_info.value == address_space_id)
-      return address_space_info;
+  for (const AddressSpaceInfo &info : m_address_spaces) {
+    if (info.space_id == address_space_id)
+      return info;
   }
-  return llvm::createStringError("invalid address space id");
+
+  std::string ids =
+      llvm::join(llvm::map_range(m_address_spaces,
+                                 [](const AddressSpaceInfo &info) {
+                                   return std::to_string(info.space_id);
+                                 }),
+                 ", ");
+  return llvm::createStringError("invalid address space id %" PRIu64
+                                 ", expected one of: %s",
+                                 address_space_id, ids.c_str());
 }
 
 lldb::ThreadGroupSP Process::GetSIMDThreadGroup(lldb::tid_t simd_id) {

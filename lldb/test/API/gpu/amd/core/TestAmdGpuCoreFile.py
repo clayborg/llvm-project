@@ -243,9 +243,9 @@ class TestAmdGpuCoreFile(TestBase):
               f"from module '{read_module_name}' ===")
 
         error = lldb.SBError()
-        addr_spec = lldb.SBAddressSpec(read_addr)
-        data = gpu_process.ReadMemoryFromSpec(addr_spec, 16, error)
-        print(f"=== DEBUG: ReadMemoryFromSpec result: error.Success()={error.Success()}, "
+        process_addr = lldb.SBProcessAddress(read_addr)
+        data = gpu_process.ReadMemory(process_addr, 16, error)
+        print(f"=== DEBUG: ReadMemory result: error.Success()={error.Success()}, "
               f"error='{error.GetCString()}', data={data}, "
               f"data_type={type(data)}, len={len(data) if data else 'N/A'} ===")
 
