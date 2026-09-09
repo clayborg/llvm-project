@@ -45,6 +45,9 @@ struct CoreDefinition {
     llvm::Triple::r600, ArchSpec::eCore_amd_gpu_r600_##sub, "r600"}
 #define AMD_GPU_CORE_DEF_GCN(sub) {eByteOrderLittle, 8, 4, 16,\
     llvm::Triple::amdgcn, ArchSpec::eCore_amd_gpu_gcn_##sub, "amdgcn"}
+#define INTEL_GPU_CORE_DEF_XE(sub) {eByteOrderLittle, 8, 8, 16, \
+    llvm::Triple::intelgt, ArchSpec::eCore_intel_gpu_xe_##sub, "intelgt"}
+
 // This core information can be looked using the ArchSpec::Core as the index
 static constexpr const CoreDefinition g_core_definitions[] = {
     {eByteOrderLittle, 4, 2, 4, llvm::Triple::arm, ArchSpec::eCore_arm_generic,
@@ -327,8 +330,11 @@ static constexpr const CoreDefinition g_core_definitions[] = {
       ArchSpec::eCore_nvidia_nvptx,"nvptx"},
     {eByteOrderLittle, 8, 4, 4, llvm::Triple::nvptx64,
       ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
-    {eByteOrderLittle, 8, 8, 16, llvm::Triple::spirv64,
-      ArchSpec::eCore_intelgt_generic, "spirv64"}, // Intel GPU (Arc/XE family) spirv64
+    INTEL_GPU_CORE_DEF_XE(HP),
+    INTEL_GPU_CORE_DEF_XE(HPG),
+    INTEL_GPU_CORE_DEF_XE(HPC),
+    INTEL_GPU_CORE_DEF_XE(XE2),
+    INTEL_GPU_CORE_DEF_XE(unknown), // Intel GPU (Arc/XE family) intelgt
   };
 
 // Ensure that we have an entry in the g_core_definitions for each core. If you
@@ -459,6 +465,8 @@ static const ArchDefinition g_macho_arch_def = {eArchTypeMachO,
     llvm::ELF::EM_AMDGPU, llvm::ELF::EF_AMDGPU_MACH_R600_##sub}
 #define AMD_GPU_ARCH_DEF_GCN(sub) {ArchSpec::eCore_amd_gpu_gcn_##sub,\
     llvm::ELF::EM_AMDGPU, llvm::ELF::EF_AMDGPU_MACH_AMDGCN_##sub}
+#define INTEL_GPU_ARCH_DEF_XE(sub) {ArchSpec::eCore_intel_gpu_xe_##sub,\
+    llvm::ELF::EM_INTELGT}
 //===----------------------------------------------------------------------===//
 // A table that gets searched linearly for matches. This table is used to
 // convert cpu type and subtypes to architecture names, and to convert
@@ -573,7 +581,11 @@ static const ArchDefinitionEntry g_elf_arch_entries[] = {
     {ArchSpec::eCore_nvidia_nvptx,    llvm::ELF::EM_CUDA        }, // NVidia GPU
     {ArchSpec::eCore_nvidia_nvptx64,  llvm::ELF::EM_CUDA        },
 
-    {ArchSpec::eCore_intelgt_generic, llvm::ELF::EM_INTELGT     }, // Intel GPU (Arc/XE)
+INTEL_GPU_ARCH_DEF_XE(HP),  // Intel GPU
+INTEL_GPU_ARCH_DEF_XE(HPG),
+INTEL_GPU_ARCH_DEF_XE(HPC),
+INTEL_GPU_ARCH_DEF_XE(XE2),
+INTEL_GPU_ARCH_DEF_XE(unknown),
 };
 // clang-format on
 
@@ -1181,6 +1193,15 @@ static ArchSpec::Core GetAMDGPUVariantToCoreGCN(llvm::StringRef core_name) {
       .Default(ArchSpec::eCore_amd_gpu_gcn_unknown);
 }
 
+static ArchSpec::Core GetIntelGPUVariantToCoreXE(llvm::StringRef variant) {
+  return llvm::StringSwitch<ArchSpec::Core>(variant)
+      .Case("xe-hp", ArchSpec::eCore_intel_gpu_xe_HP)
+      .Case("xe-hpg", ArchSpec::eCore_intel_gpu_xe_HPG)
+      .Case("xe-hpc", ArchSpec::eCore_intel_gpu_xe_HPC)
+      .Case("xe2", ArchSpec::eCore_intel_gpu_xe_XE2)
+      .Default(ArchSpec::eCore_intel_gpu_xe_unknown);
+}
+
 bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
                                uint32_t sub, uint32_t os) {
   m_core = kCore_invalid;
@@ -1425,6 +1446,8 @@ void ArchSpec::UpdateCore() {
       // Need to set the AMD core correctly from the environment.
       m_core = GetAMDGPUVariantToCoreR600(
           m_triple.getEnvironmentName().split('-').second);
+    } else if (m_core == eCore_intel_gpu_xe_HP) {
+      m_core = GetIntelGPUVariantToCoreXE(m_triple.getEnvironmentName());
     }
   } else {
     Clear();

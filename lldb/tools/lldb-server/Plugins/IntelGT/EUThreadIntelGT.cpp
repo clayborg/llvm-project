@@ -14,9 +14,11 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/lldb-enumerations.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <signal.h>
 
 using namespace lldb;
@@ -41,8 +43,7 @@ EUThreadIntelGT::EUThreadIntelGT(ze_device_thread_t ze_thread,
       m_simd_width(simd_width), m_device_id(device_id),
       m_active_lanes((1u << simd_width) - 1) {
   // Default: all lanes active.  ReadExecutionMask() refines this.
-  // Default stop reason: SIGTRAP, matches AMD shadow-thread convention.
-  SetStopReason(eStopReasonSignal, SIGTRAP);
+  SetStopReason(lldb::eStopReasonNone, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ void EUThreadIntelGT::ReadStopReason() {
   ze_result_t result =
       zetDebugReadRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
   if (result != ZE_RESULT_SUCCESS) {
-    SetStopReason(eStopReasonSignal, SIGTRAP);
+    SetStopReason(lldb::eStopReasonNone,0);
     return;
   }
 
@@ -82,66 +83,93 @@ void EUThreadIntelGT::SetStopReasonFromCR0(uint32_t cr0_dword1) {
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_shared_function_exception_status)) {
     ClearExceptionBit(intelgt::cr0_1_shared_function_exception_status);
-    SetStopReason(eStopReasonException, SIGSEGV);
+    SetStopReason(eStopReasonException, 0);
     m_stop_description = "Shared function exception";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_oob_status)) {
     ClearExceptionBit(intelgt::cr0_1_oob_status);
-    SetStopReason(eStopReasonException, SIGILL);
-    if (intelgt::is_xe2_or_later(m_device_id)) {
+    SetStopReason(eStopReasonException, 0);
+    if (intelgt::is_xe2_or_later(m_device_id))
       m_stop_description = "Systolic exception";
-    } else {
+    else
       m_stop_description = "Out of bounds";
-    }
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_illegal_opcode_status)) {
     ClearExceptionBit(intelgt::cr0_1_illegal_opcode_status);
-    SetStopReason(eStopReasonException, SIGILL);
+    SetStopReason(eStopReasonException, 0);
     m_stop_description = "Illegal opcode";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_pagefault_status)) {
     ClearExceptionBit(intelgt::cr0_1_pagefault_status);
-    SetStopReason(eStopReasonException, SIGSEGV);
+    SetStopReason(eStopReasonException, 0);
     m_stop_description = "Page fault";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_software_exception_control)) {
     ClearExceptionBit(intelgt::cr0_1_software_exception_control);
-    SetStopReason(eStopReasonException, SIGTRAP);
+    SetStopReason(eStopReasonException, 0);
     m_stop_description = "Software exception";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_force_exception_status)) {
     ClearExceptionBit(intelgt::cr0_1_force_exception_status);
-    SetStopReason(eStopReasonException, SIGINT);
+    SetStopReason(eStopReasonException, 0);
     m_stop_description = "Force exception";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_external_halt_status)) {
-    SetStopReason(eStopReasonException, SIGINT);
+    SetStopReason(eStopReasonException,0);
     m_stop_description = "External halt";
     return;
   }
 
   if (cr0_dword1 & (1u << intelgt::cr0_1_breakpoint_status)) {
-    if (m_resume_state == ResumeState::Step) {
+    if (m_resume_state == ResumeState::Step)
       SetStopReason(eStopReasonTrace, SIGTRAP);
-    } else {
+    else
       SetStopReason(eStopReasonBreakpoint, SIGTRAP);
-    }
     return;
   }
-  // Fallback: treat as SIGTRAP.
-  SetStopReason(eStopReasonSignal, SIGTRAP);
+  // Fallback.
+  SetStopReason(lldb::eStopReasonNone, 0);
+}
+
+void EUThreadIntelGT::SetStopReasonToSignal(uint32_t signo, const char *description) {
+  m_stop_info = ThreadStopInfo{};
+  m_stop_info.reason = eStopReasonSignal;
+  m_stop_info.signo = signo;
+  if (description)
+    m_stop_description = description;
+  else
+    m_stop_description.clear();
+}
+
+void EUThreadIntelGT::SetStopReasonToException(uint32_t type,
+                                               llvm::ArrayRef<uint64_t> data,
+                                               const char *description) {
+  m_stop_info = ThreadStopInfo{};
+  m_stop_info.reason = eStopReasonException;
+  m_stop_info.signo = 0;
+  m_stop_info.details.exception.type = type;
+
+  const size_t max_data = std::size(m_stop_info.details.exception.data);
+  const size_t count    = std::min<size_t>(data.size(), max_data);
+  m_stop_info.details.exception.data_count = static_cast<uint32_t>(count);
+  for (size_t i = 0; i < count; ++i)
+    m_stop_info.details.exception.data[i] = data[i];
+  if (description)
+    m_stop_description = description;
+  else
+    m_stop_description.clear();
 }
 
 void EUThreadIntelGT::SetStopReason(StopReason reason, uint32_t signo) {
@@ -155,9 +183,8 @@ void EUThreadIntelGT::ClearExceptionBit(uint32_t bit_position) {
   uint32_t cr0[4] = {};
   ze_result_t result =
       zetDebugReadRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return;
-  }
 
   cr0[1] &= ~(1u << bit_position);
 
@@ -177,9 +204,8 @@ void EUThreadIntelGT::SuppressCurrentBreakpoint() {
   uint32_t cr0[4] = {};
   ze_result_t result =
       zetDebugReadRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return;
-  }
 
   cr0[0] |= (1u << intelgt::cr0_0_breakpoint_suppress);
 
@@ -187,10 +213,9 @@ void EUThreadIntelGT::SuppressCurrentBreakpoint() {
   // single-step (suppress current + break on next) instead of a continue.
   cr0[1] &= ~(1u << intelgt::cr0_1_breakpoint_status);
 
-  result = zetDebugWriteRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
-  } else {
-  }
+  // Fire and Forget: if write call fails, resume will rehit the same bp
+  // and callers m_resume_state is unchanged (Run/Step)
+  zetDebugWriteRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,24 +224,23 @@ void EUThreadIntelGT::SuppressCurrentBreakpoint() {
 // Arm a single-step by setting CR0.0 bit 15 (suppress current) and CR0.1
 // bit 31 (break on next). zetDebugResume has no step flag; CR0 drives it.
 
-void EUThreadIntelGT::PrepareStep() {
+bool EUThreadIntelGT::PrepareStep() {
   // CR0 is 4 DWORDs (16 bytes).  Read, modify, write.
   uint32_t cr0[4] = {};
   ze_result_t result =
       zetDebugReadRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
-    return;
-  }
+  if (result != ZE_RESULT_SUCCESS)
+    return false;
 
   cr0[0] |= (1u << intelgt::cr0_0_breakpoint_suppress);
   cr0[1] |= (1u << intelgt::cr0_1_breakpoint_status);
 
   result = zetDebugWriteRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
-    return;
-  }
+  if (result != ZE_RESULT_SUCCESS)
+    return false;
 
   m_resume_state = ResumeState::Step;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,16 +252,19 @@ void EUThreadIntelGT::ClearStepBits() {
   uint32_t cr0[4] = {};
   ze_result_t result =
       zetDebugReadRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return;
-  }
 
+  // Clear BOTH the break-on-next arming bit (CR0.1[31]) AND the sticky
+  // suppress-current bit (CR0.0[15]) set by PrepareStep. Leaving bit 15 set
+  // makes the next resume silently skip whatever breakpoint the EU is on,
+  // which can look like "step didn't happen" or "breakpoint was missed".
+  cr0[0] &= ~(1u << intelgt::cr0_0_breakpoint_suppress);
   cr0[1] &= ~(1u << intelgt::cr0_1_breakpoint_status);
 
   result = zetDebugWriteRegisters(m_session, m_ze_thread, kRegsetCR, 0, 1, cr0);
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return;
-  }
 
   m_resume_state = ResumeState::Run;
 }
@@ -306,15 +333,10 @@ lldb::tid_t EUThreadIntelGT::AddLaneThreads(
   // eStopReasonBreakpoint so Thread::ShouldStop engages the step plan.
   lldb::tid_t first_active_tid = LLDB_INVALID_THREAD_ID;
 
-  // Stable per-lane TID: [slice:16][subslice:16][eu:16][thread+1:8][lane:8].
-  // The +1 keeps TIDs >= 0x100 (avoiding LLDB_INVALID_THREAD_ID=0 and the
-  // shadow-thread TID=1) and prevents bit-8 aliasing between different
-  // hardware thread indices.
+  // Encoding lives in LevelZeroHelpers.h so tests and other callers can
+  // decode a TID back into slice/subslice/eu/thread/lane.
   auto lane_tid = [this](uint32_t lane) -> lldb::tid_t {
-    return ((uint64_t)m_ze_thread.slice << 48) |
-           ((uint64_t)m_ze_thread.subslice << 32) |
-           ((uint64_t)m_ze_thread.eu << 16) |
-           ((uint64_t)(m_ze_thread.thread + 1) << 8) | lane;
+    return EncodeLaneTID(m_ze_thread, lane);
   };
 
   // Decide the focus lane up front: honour focus_tid if it names an active
@@ -347,7 +369,7 @@ lldb::tid_t EUThreadIntelGT::AddLaneThreads(
     } else {
       // Siblings share the EU's hardware stop; report eStopReasonBreakpoint
       // so Thread::ShouldStop consults the step plan on sibling-lane steps.
-      t->SetStopReason(eStopReasonBreakpoint, SIGTRAP);
+      t->SetStopReason(eStopReasonBreakpoint, 0);
     }
 
     threads.push_back(std::move(t));

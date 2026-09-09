@@ -115,9 +115,8 @@ void ThreadIntelGT::SetStopReason(StopReason reason, uint32_t signo) {
   // Per-lane stop reason; does not propagate to the EU thread. The shadow
   // thread must stay at eStopReasonNone or LLDB will select it as the stopped
   // thread instead of the real GPU thread that hit the breakpoint.
-  if (IsShadowThread() && reason != eStopReasonNone) {
+  if (IsShadowThread() && reason != eStopReasonNone)
     return;
-  }
 
   m_stop_info = ThreadStopInfo{};
   m_stop_info.reason = reason;

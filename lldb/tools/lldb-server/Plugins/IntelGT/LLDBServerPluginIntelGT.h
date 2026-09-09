@@ -78,6 +78,8 @@ public:
 
   std::optional<GPUActions> NativeProcessIsStopping() override;
 
+  bool ReportsGPUActionsOnOwnStop() override { return true; }
+
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
   llvm::Expected<GPUPluginBreakpointHitResponse>
@@ -87,6 +89,9 @@ public:
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
   // ----- Accessors ----------------------------------------------------------
+
+  /// Return the Xe variant string for the attached device, or "" if unknown.
+  std::string DetermineXeVariant() const;
 
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();

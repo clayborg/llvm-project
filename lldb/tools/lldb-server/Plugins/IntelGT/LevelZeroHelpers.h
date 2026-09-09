@@ -167,47 +167,55 @@ inline void ZeAckEvent(zet_debug_session_handle_t session,
 }
 
 // ---------------------------------------------------------------------------
-// TID encoding / decoding
+// Lane TID encoding / decoding
 // ---------------------------------------------------------------------------
-// tid = device_session.tid_base + per_device_lwp; per_device_lwp is
-// slice/subslice/eu/thread flattened + 1. TID 1 is the shadow thread.
+// Threads reported to LLDB are per-lane. The 64-bit lldb::tid_t is packed:
+//
+//     bit 63 .. 48   47 .. 32   31 .. 16   15 .. 8   7 .. 0
+//        slice       subslice      eu       thr+1     lane
+//        16 bits     16 bits    16 bits    8 bits    8 bits
+//
+// The `+1` on the hardware thread index keeps every EU-lane TID >= 0x100,
+// leaving 0 (LLDB_INVALID_THREAD_ID) and 1 (INTELGT_SHADOW_THREAD_ID)
+// available. The extra byte also prevents low-bit aliasing between two
+// EU threads that only differ in `thread`.
 
-inline lldb::tid_t ZeThreadToTID(uint32_t device_index, uint64_t tid_base,
-                                 ze_device_thread_t ze_thread,
-                                 const ze_device_properties_t &props) {
-  uint64_t threads_per_eu = props.numThreadsPerEU;
-  uint64_t threads_per_subslice = props.numEUsPerSubslice * threads_per_eu;
-  uint64_t threads_per_slice =
-      props.numSubslicesPerSlice * threads_per_subslice;
+struct LaneTIDFields {
+  uint32_t slice;
+  uint32_t subslice;
+  uint32_t eu;
+  uint32_t thread; // hardware thread index (already decoded, no +1 offset)
+  uint32_t lane;
+};
 
-  uint64_t per_device_lwp =
-      (uint64_t)ze_thread.slice * threads_per_slice +
-      (uint64_t)ze_thread.subslice * threads_per_subslice +
-      (uint64_t)ze_thread.eu * threads_per_eu + (uint64_t)ze_thread.thread + 1;
-
-  return static_cast<lldb::tid_t>(tid_base + per_device_lwp);
+/// Encode a per-lane TID for a given EU thread and SIMD lane.
+inline lldb::tid_t EncodeLaneTID(ze_device_thread_t ze_thread, uint32_t lane) {
+  return (static_cast<uint64_t>(ze_thread.slice) << 48) |
+         (static_cast<uint64_t>(ze_thread.subslice) << 32) |
+         (static_cast<uint64_t>(ze_thread.eu) << 16) |
+         (static_cast<uint64_t>(ze_thread.thread + 1) << 8) |
+         static_cast<uint64_t>(lane & 0xFF);
 }
 
-inline ze_device_thread_t TIDToZeThread(lldb::tid_t tid,
-                                        uint32_t /*device_index*/,
-                                        uint64_t tid_base,
-                                        const ze_device_properties_t &props) {
-  uint64_t threads_per_eu = props.numThreadsPerEU;
-  uint64_t threads_per_subslice = props.numEUsPerSubslice * threads_per_eu;
-  uint64_t threads_per_slice =
-      props.numSubslicesPerSlice * threads_per_subslice;
+/// Reverse of EncodeLaneTID.
+inline LaneTIDFields DecodeLaneTID(lldb::tid_t tid) {
+  LaneTIDFields f;
+  f.slice = static_cast<uint32_t>((tid >> 48) & 0xFFFF);
+  f.subslice = static_cast<uint32_t>((tid >> 32) & 0xFFFF);
+  f.eu = static_cast<uint32_t>((tid >> 16) & 0xFFFF);
+  f.thread = static_cast<uint32_t>(((tid >> 8) & 0xFF) - 1);
+  f.lane = static_cast<uint32_t>(tid & 0xFF);
+  return f;
+}
 
-  uint64_t per_device_lwp = static_cast<uint64_t>(tid) - tid_base;
-  // Subtract 1 (see ZeThreadToTID).
-  per_device_lwp -= 1;
-
-  ze_device_thread_t t;
-  t.slice = static_cast<uint32_t>(per_device_lwp / threads_per_slice);
-  per_device_lwp %= threads_per_slice;
-  t.subslice = static_cast<uint32_t>(per_device_lwp / threads_per_subslice);
-  per_device_lwp %= threads_per_subslice;
-  t.eu = static_cast<uint32_t>(per_device_lwp / threads_per_eu);
-  t.thread = static_cast<uint32_t>(per_device_lwp % threads_per_eu);
+/// Extract just the ze_device_thread_t portion of a lane TID.
+inline ze_device_thread_t LaneTIDToZeThread(lldb::tid_t tid) {
+  LaneTIDFields f = DecodeLaneTID(tid);
+  ze_device_thread_t t{};
+  t.slice = f.slice;
+  t.subslice = f.subslice;
+  t.eu = f.eu;
+  t.thread = f.thread;
   return t;
 }
 

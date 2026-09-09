@@ -35,7 +35,21 @@ class IntelGtTestCaseBase(GpuTestCaseBase):
         Returns:
             List of GPU threads stopped at the breakpoint
         """
-        # Build and create target
+        # Set the GPU breakpoint on the dummy target before creating the CPU
+        # target. Any breakpoints on the dummy target are copied into every
+        # subsequently created target, including the GPU target that the
+        # IntelGT plugin auto-creates during launch. This avoids the race
+        # where we need the GPU target to exist before we can set the
+        # breakpoint on it.
+        dummy_target = self.dbg.GetDummyTarget()
+        self.assertTrue(dummy_target.IsValid(), "Dummy target should be valid")
+        source_spec = lldb.SBFileSpec(source, False)
+        gpu_bkpt = dummy_target.BreakpointCreateBySourceRegex(
+            gpu_bkpt_pattern, source_spec
+        )
+        self.assertTrue(gpu_bkpt.IsValid(), "GPU breakpoint should be valid")
+
+        # Build and create target - inherits the breakpoint from the dummy.
         exe = self.getBuildArtifact(exe_name)
         target = self.dbg.CreateTarget(exe)
         self.assertTrue(target.IsValid(), "Target should be valid")
@@ -46,7 +60,8 @@ class IntelGtTestCaseBase(GpuTestCaseBase):
         env_list = [f"{key}={value}" for key, value in os.environ.items()]
         launch_info.SetEnvironmentEntries(env_list, True)
 
-        # Launch the process - this will create both CPU and GPU targets
+        # Launch the process - this will create both CPU and GPU targets. The
+        # GPU target inherits the breakpoint from the dummy target as well.
         process = target.Launch(launch_info, lldb.SBError())
         self.assertTrue(process.IsValid(), "Process should launch")
 
@@ -64,12 +79,6 @@ class IntelGtTestCaseBase(GpuTestCaseBase):
         # Now GPU target should exist
         self.assertEqual(self.dbg.GetNumTargets(), 2, "Should have CPU and GPU targets")
         self.assertTrue(self.gpu_target.IsValid(), "GPU target should be valid")
-
-        # Set GPU breakpoint on the GPU target
-        self.select_gpu()
-        source_spec = lldb.SBFileSpec(source, False)
-        gpu_bkpt = self.gpu_target.BreakpointCreateBySourceRegex(gpu_bkpt_pattern, source_spec)
-        self.assertTrue(gpu_bkpt.IsValid(), "GPU breakpoint should be valid")
 
         # Continue the CPU process to let kernel execute
         self.select_cpu()

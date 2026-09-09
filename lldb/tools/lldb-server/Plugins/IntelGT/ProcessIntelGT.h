@@ -230,9 +230,6 @@ public:
   /// True if any stopped thread has eStopReasonTrace (step-complete).
   bool IsAnyThreadSteppingCompleted() const;
 
-  /// Remove trace-stop EU threads from the stopped list and m_threads.
-  void RemoveSteppedThreads();
-
   /// Handle a THREAD_STOPPED event; create the EUThreadIntelGT and lane
   /// threads. Returns the TID of the first lane of the first stopped EU.
   lldb::tid_t HandleZeThreadStopped(const DeviceSession &ds,

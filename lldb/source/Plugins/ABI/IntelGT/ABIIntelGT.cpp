@@ -47,7 +47,7 @@ void ABIIntelGT::Terminate() {
 
 lldb::ABISP ABIIntelGT::CreateInstance(lldb::ProcessSP process_sp,
                                        const ArchSpec &arch) {
-  if (arch.GetTriple().getArch() == llvm::Triple::spirv64) {
+  if (arch.GetTriple().getArch() == llvm::Triple::intelgt) {
     // Registers are discovered dynamically; a dummy MCRegisterInfo suffices.
     auto mc_reg_info = std::make_unique<llvm::MCRegisterInfo>();
     mc_reg_info->InitMCRegisterInfo(nullptr, // MCRegisterDesc *D

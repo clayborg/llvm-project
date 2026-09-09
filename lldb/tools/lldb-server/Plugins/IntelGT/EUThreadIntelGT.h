@@ -105,6 +105,12 @@ public:
   /// Clear the exception bit at \a bit_position in CR0.1.
   void ClearExceptionBit(uint32_t bit_position);
 
+  /// Set an explicit stop reason to Exception
+  void SetStopReasonToException(uint32_t type, llvm::ArrayRef<uint64_t> data, const char *description);
+
+  /// Set an explicit stop reason to signal
+  void SetStopReasonToSignal(uint32_t signo, const char *description);
+
   /// Set an explicit stop reason.
   void SetStopReason(lldb::StopReason reason, uint32_t signo = 0);
 
@@ -126,8 +132,10 @@ public:
   void SuppressCurrentBreakpoint();
 
   /// Arm a single-step by setting the suppress bit and CR0.1 bit 31 so the
-  /// next instruction triggers a breakpoint exception.
-  void PrepareStep();
+  /// next instruction triggers a breakpoint exception. Returns true only if
+  /// the CR0 write succeeded; on false, the EU is NOT armed for stepping and
+  /// the caller must not add this thread to any pending-step bookkeeping.
+  bool PrepareStep();
 
   /// Clear CR0.1 bit 31 (breakpoint_status) after a single-step completes.
   void ClearStepBits();
