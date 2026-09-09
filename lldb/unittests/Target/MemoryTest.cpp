@@ -50,8 +50,8 @@ public:
   void RefreshStateAfterStop() override {}
   // Required by Target::ReadMemory() to call Process::ReadMemory()
   bool IsAlive() override { return true; }
-  size_t DoReadMemory(lldb::addr_t vm_addr, void *buf, size_t size,
-                      Status &error) override {
+  size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
+                      size_t size, Status &error) override {
     if (m_bytes_left == 0)
       return 0;
 
@@ -305,8 +305,9 @@ public:
   bool read_less_than_requested = false;
   bool read_more_than_requested = false;
 
-  size_t DoReadMemory(lldb::addr_t vm_addr, void *buf, size_t size,
-                      Status &error) override {
+  size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
+                      size_t size, Status &error) override {
+    lldb::addr_t vm_addr = process_addr.GetValue();
     if (read_less_than_requested && size > 0)
       size--;
     if (read_more_than_requested)

@@ -79,15 +79,12 @@ public:
   bool DoUpdateThreadList(lldb_private::ThreadList &old_thread_list,
                           lldb_private::ThreadList &new_thread_list) override;
 
-  size_t ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                    lldb_private::Status &error) override;
+  size_t ReadMemory(const lldb_private::ProcessAddress &process_addr, void *buf,
+                    size_t size, lldb_private::Status &error) override;
 
-  size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
+  size_t DoReadMemory(const lldb_private::ProcessAddress &process_addr,
+                      void *buf, size_t size,
                       lldb_private::Status &error) override;
-
-  size_t DoReadMemory(const lldb_private::AddressSpec &addr_spec,
-                      const lldb_private::AddressSpaceInfo &info, void *buf,
-                      size_t size, lldb_private::Status &error) override;
 
   lldb_private::ObjectFile *GetCoreObjectFile() const;
 
@@ -97,6 +94,9 @@ protected:
                         lldb_private::MemoryRegionInfo &region_info) override;
 
 private:
+  size_t ReadGlobalMemory(lldb::addr_t addr, void *buf, size_t size,
+                          lldb_private::Status &error);
+
   llvm::Error LoadCubinModules();
 
   /// Decode the coredump metadata section (if present) into `m_producer`, log

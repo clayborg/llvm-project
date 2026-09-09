@@ -1,4 +1,5 @@
 add_lldb_unittest(UtilityTests
+  AddressSpaceTest.cpp
   AnsiTerminalTest.cpp
   ArgsTest.cpp
   OptionsWithRawTest.cpp

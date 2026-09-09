@@ -236,27 +236,66 @@ Status ProcessAMDGPU::Interrupt() {
 
 Status ProcessAMDGPU::Kill() { return Status(); }
 
-Status ProcessAMDGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                                 size_t &bytes_read) {
-  // Prefer dbgapi: unlike the host process, it can access GPU memory while
-  // the host process is running.
-  amd_dbgapi_size_t dbgapi_size = size;
-  llvm::Error err = RunAmdDbgApiCommand([&] {
-    return amd_dbgapi_read_memory(
-        GetDbgApiProcessID(), AMD_DBGAPI_WAVE_NONE, AMD_DBGAPI_LANE_NONE,
-        AMD_DBGAPI_ADDRESS_SPACE_GLOBAL, addr, &dbgapi_size, buf);
-  });
-  if (!err) {
-    bytes_read = dbgapi_size;
-    return Status();
-  }
-  LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
-                 "dbgapi read at {1:x} failed, using host process: {0}", addr);
+Status ProcessAMDGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
+                                 size_t size, size_t &bytes_read) {
+  const lldb::addr_t addr = process_addr.GetValue();
+  if (process_addr.IsInDefaultAddressSpace()) {
+    // Prefer dbgapi: unlike the host process, it can access GPU memory while
+    // the host process is running.
+    amd_dbgapi_size_t dbgapi_size = size;
+    llvm::Error err = RunAmdDbgApiCommand([&] {
+      return amd_dbgapi_read_memory(
+          GetDbgApiProcessID(), AMD_DBGAPI_WAVE_NONE, AMD_DBGAPI_LANE_NONE,
+          AMD_DBGAPI_ADDRESS_SPACE_GLOBAL, addr, &dbgapi_size, buf);
+    });
+    if (!err) {
+      bytes_read = dbgapi_size;
+      return Status();
+    }
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                   "dbgapi read at {1:x} failed, using host process: {0}",
+                   addr);
 
-  NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
-  if (!native_process)
-    return Status::FromErrorString("native process is unavailable");
-  return native_process->ReadMemory(addr, buf, size, bytes_read);
+    NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
+    if (!native_process)
+      return Status::FromErrorString("native process is unavailable");
+    return native_process->ReadMemory(process_addr, buf, size, bytes_read);
+  }
+
+  const lldb::addr_space_t addr_space = process_addr.GetAddressSpace();
+  NativeThreadProtocol *thread = nullptr;
+  if (std::optional<lldb::tid_t> tid = process_addr.GetThreadID()) {
+    thread = GetThreadByID(*tid);
+    if (!thread)
+      return Status::FromErrorStringWithFormat("invalid thread ID 0x%" PRIx64,
+                                               *tid);
+  }
+
+  // Convert dwarf address space to debug api address space.
+  amd_dbgapi_address_space_id_t address_space_id;
+  if (llvm::Error err = RunAmdDbgApiCommand([&] {
+        return amd_dbgapi_dwarf_address_space_to_address_space(
+            m_architecture_id, addr_space, &address_space_id);
+      }))
+    return Status::FromError(std::move(err));
+
+  // Grab the process, wave, and lane ids if available.
+  ThreadAMDGPU *amd_thread = static_cast<ThreadAMDGPU *>(thread);
+  amd_dbgapi_process_id_t process_id = GetDbgApiProcessID();
+  amd_dbgapi_wave_id_t wave_id =
+      amd_thread ? amd_thread->GetDbgApiWaveID() : AMD_DBGAPI_WAVE_NONE;
+  amd_dbgapi_lane_id_t lane_id =
+      amd_thread ? amd_thread->GetDbgApiLaneID() : AMD_DBGAPI_LANE_NONE;
+
+  // Do the actual read memory.
+  if (llvm::Error err = RunAmdDbgApiCommand([&] {
+        return amd_dbgapi_read_memory(process_id, wave_id, lane_id,
+                                      address_space_id, addr, &size, buf);
+      }))
+    return Status::FromError(std::move(err));
+
+  bytes_read = size;
+  return Status();
 }
 
 Status ProcessAMDGPU::WriteMemory(lldb::addr_t addr, const void *buf,
@@ -298,38 +337,6 @@ std::vector<AddressSpaceInfo> ProcessAMDGPU::GetAddressSpaces() {
                             /*is_thread_specific=*/true});
 
   return address_spaces;
-}
-
-Status ProcessAMDGPU::ReadMemoryWithSpace(lldb::addr_t addr,
-                                          uint64_t addr_space,
-                                          NativeThreadProtocol *thread,
-                                          void *buf, size_t size,
-                                          size_t &bytes_readn) {
-  // Convert dwarf address space to debug api address space.
-  amd_dbgapi_address_space_id_t address_space_id;
-  if (llvm::Error err = RunAmdDbgApiCommand([&] {
-        return amd_dbgapi_dwarf_address_space_to_address_space(
-            m_architecture_id, addr_space, &address_space_id);
-      }))
-    return Status::FromError(std::move(err));
-
-  // Grab the process, wave, and lane ids if available.
-  ThreadAMDGPU *amd_thread = static_cast<ThreadAMDGPU *>(thread);
-  amd_dbgapi_process_id_t process_id = GetDbgApiProcessID();
-  amd_dbgapi_wave_id_t wave_id =
-      amd_thread ? amd_thread->GetDbgApiWaveID() : AMD_DBGAPI_WAVE_NONE;
-  amd_dbgapi_lane_id_t lane_id =
-      amd_thread ? amd_thread->GetDbgApiLaneID() : AMD_DBGAPI_LANE_NONE;
-
-  // Do the actual read memory.
-  if (llvm::Error err = RunAmdDbgApiCommand([&] {
-        return amd_dbgapi_read_memory(process_id, wave_id, lane_id,
-                                      address_space_id, addr, &size, buf);
-      }))
-    return Status::FromError(std::move(err));
-
-  bytes_readn = size;
-  return Status();
 }
 
 lldb::addr_t ProcessAMDGPU::GetSharedLibraryInfoAddress() {

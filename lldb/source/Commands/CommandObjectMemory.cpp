@@ -689,10 +689,19 @@ protected:
         if (process) {
           llvm::StringRef addr_space =
               m_memory_options.m_address_space.GetCurrentValueAsRef();
-          // Store the thread in case the address space is thread specific.
-          AddressSpec addr_spec(addr, addr_space, m_exe_ctx.GetThreadSP());
-          bytes_read = process->ReadMemory(addr_spec, data_sp->GetBytes(), 
-                                          data_sp->GetByteSize(), error);
+          llvm::Expected<AddressSpaceInfo> info =
+              process->GetAddressSpaceInfo(addr_space);
+          if (!info) {
+            error = Status::FromError(info.takeError());
+          } else {
+            // Store the thread ID in case the address space is thread specific.
+            std::optional<lldb::tid_t> tid;
+            if (Thread *thread = m_exe_ctx.GetThreadPtr())
+              tid = thread->GetID();
+            bytes_read = process->ReadMemory(
+                ProcessAddress(addr, info->space_id, tid), data_sp->GetBytes(),
+                data_sp->GetByteSize(), error);
+          }
         } else {
           error = Status::FromErrorString("reading from an address space "
                                           "requires a process");

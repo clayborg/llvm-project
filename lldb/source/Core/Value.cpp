@@ -20,6 +20,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Target/Thread.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
@@ -602,9 +603,12 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
           size_t bytes_read = 0;
           if (m_address_space_id.has_value() &&
               *m_address_space_id != LLDB_DEFAULT_ADDRESS_SPACE) {
-            AddressSpec addr_spec(address, *m_address_space_id,
-                                  exe_ctx->GetThreadSP());
-            bytes_read = process->ReadMemory(addr_spec, dst, byte_size, error);
+            std::optional<lldb::tid_t> tid;
+            if (Thread *thread = exe_ctx->GetThreadPtr())
+              tid = thread->GetID();
+            bytes_read = process->ReadMemory(
+                ProcessAddress(address, *m_address_space_id, tid), dst,
+                byte_size, error);
           } else {
             bytes_read = process->ReadMemory(address, dst, byte_size, error);
           }

@@ -161,8 +161,10 @@ Status ProcessNVGPUCore::DoLoadCore() {
     return Status::FromError(std::move(err));
 
   // Advertise CUDA address spaces so the DWARF evaluator routes
-  // address-space-qualified reads through DoReadMemory(AddressSpec).
-  m_address_spaces = nvgpu::GetAddressSpaceInfos();
+  // address-space-qualified reads through DoReadMemory(ProcessAddress).
+  llvm::ArrayRef<AddressSpaceInfo> address_spaces =
+      nvgpu::GetAddressSpaceInfos();
+  m_address_spaces.assign(address_spaces.begin(), address_spaces.end());
 
   // NVGPU corefiles don't carry a host process ID -- the file is GPU
   // state, not Unix process state. Use 1 to match the live NVGPU debugger.
@@ -338,11 +340,16 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
   return tid > 0;
 }
 
-size_t ProcessNVGPUCore::ReadMemory(addr_t addr, void *buf, size_t size,
-                                    Status &error) {
+size_t ProcessNVGPUCore::ReadMemory(const ProcessAddress &process_addr,
+                                    void *buf, size_t size, Status &error) {
+  error.Clear();
+  if (!process_addr.IsInDefaultAddressSpace())
+    return DoReadMemory(process_addr, buf, size, error);
+
+  addr_t addr = process_addr.GetValue();
   if (ABISP abi_sp = GetABI())
     addr = abi_sp->FixAnyAddress(addr);
-  return DoReadMemory(addr, buf, size, error);
+  return ReadGlobalMemory(addr, buf, size, error);
 }
 
 SectionSP ProcessNVGPUCore::FindGlobalMemorySection(addr_t addr) const {
@@ -354,8 +361,8 @@ SectionSP ProcessNVGPUCore::FindGlobalMemorySection(addr_t addr) const {
   return nullptr;
 }
 
-size_t ProcessNVGPUCore::DoReadMemory(addr_t addr, void *buf, size_t size,
-                                      Status &error) {
+size_t ProcessNVGPUCore::ReadGlobalMemory(addr_t addr, void *buf, size_t size,
+                                          Status &error) {
   ObjectFile *core_objfile = GetCoreObjectFile();
 
   SectionSP region = FindGlobalMemorySection(addr);
@@ -504,37 +511,46 @@ static bool IsAddressInGenericWindow(addr_t addr, addr_t window_base) {
   return addr >= window_base && addr - window_base < kGenericMemoryWindowSize;
 }
 
-size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
-                                      const AddressSpaceInfo &info, void *buf,
-                                      size_t size, Status &error) {
+size_t ProcessNVGPUCore::DoReadMemory(const ProcessAddress &process_addr,
+                                      void *buf, size_t size, Status &error) {
   Log *log = GetLog(LLDBLog::Process);
-  addr_t addr = addr_spec.GetValue();
+  const addr_t addr = process_addr.GetValue();
+
+  if (process_addr.IsInDefaultAddressSpace())
+    return ReadGlobalMemory(addr, buf, size, error);
+
+  llvm::Expected<AddressSpaceInfo> info_or =
+      GetAddressSpaceInfo(process_addr.GetAddressSpace());
+  if (!info_or) {
+    error = Status::FromError(info_or.takeError());
+    return 0;
+  }
+  const AddressSpaceInfo &info = *info_or;
 
   LLDB_LOG(log,
-           "ProcessNVGPUCore::DoReadMemory(AddressSpec) addr={0:x} space={1} "
-           "size={2}",
+           "ProcessNVGPUCore::DoReadMemory(ProcessAddress) addr={0:x} "
+           "space={1} size={2}",
            addr, info.name, size);
 
   // Global memory is not thread-specific and requires no hierarchy lookup.
-  if (info.value == nvgpu::GlobalStorage)
-    return DoReadMemory(addr, buf, size, error);
+  if (info.space_id == nvgpu::GlobalStorage)
+    return ReadGlobalMemory(addr, buf, size, error);
 
   ObjectFile *core = GetCoreObjectFile();
 
-  // Get the thread from the AddressSpec. An absent thread is the API's
-  // expected signal (not all callers attach one), so we don't surface it
-  // to the user; we just log it and fall back to the selected thread
-  // below.
+  // Honor an explicitly qualified thread. Existing core-file callers often
+  // omit one, so retain their selected-thread fallback.
   ThreadSP thread_sp;
-  if (llvm::Expected<ThreadSP> t = addr_spec.GetThread())
-    thread_sp = *t;
-  else
-    LLDB_LOG_ERROR(log, t.takeError(),
-                   "AddressSpec has no attached thread, falling back to "
-                   "selected thread: {0}");
-
-  if (!thread_sp)
+  if (std::optional<lldb::tid_t> tid = process_addr.GetThreadID()) {
+    thread_sp = GetThreadList().FindThreadByID(*tid);
+    if (!thread_sp) {
+      error = Status::FromErrorStringWithFormat("invalid thread ID 0x%" PRIx64,
+                                                *tid);
+      return 0;
+    }
+  } else {
     thread_sp = GetThreadList().GetSelectedThread();
+  }
   if (!thread_sp) {
     error = Status::FromErrorString("no thread for address space read");
     return 0;
@@ -558,7 +574,7 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
     return FailAddressSpaceRead(info, addr, error);
   };
 
-  switch (info.value) {
+  switch (info.space_id) {
   case nvgpu::SharedStorage:
     return read_child(cta_sp, eSectionTypeNVGPUSharedMemory, addr);
   case nvgpu::LocalStorage:
@@ -579,14 +595,14 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
   if (!grid)
     return FailAddressSpaceRead(info, addr, error);
 
-  switch (info.value) {
+  switch (info.space_id) {
   case nvgpu::ConstStorage: {
     if (!AddressInGridConstBanks(*grid->section, core, addr)) {
       error = Status::FromErrorStringWithFormat(
           "address 0x%" PRIx64 " is not within any constant bank", addr);
       return 0;
     }
-    size_t bytes = DoReadMemory(addr, buf, size, error);
+    size_t bytes = ReadGlobalMemory(addr, buf, size, error);
     if (bytes != 0)
       return bytes;
     return FailAddressSpaceRead(info, addr, error);
@@ -626,7 +642,7 @@ size_t ProcessNVGPUCore::DoReadMemory(const AddressSpec &addr_spec,
       return read_child(lane_sp, eSectionTypeNVGPULocalMemory,
                         addr - context->localWindowBase);
 
-    size_t bytes = DoReadMemory(addr, buf, size, error);
+    size_t bytes = ReadGlobalMemory(addr, buf, size, error);
     return bytes != 0 ? bytes : FailAddressSpaceRead(info, addr, error);
   }
 
