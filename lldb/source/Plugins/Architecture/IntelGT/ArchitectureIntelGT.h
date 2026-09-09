@@ -33,6 +33,14 @@ public:
       Thread &thread, RegisterContextUnwind *regctx,
       std::shared_ptr<const UnwindPlan> current_unwindplan) override;
 
+  /// This is called from DWARFExpression::Evaluate for both variable-location
+  /// and CFI/unwind paths; so the two entry points share one implementation.
+  bool ParseVendorDWARFOpcode(uint8_t op, const DataExtractor &opcodes,
+                              lldb::offset_t &offset, ExecutionContext *exe_ctx,
+                              RegisterContext *reg_ctx,
+                              lldb::RegisterKind reg_kind,
+                              std::vector<Value> &stack) const override;
+
 private:
   static std::unique_ptr<Architecture> Create(const ArchSpec &arch);
 };

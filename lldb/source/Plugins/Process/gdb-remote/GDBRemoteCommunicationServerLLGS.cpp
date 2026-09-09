@@ -1108,26 +1108,23 @@ GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
   // Append the lldb-server stop ID so we can use that in LLDB if needed.
   response.Printf("stop_id:%" PRIu32 ";", process.GetStopID());
 
-  // Check if any GPU plug-ins have GPUActions to report in a CPU stop reply
-  // packet.
-  for (auto &plugin_up : m_plugins) {
-    if (std::optional<GPUActions> gpu_actions =
-            plugin_up->NativeProcessIsStopping()) {
-      response.PutCString("gpu-actions:");
-      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
-      response.PutChar(';');
-    }
-  }
-
-  // IntelGT specific behaviour
-  if (m_plugin_instance && m_plugin_instance->GetPluginName() == "intelgt" ) {
-    if (std::optional<GPUActions> gpu_actions =
-            m_plugin_instance->NativeProcessIsStopping()) {
-      response.PutCString("gpu-actions:");
-      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
-      response.PutChar(';');
-    }
-  }
+  // Append any GPUActions this stop should report. On the CPU-side server
+  // this collects actions from every installed GPU plug-in via m_plugins.
+  // When this server *is* a GPU plug-in instance (m_plugin_instance set),
+  // include the plug-in's own actions if it opts in.
+  auto emit_gpu_actions =
+      [&response](lldb_server::LLDBServerPlugin &plugin) {
+        if (std::optional<GPUActions> gpu_actions =
+                plugin.NativeProcessIsStopping()) {
+          response.PutCString("gpu-actions:");
+          response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+          response.PutChar(';');
+        }
+      };
+  for (auto &plugin_up : m_plugins)
+    emit_gpu_actions(*plugin_up);
+  if (m_plugin_instance && m_plugin_instance->ReportsGPUActionsOnOwnStop())
+    emit_gpu_actions(*m_plugin_instance);
 
   if (m_non_stop && !force_synchronous) {
     PacketResult ret = SendNotificationPacketNoLock(

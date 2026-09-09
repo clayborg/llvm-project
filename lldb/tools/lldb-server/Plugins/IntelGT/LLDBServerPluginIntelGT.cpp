@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLDBServerPluginIntelGT.h"
+#include "IntelGTArch.h"
 #include "LevelZeroHelpers.h"
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
@@ -172,17 +173,15 @@ LLDBServerPluginIntelGT::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
 
   GPUPluginBreakpointHitResponse response(GetNewGPUAction());
 
-  if (args.breakpoint.identifier != kZeModuleCreateBpId) {
+  if (args.breakpoint.identifier != kZeModuleCreateBpId)
     return response;
-  }
 
   response.disable_bp = true;
   m_zemodulecreate_hit = true;
 
   if (m_ze_state != ZeState::Uninitialized &&
-      m_ze_state != ZeState::Initialized) {
+      m_ze_state != ZeState::Initialized)
     return response;
-  }
 
   // Everything runs synchronously while the CPU is stopped at zeModuleCreate.
   // zetDebugAttach returns in ~1 ms (waits only for the queued snapshot);
@@ -218,9 +217,8 @@ LLDBServerPluginIntelGT::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   TriggerNotifier();
 
   auto conn_info = CreateConnection();
-  if (conn_info) {
+  if (conn_info)
     response.actions.connect_info = conn_info;
-  }
 
   response.actions.resume_gpu_process = true;
 
@@ -398,9 +396,8 @@ Status LLDBServerPluginIntelGT::AttachToDevices() {
 
   uint32_t driver_count = 0;
   ze_result_t result = zeDriverGet(&driver_count, nullptr);
-  if (result != ZE_RESULT_SUCCESS || driver_count == 0) {
+  if (result != ZE_RESULT_SUCCESS || driver_count == 0)
     return Status::FromErrorString("No Level Zero drivers found");
-  }
 
   std::vector<ze_driver_handle_t> drivers(driver_count);
   result = zeDriverGet(&driver_count, drivers.data());
@@ -429,9 +426,8 @@ Status LLDBServerPluginIntelGT::AttachToDevices() {
       zeDeviceGetProperties(device, &props);
 
       // Only attach to Intel GPU devices.
-      if (props.vendorId != 0x8086 || props.type != ZE_DEVICE_TYPE_GPU) {
+      if (props.vendorId != 0x8086 || props.type != ZE_DEVICE_TYPE_GPU)
         continue;
-      }
 
       // Try sub-devices first, then fall back to the parent device.
       uint32_t subdev_count = 0;
@@ -510,9 +506,8 @@ bool LLDBServerPluginIntelGT::AttachToDevice(ze_device_handle_t device,
                                              DeviceSession &session_out) {
 
   NativeProcessProtocol *native = GetNativeProcess();
-  if (!native) {
+  if (!native)
     return false;
-  }
 
   zet_debug_config_t config{};
   config.pid = static_cast<uint32_t>(native->GetID());
@@ -520,17 +515,14 @@ bool LLDBServerPluginIntelGT::AttachToDevice(ze_device_handle_t device,
   zet_debug_session_handle_t session = nullptr;
   ze_result_t result = zetDebugAttach(device, &config, &session);
 
-  if (result == ZE_RESULT_ERROR_UNSUPPORTED_FEATURE) {
+  if (result == ZE_RESULT_ERROR_UNSUPPORTED_FEATURE)
     return false;
-  }
 
-  if (result == ZE_RESULT_ERROR_NOT_AVAILABLE) {
+  if (result == ZE_RESULT_ERROR_NOT_AVAILABLE)
     return false;
-  }
 
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return false;
-  }
 
   session_out.device = device;
   session_out.session = session;
@@ -552,14 +544,12 @@ Status LLDBServerPluginIntelGT::CreateGpuProcess() {
   manager->m_plugin = this;
   manager->m_device_sessions = m_device_sessions;
 
-  ProcessLaunchInfo info;
-  info.GetFlags().Set(eLaunchFlagStopAtEntry | eLaunchFlagDebug |
-                      eLaunchFlagDisableASLR);
   Args args;
   args.AppendArgument("/pretend/path/to/intelgt-gpu");
+
+  ProcessLaunchInfo info;
   info.SetArguments(args, true);
-  info.GetEnvironment() = Host::GetEnvironment();
-  // Use the CPU process PID as the GPU process PID.
+
   NativeProcessProtocol *native = GetNativeProcess();
   info.SetProcessID(native ? native->GetID() : 0);
 
@@ -637,6 +627,29 @@ void LLDBServerPluginIntelGT::RearmNotifier() {
 }
 
 // ---------------------------------------------------------------------------
+// DetermineXeVariant
+// ---------------------------------------------------------------------------
+
+std::string LLDBServerPluginIntelGT::DetermineXeVariant() const {
+  if (m_device_sessions.empty())
+    return "";
+  const uint32_t device_id = m_device_sessions.front().properties.deviceId;
+  switch (intelgt::get_xe_version(device_id)) {
+  case intelgt::XE_HP:
+    return "xe-hp";
+  case intelgt::XE_HPG:
+    return "xe-hpg";
+  case intelgt::XE_HPC:
+    return "xe-hpc";
+  case intelgt::XE2:
+    return "xe2";
+  default:
+    // deviceId not in the get_xe_version table -> unknown family.
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CreateConnection
 // ---------------------------------------------------------------------------
 
@@ -676,8 +689,11 @@ LLDBServerPluginIntelGT::CreateConnection() {
   GPUPluginConnectionInfo info;
   info.connect_url = llvm::formatv("connect://localhost:{}", port).str();
   info.synchronous = true;
-  // spirv64 matches the GPU ELF's parsed architecture (EM_INTELGT=205).
-  info.triple = "spirv64-unknown-unknown";
+  // When a specific GPU Xe variant is known it is appended as "-<variant>".
+  info.triple = "intelgt-intel-levelzero";
+  std::string xe_variant = DetermineXeVariant();
+  if (!xe_variant.empty())
+    *info.triple += "-" + xe_variant;
   // Copy CPU breakpoints (e.g. b xxlgrf.cpp:69) to the GPU target so they
   // are resolved against GPU DWARF when the GPU module loads.
   info.copy_cpu_breakpoints_during_attaching = true;
@@ -692,9 +708,8 @@ bool LLDBServerPluginIntelGT::DrainZeEvents(GPUActions &actions) {
   bool any_change = false;
 
   ProcessIntelGT *gpu_proc = GetGPUProcess();
-  if (!gpu_proc) {
+  if (!gpu_proc)
     return false;
-  }
 
   lldb::tid_t first_stopped_tid = LLDB_INVALID_THREAD_ID;
   bool any_thread_stopped = false;
@@ -780,9 +795,8 @@ bool LLDBServerPluginIntelGT::DrainZeEvents(GPUActions &actions) {
             mds->nresumed--;
           }
         }
-        if (was_wildcard) {
+        if (was_wildcard)
           ze_thread = ze_device_thread_t{0, 0, 0, 0};
-        }
         {
           // Clear old EU threads before creating new ones so auto-resume
           // does not see stale threads. Skip clearing on step completion,

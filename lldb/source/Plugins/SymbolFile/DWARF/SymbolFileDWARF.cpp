@@ -341,7 +341,7 @@ SymbolFile *SymbolFileDWARF::CreateInstance(ObjectFileSP objfile_sp) {
   if (triple.isWasm())
     return new SymbolFileWasm(std::move(objfile_sp),
                               /*dwo_section_list*/ nullptr);
-  if (triple.isSPIRV())
+  if (triple.isIntelGPU())
     return new SymbolFileIntelGT(std::move(objfile_sp),
                                  /*dwo_section_list*/ nullptr);
   return new SymbolFileDWARF(std::move(objfile_sp),

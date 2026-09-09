@@ -227,9 +227,8 @@ Status RegisterContextIntelGT::ReadRegister(const RegisterInfo *reg_info,
 
   uint32_t read_offset = loc.byte_offset;
 
-  if (read_offset + loc.byte_size > buf.size()) {
+  if (read_offset + loc.byte_size > buf.size())
     return Status::FromErrorString("Register offset out of bounds");
-  }
   reg_value.SetFromMemoryData(*reg_info, buf.data() + read_offset,
                               static_cast<uint32_t>(loc.byte_size),
                               eByteOrderLittle, error);

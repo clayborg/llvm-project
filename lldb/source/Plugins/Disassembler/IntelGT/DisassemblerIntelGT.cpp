@@ -64,6 +64,7 @@ public:
       m_text = text;
     // Raw opcode bytes so LLDB flags the instruction as valid.
     m_opcode.SetOpcodeBytes(bytes, size);
+    ClassifyControlFlow();
   }
 
   void CalculateMnemonicOperandsAndComment(const ExecutionContext *) override {
@@ -72,7 +73,9 @@ public:
     m_markup_opcode_name = m_text;
   }
 
-  bool DoesBranch() override { return false; }
+  bool DoesBranch() override { return m_does_branch; }
+  bool IsCall() override { return m_is_call; }
+  // Xe EU ISA has no architectural delay slots.
   bool HasDelaySlot() override { return false; }
   bool IsLoad() override { return false; }
   bool IsAuthenticated() override { return false; }
@@ -82,8 +85,49 @@ public:
   }
 
 private:
+  // Parse the leading mnemonic from iga's textual disassembly and set the
+  // control-flow predicates that ThreadPlanStepRange needs. iga returns
+  // strings like "(W) call (16|M0) r10:d ...", "jmpi (1|M0) L128", etc.
+  void ClassifyControlFlow() {
+    llvm::StringRef s(m_text);
+    // Skip a leading predicate "(W) " / "(f0.0) " and any surrounding
+    // whitespace before the mnemonic.
+    while (!s.empty()) {
+      s = s.ltrim();
+      if (s.starts_with("(")) {
+        size_t close = s.find(')');
+        if (close == llvm::StringRef::npos)
+          return;
+        s = s.drop_front(close + 1);
+        continue;
+      }
+      break;
+    }
+    // Extract the mnemonic (up to whitespace or '(' for the exec-size group).
+    size_t end = s.find_first_of(" \t(");
+    llvm::StringRef mnemonic =
+        (end == llvm::StringRef::npos) ? s : s.substr(0, end);
+
+    // Calls: subroutine-style transfers.
+    m_is_call = mnemonic == "call" || mnemonic == "calla" ||
+                mnemonic == "callsubr";
+
+    // Any control-flow op that can redirect execution. Structured control
+    // flow ops (if/else/endif/while/break/cont/halt/goto/join) are treated
+    // as branches so step-over stops at them.
+    m_does_branch = m_is_call || mnemonic == "jmpi" || mnemonic == "brc" ||
+                    mnemonic == "brd" || mnemonic == "if" ||
+                    mnemonic == "else" || mnemonic == "endif" ||
+                    mnemonic == "while" || mnemonic == "break" ||
+                    mnemonic == "cont" || mnemonic == "halt" ||
+                    mnemonic == "goto" || mnemonic == "join" ||
+                    mnemonic == "ret";
+  }
+
   uint32_t m_size;
   std::string m_text;
+  bool m_does_branch = false;
+  bool m_is_call = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -107,10 +151,10 @@ lldb::DisassemblerSP DisassemblerIntelGT::CreateInstance(const ArchSpec &arch,
   Log *log = GetLog(LLDBLog::Disassembler);
   LLDB_LOGF(log,
             "[IntelGT] CreateInstance: arch='%s' triple='%s' "
-            "archKind=%d spirv64=%d",
+            "archKind=%d intelgt=%d",
             arch.GetArchitectureName(), arch.GetTriple().getTriple().c_str(),
-            (int)arch.GetTriple().getArch(), (int)llvm::Triple::spirv64);
-  if (arch.GetTriple().getArch() != llvm::Triple::spirv64)
+            (int)arch.GetTriple().getArch(), (int)llvm::Triple::intelgt);
+  if (arch.GetTriple().getArch() != llvm::Triple::intelgt)
     return {};
   auto sp = std::make_shared<DisassemblerIntelGT>(arch);
   if (!sp->m_iga_ctx)

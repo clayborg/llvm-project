@@ -105,6 +105,12 @@ public:
   /// Clear the exception bit at \a bit_position in CR0.1.
   void ClearExceptionBit(uint32_t bit_position);
 
+  /// Set an explicit stop reason to Exception
+  void SetStopReasonToException(uint32_t type, llvm::ArrayRef<uint64_t> data, const char *description);
+
+  /// Set an explicit stop reason to signal
+  void SetStopReasonToSignal(uint32_t signo, const char *description);
+
   /// Set an explicit stop reason.
   void SetStopReason(lldb::StopReason reason, uint32_t signo = 0);
 

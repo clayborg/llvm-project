@@ -14,12 +14,9 @@
 namespace lldb_private::plugin {
 namespace dwarf {
 
-// Intel GT vendor DWARF opcodes in the DW_OP_lo_user..DW_OP_hi_user range
-// (0xe0..0xff). 0xed collides with DW_OP_WASM_location in Dwarf.def so both
-// live here instead. Selected for spirv64 triples in
-// SymbolFileDWARF::CreateInstance.
-static constexpr uint8_t DW_OP_INTEL_push_simd_lane = 0xed;
-static constexpr uint8_t DW_OP_INTEL_regval_bits     = 0xfe;
+// Intel vendor DWARF GPU opcodes
+#define DW_OP_INTEL_push_simd_lane 0xed
+#define DW_OP_INTEL_regval_bits    0xfe
 
 class SymbolFileIntelGT : public SymbolFileDWARF {
 public:

@@ -49,7 +49,7 @@ static uint32_t g_initialize_count = 0;
 PlatformSP PlatformIntelGT::CreateInstance(bool force, const ArchSpec *arch) {
   bool create = force;
   if (!create && arch) {
-    // Intel GT uses the spirv64 triple.
+    // Intel GT uses the intelgt triple.
     create = arch->GetTriple().isIntelGPU();
   }
   if (create)
@@ -91,9 +91,9 @@ void PlatformIntelGT::Terminate() {
 }
 
 PlatformIntelGT::PlatformIntelGT() : Platform(/*is_host=*/false) {
-  // Intel GT uses the spirv64-unknown-unknown triple.
-  m_supported_architectures =
-      CreateArchList({llvm::Triple::spirv64}, llvm::Triple::UnknownOS);
+  // Intel GT uses the intelgt-intel-levelzero triple.
+  m_supported_architectures.push_back(
+      ArchSpec("intelgt-intel-levelzero"));
 }
 
 std::vector<ArchSpec>

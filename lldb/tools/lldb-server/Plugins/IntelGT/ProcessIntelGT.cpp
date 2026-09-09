@@ -137,21 +137,18 @@ Status ProcessIntelGT::Resume(const ResumeActionList &resume_actions) {
         FindResumeActionForEUThread(resume_actions, eu_thread.get());
 
     // When stepping, only resume the stepping EU thread.
-    if (stepping && !is_stepping_thread) {
+    if (stepping && !is_stepping_thread)
       continue;
-    }
 
     // If a specific thread action was sent, only resume threads that have a
     // matching action so "continue thread 18" doesn't continue all threads.
-    if (!stepping && has_any_specific_action && !eu_action) {
+    if (!stepping && has_any_specific_action && !eu_action)
       continue;
-    }
 
     // Without a specific action, resume ALL stopped EU threads because all EU
     // threads hit the same breakpoint and should continue together.
-    if (!stepping && !has_any_specific_action && !has_continue_action) {
+    if (!stepping && !has_any_specific_action && !has_continue_action)
       continue;
-    }
 
     const DeviceSession *ds = GetDeviceSession(eu_thread->GetDeviceIndex());
     if (!ds)
@@ -195,9 +192,8 @@ Status ProcessIntelGT::Resume(const ResumeActionList &resume_actions) {
 
   // If EU threads resumed, tell the plugin to wait for them to stop before
   // reporting the next breakpoint so all threads reach it together.
-  if (!resumed_ze_threads.empty() && m_plugin) {
+  if (!resumed_ze_threads.empty() && m_plugin)
     m_plugin->SetExpectedStoppedThreadCount(resumed_ze_threads.size());
-  }
 
   if (m_plugin)
     m_plugin->TriggerNotifier();
@@ -212,11 +208,8 @@ Status ProcessIntelGT::Resume(const ResumeActionList &resume_actions) {
 
 Status ProcessIntelGT::Halt() {
   StateType prev = GetState();
-  if (m_stopped_eu_threads.empty() && m_threads.size() == 1) {
-  }
-  if (prev == StateType::eStateStopped) {
+  if (prev == StateType::eStateStopped)
     return Status();
-  }
 
   // If current thread is the shadow thread, switch to a real GPU thread
   // before sending the stop packet. Shadow threads return E15 for register
@@ -248,8 +241,8 @@ Status ProcessIntelGT::Interrupt() {
   ze_device_thread_t wildcard = ZeWildcardThread();
   for (const DeviceSession &ds : m_device_sessions) {
     ze_result_t result = zetDebugInterrupt(ds.session, wildcard);
-    if (result != ZE_RESULT_SUCCESS) {
-    }
+    if (result != ZE_RESULT_SUCCESS)
+      break;
   }
   return Status();
 }
@@ -287,10 +280,12 @@ Status ProcessIntelGT::Detach() {
 }
 
 Status ProcessIntelGT::Signal(int /*signo*/) {
-  return Status::FromErrorString("GPU processes do not support signals");
+  return Status::FromErrorString("ProcessIntelGT GPU processes do not support signals");
 }
 
-Status ProcessIntelGT::Kill() { return Status(); }
+Status ProcessIntelGT::Kill() {
+  return Status::FromErrorString("ProcessIntelGT GPU processes do not support killing the GPU process");
+}
 
 // ---------------------------------------------------------------------------
 // Memory access
@@ -301,7 +296,7 @@ Status ProcessIntelGT::ReadMemory(addr_t addr, void *buf, size_t size,
 
   const DeviceSession *ds = GetCurrentDeviceSession();
   if (!ds)
-    return Status::FromErrorString("No active device session");
+    return Status::FromErrorString("ProcessIntelGT No active device session");
 
   // Use the current stopped thread when available; the driver needs a
   // specific thread to resolve per-EU-thread scratch VAs and ignores the
@@ -440,9 +435,8 @@ Status ProcessIntelGT::SetBreakpoint(addr_t addr, uint32_t /*size*/,
         "Hardware breakpoints not supported on Intel GPU");
 
   auto it = m_bp_saved_opcodes.find(addr);
-  if (it != m_bp_saved_opcodes.end()) {
+  if (it != m_bp_saved_opcodes.end())
     return Status();
-  }
 
   const DeviceSession *ds = GetCurrentDeviceSession();
   if (!ds)
@@ -454,9 +448,8 @@ Status ProcessIntelGT::SetBreakpoint(addr_t addr, uint32_t /*size*/,
   size_t bytes_read = 0;
   Status error =
       ReadMemory(exec_addr, inst, intelgt::MAX_INST_LENGTH, bytes_read);
-  if (error.Fail()) {
+  if (error.Fail())
     return error;
-  }
 
   bool is_compact = (inst[3] & 0x20) != 0;
   uint32_t inst_len =
@@ -503,9 +496,8 @@ Status ProcessIntelGT::RemoveBreakpoint(addr_t addr, bool hardware) {
   Status error = WriteMemory(addr, saved.data(), saved.size(), bytes_written);
   m_bp_saved_opcodes.erase(it);
 
-  if (error.Fail()) {
+  if (error.Fail())
     return error;
-  }
 
   return Status();
 }
@@ -523,17 +515,15 @@ size_t ProcessIntelGT::UpdateThreads() {
   size_t eu_thread_count = 0;
   bool has_shadow = false;
   for (const auto &t : m_threads) {
-    if (static_cast<ThreadIntelGT *>(t.get())->IsShadowThread()) {
+    if (static_cast<ThreadIntelGT *>(t.get())->IsShadowThread())
       has_shadow = true;
-    } else {
+    else
       eu_thread_count++;
-    }
   }
 
   // Only add shadow thread if no EU threads exist
-  if (eu_thread_count == 0 && !has_shadow) {
+  if (eu_thread_count == 0 && !has_shadow)
     m_threads.push_back(ThreadIntelGT::CreateShadowThread(*this));
-  }
 
   // Remove shadow thread if EU threads exist
   if (eu_thread_count > 0 && has_shadow) {
@@ -549,9 +539,8 @@ size_t ProcessIntelGT::UpdateThreads() {
   // Only set current thread if none has ever been selected; otherwise
   // preserve the TID even if that thread is currently being recreated.
   if (GetCurrentThreadID() == LLDB_INVALID_THREAD_ID) {
-    if (!m_threads.empty()) {
+    if (!m_threads.empty())
       SetCurrentThreadID(m_threads.front()->GetID());
-    }
   } else {
   }
 
@@ -619,9 +608,8 @@ bool ProcessIntelGT::IsAnyThreadSteppingCompleted() const {
     if (!thread->GetStopReason(stop_info, desc))
       continue;
 
-    if (stop_info.reason == eStopReasonTrace) {
+    if (stop_info.reason == eStopReasonTrace)
       return true;
-    }
   }
   return false;
 }
@@ -642,9 +630,8 @@ void ProcessIntelGT::RemoveSteppedThreads() {
     ThreadStopInfo stop_info;
     std::string desc;
     if (eu_thread->GetStopReason(stop_info, desc)) {
-      if (stop_info.reason == eStopReasonTrace) {
+      if (stop_info.reason == eStopReasonTrace)
         stepped_threads.push_back(ze_thread);
-      }
     }
   }
 
@@ -801,9 +788,8 @@ void ProcessIntelGT::HandleZeThreadUnavailable(const DeviceSession &ds,
                                                ze_device_thread_t ze_thread) {
 
   auto eu_it = m_stopped_eu_threads.find(ze_thread);
-  if (eu_it == m_stopped_eu_threads.end()) {
+  if (eu_it == m_stopped_eu_threads.end())
     return;
-  }
 
   EUThreadIntelGT *eu = eu_it->second.get();
 
@@ -842,9 +828,8 @@ void ProcessIntelGT::HandleModuleLoad(const zet_debug_event_t &event,
   uint64_t end = event.info.module.moduleEnd;
   uint64_t load = event.info.module.load;
 
-  if (begin >= end) {
+  if (begin >= end)
     return;
-  }
 
   std::string uri =
       llvm::formatv("memory://{0:x}+{1:x}", begin, end - begin).str();
@@ -946,7 +931,15 @@ addr_t ProcessIntelGT::GetSharedLibraryInfoAddress() {
 }
 
 const ArchSpec &ProcessIntelGT::GetArchitecture() const {
-  m_arch = ArchSpec("spirv64-unknown-unknown");
+  // Match the exact triple that LLDBServerPluginIntelGT sends in the
+  // GPUPluginConnectionInfo.
+  std::string triple = "intelgt-intel-levelzero";
+  if (m_plugin) {
+    std::string variant = m_plugin->DetermineXeVariant();
+    if (!variant.empty())
+      triple += "-" + variant;
+  }
+  m_arch = ArchSpec(triple);
   return m_arch;
 }
 
@@ -1004,9 +997,8 @@ Status ProcessIntelGT::EnsureDeviceRegistersDiscovered(uint32_t device_index) {
         return Status();
 
       Status error = DiscoverDeviceRegisterSets(session);
-      if (error.Success()) {
+      if (error.Success())
         session.registers_discovered = true;
-      }
       return error;
     }
   }
@@ -1447,14 +1439,12 @@ addr_t ProcessIntelGT::ScanElfModule(addr_t module_begin, addr_t module_size,
   if (out_simd_width)
     *out_simd_width = 0;
 
-  if (!ds || !ds->session) {
+  if (!ds || !ds->session)
     return LLDB_INVALID_ADDRESS;
-  }
 
   // Validate module_size is large enough to contain an ELF header.
-  if (module_size < sizeof(llvm::ELF::Elf64_Ehdr)) {
+  if (module_size < sizeof(llvm::ELF::Elf64_Ehdr))
     return LLDB_INVALID_ADDRESS;
-  }
 
   ze_device_thread_t ze_thread = ZeWildcardThread();
   zet_debug_memory_space_desc_t space_desc{};
@@ -1465,9 +1455,8 @@ addr_t ProcessIntelGT::ScanElfModule(addr_t module_begin, addr_t module_size,
   space_desc.address = module_begin;
   ze_result_t result = zetDebugReadMemory(ds->session, ze_thread, &space_desc,
                                           sizeof(ehdr), &ehdr);
-  if (result != ZE_RESULT_SUCCESS) {
+  if (result != ZE_RESULT_SUCCESS)
     return LLDB_INVALID_ADDRESS;
-  }
 
   if (!ehdr.checkMagic())
     return LLDB_INVALID_ADDRESS;
@@ -1546,9 +1535,8 @@ addr_t ProcessIntelGT::ScanElfModule(addr_t module_begin, addr_t module_size,
 
   // If scan incomplete, return LLDB_INVALID_ADDRESS even if we found some
   // allocated sections. The lowest-VMA section might be after the error.
-  if (!scan_complete) {
+  if (!scan_complete)
     return LLDB_INVALID_ADDRESS;
-  }
 
   return min_vma;
 }
