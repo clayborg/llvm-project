@@ -70,6 +70,7 @@ protected:
     uint64_t offset = 0;
     uint64_t size = 0;
     std::string id;
+    lldb::DataBufferSP data_sp;
   };
   std::vector<Entry> m_entries;
 
