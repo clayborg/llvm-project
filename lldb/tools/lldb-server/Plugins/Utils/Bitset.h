@@ -93,7 +93,9 @@ public:
   ///
   /// \return
   ///     True if the bit is set (1), false if clear (0).
-  bool Get(size_t index) const { return m_storage & (static_cast<T>(1) << index); }
+  bool Get(size_t index) const {
+    return m_storage & (static_cast<T>(1) << index);
+  }
 
   /// Array subscript operator for bit access.
   ///

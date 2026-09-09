@@ -50,7 +50,9 @@ lldb::StopReason ThreadNVGPU::GetStopReason() const {
   return m_stop_info.reason;
 }
 
-ProcessNVGPU &ThreadNVGPU::GetGPU() { return static_cast<ProcessNVGPU &>(m_process); }
+ProcessNVGPU &ThreadNVGPU::GetGPU() {
+  return static_cast<ProcessNVGPU &>(m_process);
+}
 
 const ProcessNVGPU &ThreadNVGPU::GetGPU() const {
   return static_cast<const ProcessNVGPU &>(m_process);
@@ -64,7 +66,8 @@ void ThreadNVGPU::SetStoppedBySignal(int signo) {
 void ThreadNVGPU::SetStoppedByDynamicLoader() {
   LLDB_LOGV(GetLog(GDBRLog::Plugin),
             "ThreadNVGPU::SetStoppedByDynamicLoader()");
-  SetStopped(lldb::eStopReasonDynamicLoader, "NVIDIA GPU Thread Stopped by Dynamic Loader");
+  SetStopped(lldb::eStopReasonDynamicLoader,
+             "NVIDIA GPU Thread Stopped by Dynamic Loader");
 }
 
 void ThreadNVGPU::SetStoppedByException(const ExceptionInfo &exception_info) {
