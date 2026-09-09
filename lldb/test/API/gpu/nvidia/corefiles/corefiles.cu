@@ -44,8 +44,8 @@ extern "C" __device__ __noinline__ void crash_kernel_2(int exception_type) {
 
 extern "C" __device__ __noinline__ void crash_kernel_1(int exception_type) {
   volatile int middle_scalar = 0xcafebabe;
-  volatile int middle_array[2] = { 0x10, 0x11 };
-  volatile Point middle_point = { (int)blockIdx.x, (int)threadIdx.x };
+  volatile int middle_array[2] = {0x10, 0x11};
+  volatile Point middle_point = {(int)blockIdx.x, (int)threadIdx.x};
   crash_kernel_2(exception_type);
 }
 

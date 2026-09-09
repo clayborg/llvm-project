@@ -1152,13 +1152,13 @@ public:
   };
 
   CommandObjectThreadSelect(CommandInterpreter &interpreter)
-      : CommandObjectParsed(interpreter, "thread select",
-                            "Change the currently selected thread.",
-                            "thread select <thread-index> (or -t <thread-id> or "
-                            "--blockidx/--threadidx for GPU threads)",
-                            eCommandRequiresProcess | eCommandTryTargetAPILock |
-                                eCommandProcessMustBeLaunched |
-                                eCommandProcessMustBePaused) {
+      : CommandObjectParsed(
+            interpreter, "thread select",
+            "Change the currently selected thread.",
+            "thread select <thread-index> (or -t <thread-id> or "
+            "--blockidx/--threadidx for GPU threads)",
+            eCommandRequiresProcess | eCommandTryTargetAPILock |
+                eCommandProcessMustBeLaunched | eCommandProcessMustBePaused) {
     CommandArgumentEntry arg;
     CommandArgumentData thread_idx_arg;
 
@@ -1174,7 +1174,8 @@ public:
     // Push the data for the first argument into the m_arguments vector.
     m_arguments.push_back(arg);
 
-    m_option_group.Append(&m_options, LLDB_OPT_SET_ALL, LLDB_OPT_SET_2 | LLDB_OPT_SET_3);
+    m_option_group.Append(&m_options, LLDB_OPT_SET_ALL,
+                          LLDB_OPT_SET_2 | LLDB_OPT_SET_3);
     m_option_group.Finalize();
   }
 
@@ -1208,7 +1209,8 @@ protected:
     // Validate option combinations.
     if (has_gpu_options) {
       if (m_options.m_thread_id != LLDB_INVALID_THREAD_ID) {
-        result.AppendError("cannot use --blockidx/--threadidx with --thread-id");
+        result.AppendError(
+            "cannot use --blockidx/--threadidx with --thread-id");
         return;
       }
       if (command.GetArgumentCount() != 0) {
@@ -1232,7 +1234,8 @@ protected:
         return;
       }
 
-      // Get the currently selected thread to preserve its coordinates if needed.
+      // Get the currently selected thread to preserve its coordinates if
+      // needed.
       GPUDim3 search_block_idx = m_options.m_block_idx;
       GPUDim3 search_thread_idx = m_options.m_thread_idx;
 
@@ -1260,14 +1263,16 @@ protected:
       }
 
       // Find the thread matching the GPU coordinates using the platform.
-      ThreadSP new_thread_sp =
-          platform_sp->FindGPUThread(*process, search_block_idx, search_thread_idx);
+      ThreadSP new_thread_sp = platform_sp->FindGPUThread(
+          *process, search_block_idx, search_thread_idx);
       if (!new_thread_sp) {
-        result.AppendError("no GPU thread found matching the specified coordinates");
+        result.AppendError(
+            "no GPU thread found matching the specified coordinates");
         return;
       }
 
-      process->GetThreadList().SetSelectedThreadByID(new_thread_sp->GetID(), true);
+      process->GetThreadList().SetSelectedThreadByID(new_thread_sp->GetID(),
+                                                     true);
       result.SetStatus(eReturnStatusSuccessFinishNoResult);
       return;
     }
@@ -1430,7 +1435,8 @@ protected:
         if (!thread_sp || !matches(*thread_sp))
           continue;
         thread_sp->GetStatus(strm, /*start_frame=*/0, /*num_frames=*/0,
-                             /*num_frames_with_source=*/0, /*stop_format=*/false,
+                             /*num_frames_with_source=*/0,
+                             /*stop_format=*/false,
                              /*show_hidden=*/true);
       }
       return;

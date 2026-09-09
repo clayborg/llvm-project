@@ -1,9 +1,9 @@
-// Source for comparison_artificial.cubin, the relocated cubin fixture embedded in
-// the artificial NVGPU core built by TestNVGPUCoreFileComparison. The fixture
-// is checked in so the test needs no nvcc / GPU / CUDA driver at run time --
-// only cuda-gdb. Nested device functions give a non-trivial backtrace for
-// later scope; for the current thread-list scope the cubin only needs to be a
-// loadable, symbolicatable relocated image.
+// Source for comparison_artificial.cubin, the relocated cubin fixture embedded
+// in the artificial NVGPU core built by TestNVGPUCoreFileComparison. The
+// fixture is checked in so the test needs no nvcc / GPU / CUDA driver at run
+// time -- only cuda-gdb. Nested device functions give a non-trivial backtrace
+// for later scope; for the current thread-list scope the cubin only needs to be
+// a loadable, symbolicatable relocated image.
 //
 // Regenerate (offline, requires nvcc):
 //   python3 regenerate_comparison_cubin.py --nvcc /path/to/nvcc

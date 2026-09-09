@@ -608,7 +608,6 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
           } else {
             bytes_read = process->ReadMemory(address, dst, byte_size, error);
           }
-
           if (bytes_read != byte_size)
             error = Status::FromErrorStringWithFormat(
                 "read memory from 0x%" PRIx64 " failed (%u of %u bytes read)",
