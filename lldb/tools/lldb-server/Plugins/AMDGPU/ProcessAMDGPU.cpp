@@ -56,6 +56,7 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
 
   struct WaveResumeAction {
     lldb::StateType resume_state = eStateInvalid;
+    lldb::tid_t preferred_lane_thread_id = LLDB_INVALID_THREAD_ID;
     std::vector<ThreadAMDGPU *> lanes;
   };
 
@@ -100,6 +101,13 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
     case eStateStepping:
     case eStateRunning: {
       had_resume_action = true;
+
+      // Remember which logical lane caused this physical wave operation.
+      // Prefer an explicit step action over a run action.
+      if (wave_action.preferred_lane_thread_id == LLDB_INVALID_THREAD_ID ||
+          (action->state == eStateStepping &&
+           wave_action.resume_state != eStateStepping))
+        wave_action.preferred_lane_thread_id = thread->GetID();
 
       // Several lane threads can map to the same wave. If LLDB asks to step one
       // lane while continuing another lane in that wave, the physical operation
@@ -155,6 +163,7 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
           __FUNCTION__, GetID(), wave->GetWaveID().handle,
           resume_result.AsCString());
 
+    wave->SetPreferredLaneThreadID(wave_action.preferred_lane_thread_id);
     for (ThreadAMDGPU *lane : wave_action.lanes)
       lane->GetRegisterContext().InvalidateAllRegisters();
   }
@@ -300,7 +309,33 @@ lldb::tid_t ProcessAMDGPU::ChooseCurrentThread() {
   if (m_threads.empty())
     return LLDB_INVALID_THREAD_ID;
 
-  // If the current thread has a valid stop reason then use that thread.
+  // A WAVE_STOP event identifies the physical wave, while LLDB exposes its
+  // lanes as threads. Prefer the logical lane whose action resumed that wave;
+  // otherwise select a lane belonging to the newly stopped wave.
+  if (m_pending_notification_wave_id) {
+    auto wave = m_waves.find(*m_pending_notification_wave_id);
+    if (wave != m_waves.end()) {
+      lldb::tid_t preferred_lane_thread_id =
+          wave->second->GetPreferredLaneThreadID();
+      if (preferred_lane_thread_id != LLDB_INVALID_THREAD_ID) {
+        if (ThreadAMDGPU *preferred_thread =
+                FindThread([preferred_lane_thread_id](ThreadAMDGPU &thread) {
+                  return thread.GetID() == preferred_lane_thread_id;
+                }))
+          return preferred_thread->GetID();
+      }
+    }
+
+    if (ThreadAMDGPU *stopped_thread = FindThread([this](ThreadAMDGPU &thread) {
+          return !thread.IsShadowThread() &&
+                 thread.GetDbgApiWaveID().handle ==
+                     m_pending_notification_wave_id->handle;
+        }))
+      return stopped_thread->GetID();
+  }
+
+  // Refresh-only selection. With no resolvable new stop event, preserve a
+  // useful existing selection or recover one from the current thread list.
   ThreadAMDGPU *current_thread = GetCurrentThreadAMDGPU();
   if (current_thread && current_thread->HasValidStopReason())
     return current_thread->GetID();
@@ -319,6 +354,7 @@ lldb::tid_t ProcessAMDGPU::ChooseCurrentThread() {
 void ProcessAMDGPU::UpdateCurrentThread() {
   lldb::tid_t tid = ChooseCurrentThread();
   SetCurrentThreadID(tid);
+  m_pending_notification_wave_id.reset();
 }
 
 size_t ProcessAMDGPU::UpdateThreads() {
@@ -555,6 +591,7 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
   WaveAMDGPU &wave = GetOrCreateWave(wave_id);
   wave.SetExecMask(exec_mask);
   wave.UpdateStopReason(stop_reason);
+  m_pending_notification_wave_id = wave_id;
   return true;
 }
 
