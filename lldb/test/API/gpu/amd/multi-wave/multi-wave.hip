@@ -86,7 +86,8 @@ __global__ void multi_wave_kernel(unsigned *buf, bool sync_threads) {
   }
   unsigned int thread_idx = get_global_idx();
   buf[thread_idx] = thread_idx; // GPU BREAKPOINT
-} // GPU STEP OVER
+  buf[thread_idx] = thread_idx; // GPU STEP OVER
+}
 
 int main() {
   const dim3 blocks(2, 2, 2);  // 3D grid specifying number of blocks to launch

@@ -113,6 +113,14 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
             self, listener, self.cpu_process, [lldb.eStateStopped]
         )
 
+    def prepare_for_gpu_step(self) -> lldb.SBListener:
+        """Enable async handling, stop the CPU, and select the GPU target."""
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+        self.stop_cpu_if_running(listener)
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        return listener
+
     def continue_gpu_to_breakpoint(self, gpu_bkpt_id: int) -> List[lldb.SBThread]:
         """Continue the GPU process until it hits the requested breakpoint."""
         self.setAsync(True)
@@ -134,12 +142,8 @@ class AmdGpuTestCaseBase(GpuTestCaseBase):
 
     def step_over_gpu_thread(self, thread: lldb.SBThread, expected_line: int):
         """Step over one GPU thread and verify that the step plan completes."""
-        self.setAsync(True)
-        listener = self.dbg.GetListener()
+        listener = self.prepare_for_gpu_step()
 
-        self.stop_cpu_if_running(listener)
-
-        self.dbg.SetSelectedTarget(self.gpu_target)
         self.assertTrue(self.gpu_process.SetSelectedThread(thread), "select GPU thread")
         thread_id = thread.GetThreadID()
         before_pc = thread.GetFrameAtIndex(0).GetPC()
