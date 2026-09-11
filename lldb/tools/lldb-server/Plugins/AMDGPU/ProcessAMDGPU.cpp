@@ -823,7 +823,7 @@ void ProcessAMDGPU::UpdateWaveList() {
   for (const auto &thread : m_threads) {
     ThreadAMDGPU &gpu_thread = static_cast<ThreadAMDGPU &>(*thread);
     if (!gpu_thread.IsShadowThread())
-      waves_with_threads.insert(gpu_thread.GetWaveID());
+      waves_with_threads.insert(gpu_thread.GetDbgApiWaveID());
   }
 
   // Reconcile wave lifetime and cached metadata. Stop reasons are updated only
