@@ -117,3 +117,61 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         self.assertEqual(
             len({thread.GetThreadID() for thread in gpu_threads}), TOTAL_THREADS
         )
+
+    def test_step_over_preserves_selected_lane(self):
+        """Stepping wave B must not select a stopped lane from wave A."""
+        self.build()
+
+        source = "multi-wave.hip"
+        gpu_threads = self.run_to_breakpoint()
+        threads_by_wave = defaultdict(list)
+        for thread in gpu_threads:
+            threads_by_wave[thread.GetSIMD()].append(thread)
+        self.assertGreaterEqual(len(threads_by_wave), 2)
+
+        wave_a_id = self.gpu_process.GetSelectedThread().GetSIMD()
+        self.assertIn(wave_a_id, threads_by_wave)
+        wave_a_thread = threads_by_wave[wave_a_id][0]
+        self.assertEqual(lldb.eStopReasonBreakpoint, wave_a_thread.GetStopReason())
+
+        wave_b_id = next(
+            wave_id for wave_id in threads_by_wave if wave_id != wave_a_id
+        )
+        wave_b_threads = sorted(
+            threads_by_wave[wave_b_id], key=lambda thread: thread.GetLaneID()
+        )
+        self.assertGreater(len(wave_b_threads), 1)
+
+        # A non-first lane makes falling back to the wave's first lane visible.
+        stepped_thread = wave_b_threads[1]
+        stepped_tid = stepped_thread.GetThreadID()
+        before_pc = stepped_thread.GetFrameAtIndex(0).GetPC()
+
+        self.prepare_for_gpu_step()
+        self.setAsync(False)
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        self.assertTrue(
+            self.gpu_process.SetSelectedThread(stepped_thread),
+            "select a non-first lane in wave B",
+        )
+
+        error = lldb.SBError()
+        stepped_thread.StepOver(lldb.eOnlyDuringStepping, error)
+        self.assertSuccess(error, "step over GPU thread")
+
+        selected_thread = self.gpu_process.GetSelectedThread()
+        self.assertEqual(stepped_tid, selected_thread.GetThreadID())
+        self.assertEqual(lldb.eStopReasonPlanComplete, selected_thread.GetStopReason())
+        self.assertNotEqual(before_pc, selected_thread.GetFrameAtIndex(0).GetPC())
+        self.assertEqual(
+            line_number(source, "// GPU STEP OVER"),
+            selected_thread.GetFrameAtIndex(0).GetLineEntry().GetLine(),
+        )
+
+        self.expect(
+            "process plugin packet send qC",
+            substrs=[f"response: QC{stepped_tid:x}"],
+        )
+
+        # Wave A did not run and still reports its original breakpoint.
+        self.assertEqual(lldb.eStopReasonBreakpoint, wave_a_thread.GetStopReason())

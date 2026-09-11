@@ -55,6 +55,13 @@ public:
 
   amd_dbgapi_wave_id_t GetWaveID() { return m_wave_id; }
 
+  lldb::tid_t GetPreferredLaneThreadID() const {
+    return m_preferred_lane_thread_id;
+  }
+  void SetPreferredLaneThreadID(lldb::tid_t tid) {
+    m_preferred_lane_thread_id = tid;
+  }
+
   bool GetStopReason(ThreadStopInfo &stop_info, std::string &description) {
     stop_info = m_stop_info;
     description = m_stop_description;
@@ -91,6 +98,9 @@ public:
 
 private:
   amd_dbgapi_wave_id_t m_wave_id;
+  // Logical lane preferred for reporting a stop from the most recent resume
+  // of this physical wave.
+  lldb::tid_t m_preferred_lane_thread_id = LLDB_INVALID_THREAD_ID;
   DbgApiWaveInfo m_wave_info;
   ThreadStopInfo m_stop_info;
   std::string m_stop_description;
