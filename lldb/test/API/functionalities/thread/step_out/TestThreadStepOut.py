@@ -37,6 +37,13 @@ class ThreadStepOutTestCase(TestBase):
         self.build()
         self.step_out_test(self.step_out_with_python)
 
+    @skipIfWindows  # This test will hang on windows llvm.org/pr21753
+    @expectedFailureNetBSD
+    def test_async_step_preserves_selected_thread(self):
+        """Test that an async step preserves the selected CPU thread."""
+        self.build()
+        self.step_out_test(self.async_step_preserves_selected_thread)
+
     def setUp(self):
         # Call super's setUp().
         TestBase.setUp(self)
@@ -119,6 +126,48 @@ class ThreadStepOutTestCase(TestBase):
             % lldbutil.stop_reason_to_str(reason),
         )
         self.check_stepping_thread()
+
+    def async_step_preserves_selected_thread(self):
+        breakpoint_threads = [
+            thread
+            for thread in self.process.threads
+            if thread.GetStopReason() == lldb.eStopReasonBreakpoint
+        ]
+        self.assertGreaterEqual(len(breakpoint_threads), 2)
+
+        stepping_thread = max(
+            breakpoint_threads, key=lambda thread: thread.GetIndexID()
+        )
+        self.assertNotEqual(
+            stepping_thread.GetIndexID(), self.process.threads[0].GetIndexID()
+        )
+        self.assertTrue(self.process.SetSelectedThread(stepping_thread))
+
+        self.dbg.SetAsync(True)
+        try:
+            stepping_thread.StepOver(lldb.eOnlyThisThread)
+            event = lldb.SBEvent()
+            state = lldb.eStateInvalid
+            while state != lldb.eStateStopped:
+                self.assertTrue(
+                    self.dbg.GetListener().WaitForEvent(10, event),
+                    "Timed out waiting for the async step to stop",
+                )
+                if lldb.SBProcess.EventIsProcessEvent(event):
+                    state = lldb.SBProcess.GetStateFromEvent(event)
+        finally:
+            self.dbg.SetAsync(False)
+
+        self.assertEqual(
+            lldb.eStopReasonPlanComplete,
+            stepping_thread.GetStopReason(),
+            "Async step did not complete",
+        )
+        self.assertEqual(
+            stepping_thread.GetThreadID(),
+            self.process.GetSelectedThread().GetThreadID(),
+            "Async step changed the selected thread",
+        )
 
     def step_out_test(self, step_out_func):
         """Test single thread step out of a function."""
