@@ -30,6 +30,7 @@
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/GDBRemote.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
+#include "lldb/Utility/Locked.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/StringExtractor.h"
@@ -336,12 +337,17 @@ protected:
   std::vector<lldb::addr_t> m_thread_pcs;     // PC values for all the threads.
   /// The position of each ID in m_thread_ids, for FindThreadIDIndex.
   std::unordered_map<lldb::tid_t, size_t> m_thread_id_positions;
-  StructuredData::ObjectSP m_jstopinfo_sp;    // Stop info only for any threads
-                                              // that have valid stop infos
-  StructuredData::ObjectSP m_jthreadsinfo_sp; // Full stop info, expedited
-                                              // registers and memory for all
-                                              // threads if "jThreadsInfo"
-                                              // packet is supported
+  /// Stop info caches filled at a stop and reset by WillResume, which runs on
+  /// another thread. Hold the lock only long enough to copy the shared pointer
+  /// out. The copy keeps the JSON alive past a reset, and reading the JSON
+  /// takes the real thread list mutex, which a reader may already hold.
+  /// @{
+  /// Stop info for the threads that have one, from a stop reply's "jstopinfo".
+  Guarded<StructuredData::ObjectSP, std::mutex> m_jstopinfo;
+  /// Full stop info, expedited registers and memory for all threads, from the
+  /// "jThreadsInfo" packet.
+  Guarded<StructuredData::ObjectSP, std::mutex> m_jthreadsinfo;
+  /// @}
   StructuredData::ObjectSP m_plugin_metadata_sp;
   tid_collection m_continue_c_tids;           // 'c' for continue
   tid_sig_collection m_continue_C_tids;       // 'C' for continue with signal

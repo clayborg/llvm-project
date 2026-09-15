@@ -275,14 +275,13 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
       m_async_listener_sp(
           Listener::MakeListener("lldb.process.gdb-remote.async-listener")),
       m_async_thread_state_mutex(), m_thread_ids(), m_thread_pcs(),
-      m_jstopinfo_sp(), m_jthreadsinfo_sp(), m_continue_c_tids(),
-      m_continue_C_tids(), m_continue_s_tids(), m_continue_S_tids(),
-      m_max_memory_size(0), m_remote_stub_max_memory_size(0),
-      m_addr_to_mmap_size(), m_thread_create_bp_sp(),
-      m_waiting_for_attach(false), m_command_sp(), m_breakpoint_pc_offset(0),
-      m_initial_tid(LLDB_INVALID_THREAD_ID), m_allow_flash_writes(false),
-      m_erased_flash_ranges(), m_vfork_in_progress_count(0),
-      m_sync_state(*this) {
+      m_continue_c_tids(), m_continue_C_tids(), m_continue_s_tids(),
+      m_continue_S_tids(), m_max_memory_size(0),
+      m_remote_stub_max_memory_size(0), m_addr_to_mmap_size(),
+      m_thread_create_bp_sp(), m_waiting_for_attach(false), m_command_sp(),
+      m_breakpoint_pc_offset(0), m_initial_tid(LLDB_INVALID_THREAD_ID),
+      m_allow_flash_writes(false), m_erased_flash_ranges(),
+      m_vfork_in_progress_count(0), m_sync_state(*this) {
   m_async_broadcaster.SetEventName(eBroadcastBitAsyncThreadShouldExit,
                                    "async thread should exit");
   m_async_broadcaster.SetEventName(eBroadcastBitAsyncContinue,
@@ -1660,8 +1659,8 @@ Status ProcessGDBRemote::WillResume() {
   m_continue_C_tids.clear();
   m_continue_s_tids.clear();
   m_continue_S_tids.clear();
-  m_jstopinfo_sp.reset();
-  m_jthreadsinfo_sp.reset();
+  m_jstopinfo.Lock()->reset();
+  m_jthreadsinfo.Lock()->reset();
   return Status();
 }
 
@@ -1993,9 +1992,10 @@ size_t ProcessGDBRemote::UpdateThreadPCsFromStopReplyThreadsValue(
 bool ProcessGDBRemote::UpdateThreadIDList() {
   std::lock_guard<std::recursive_mutex> guard(m_thread_list_real.GetMutex());
 
-  if (m_jthreadsinfo_sp) {
+  StructuredData::ObjectSP threads_info_sp = *m_jthreadsinfo.Lock();
+  if (threads_info_sp) {
     // If we have the JSON threads info, we can get the thread list from that
-    StructuredData::Array *thread_infos = m_jthreadsinfo_sp->GetAsArray();
+    StructuredData::Array *thread_infos = threads_info_sp->GetAsArray();
     if (thread_infos && thread_infos->GetSize() > 0) {
       m_thread_ids.clear();
       m_thread_pcs.clear();
@@ -2168,16 +2168,18 @@ bool ProcessGDBRemote::GetThreadStopInfoFromJSON(
 bool ProcessGDBRemote::CalculateThreadStopInfo(ThreadGDBRemote *thread) {
   // See if we got thread stop infos for all threads via the "jThreadsInfo"
   // packet
-  if (GetThreadStopInfoFromJSON(thread, m_jthreadsinfo_sp))
+  StructuredData::ObjectSP threads_info_sp = *m_jthreadsinfo.Lock();
+  if (GetThreadStopInfoFromJSON(thread, threads_info_sp))
     return true;
 
   // See if we got thread stop info for any threads valid stop info reasons
   // threads via the "jstopinfo" packet stop reply packet key/value pair?
-  if (m_jstopinfo_sp) {
+  StructuredData::ObjectSP stop_info_sp = *m_jstopinfo.Lock();
+  if (stop_info_sp) {
     // If we have "jstopinfo" then we have stop descriptions for all threads
     // that have stop reasons, and if there is no entry for a thread, then it
     // has no stop reason.
-    if (!GetThreadStopInfoFromJSON(thread, m_jstopinfo_sp))
+    if (!GetThreadStopInfoFromJSON(thread, stop_info_sp))
       thread->SetStopInfo(StopInfoSP());
     return true;
   }
@@ -2846,7 +2848,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
 
         // This JSON contains thread IDs and thread stop info for all threads.
         // It doesn't contain expedited registers, memory or queue info.
-        m_jstopinfo_sp = StructuredData::ParseJSON(json);
+        *m_jstopinfo.Lock() = StructuredData::ParseJSON(json);
       } else if (key.compare("hexname") == 0) {
         StringExtractor name_extractor(value);
         // Now convert the HEX bytes into a string value
@@ -3279,12 +3281,13 @@ void ProcessGDBRemote::WillPublicStop() {
   // runtime queue information (iOS and MacOSX only), and more. Expediting
   // memory will help stack backtracing be much faster. Expediting registers
   // will make sure we don't have to read the thread registers for GPRs.
-  m_jthreadsinfo_sp = m_gdb_comm.GetThreadsInfo();
+  StructuredData::ObjectSP threads_info_sp = m_gdb_comm.GetThreadsInfo();
+  *m_jthreadsinfo.Lock() = threads_info_sp;
 
-  if (m_jthreadsinfo_sp) {
+  if (threads_info_sp) {
     // Now set the stop info for each thread and also expedite any registers
     // and memory that was in the jThreadsInfo response.
-    StructuredData::Array *thread_infos = m_jthreadsinfo_sp->GetAsArray();
+    StructuredData::Array *thread_infos = threads_info_sp->GetAsArray();
     if (thread_infos) {
       std::unordered_map<lldb::tid_t, ThreadSP> threads;
       for (const ThreadSP &thread_sp : m_thread_list_real.Threads())
