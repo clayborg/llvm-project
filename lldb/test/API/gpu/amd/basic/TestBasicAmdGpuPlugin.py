@@ -55,6 +55,30 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
             gpu_threads[0], line_number(source, "// GPU STEP OVER")
         )
 
+    def test_gpu_step_over_divergent_lane(self):
+        """Test that stepping follows the selected lane through divergence."""
+        self.build()
+
+        source = "hello_world.hip"
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// DIVERGENT STEP")
+        self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
+
+        lane_zero_thread = None
+        for thread in gpu_threads:
+            idx = thread.GetFrameAtIndex(0).FindVariable("idx").GetValueAsUnsigned()
+            if idx == 0:
+                lane_zero_thread = thread
+                break
+        self.assertIsNotNone(lane_zero_thread)
+        self.assertTrue(lane_zero_thread.IsActive())
+
+        # The wave executes the nonzero branch first, where lane 0 is inactive.
+        # Stepping lane 0 must continue until its own branch is active.
+        self.step_over_gpu_thread(
+            lane_zero_thread, line_number(source, "// LANE ZERO BRANCH")
+        )
+        self.assertTrue(lane_zero_thread.IsActive())
+
     def test_gpu_resume_to_next_breakpoint(self):
         """Test that resuming GPU threads can hit a later breakpoint."""
         self.build()

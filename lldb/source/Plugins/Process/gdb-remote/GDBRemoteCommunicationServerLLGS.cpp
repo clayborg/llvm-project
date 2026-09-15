@@ -946,7 +946,7 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     response.Format("simd:{0};", *simd_id);
 
   if (!thread.GetIsActive())
-    response.PutCString("inactive;");
+    response.PutCString("inactive:1;");
 
   // Include the thread name if there is one.
   const std::string thread_name = thread.GetName();
