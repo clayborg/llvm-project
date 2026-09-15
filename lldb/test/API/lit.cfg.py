@@ -261,6 +261,10 @@ if is_configured("rocgdb_ld_preload"):
 if is_configured("rocgdb_ld_library_path"):
     dotest_cmd += ["--rocgdb-ld-library-path", config.rocgdb_ld_library_path]
 
+if is_configured("icpx_path"):
+    if config.icpx_path:  # Only add if non-empty
+        dotest_cmd += ["--compiler", config.icpx_path]
+
 if is_configured("dsymutil"):
     dotest_cmd += ["--dsymutil", config.dsymutil]
 

@@ -22,6 +22,7 @@
 #include "Targets/CSKY.h"
 #include "Targets/DirectX.h"
 #include "Targets/Hexagon.h"
+#include "Targets/IntelGT.h"
 #include "Targets/Lanai.h"
 #include "Targets/LoongArch.h"
 #include "Targets/M68k.h"
@@ -430,6 +431,9 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
   case llvm::Triple::amdgcn:
   case llvm::Triple::r600:
     return std::make_unique<AMDGPUTargetInfo>(Triple, Opts);
+
+  case llvm::Triple::intelgt:
+    return std::make_unique<IntelGTTargetInfo>(Triple, Opts);
 
   case llvm::Triple::riscv32:
     switch (os) {

@@ -22,6 +22,7 @@ namespace lldb_private {
 
 class UnwindLLDB;
 class ArchitectureArm;
+class ArchitectureIntelGT;
 
 class RegisterContextUnwind : public lldb_private::RegisterContext {
 public:
@@ -108,6 +109,7 @@ private:
   friend class UnwindLLDB;
   // Architecture may need to retrieve caller register values from this frame
   friend class ArchitectureArm;
+  friend class ArchitectureIntelGT;
 
   // Returns true if we have an unwind loop -- the same stack frame unwinding
   // multiple times.
