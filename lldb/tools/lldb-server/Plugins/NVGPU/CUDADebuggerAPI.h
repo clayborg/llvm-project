@@ -11,10 +11,9 @@
 
 #include "cudadebugger.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
-// Shared single-major version policy: the LLDB_NVGPU_CUDBG_API_* compile-time
-// macros, the single-major static_assert, and the runtime CudbgApiVersion
-// type used to pick a driver-compatible API version.
-#include "lldb/Utility/NVGPU/CUDADebuggerVersion.h"
+// The runtime CudbgApiVersion type, used to pick an API version the attached
+// driver supports.
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 
 #include <memory>
 
