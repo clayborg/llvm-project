@@ -4,11 +4,38 @@ NVIDIA GPU Support in LLDB
 System requirements
 ^^^^^^^^^^^^^^^^^^^
 
-You need to have the CUDA Driver and the CUDA Toolkit installed. They can be
-installed following the `official download page <https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_network>`_.
+Building the plugin needs no CUDA Driver or CUDA Toolkit: the CUDA debugger API
+headers are vendored in the source tree (see below). The test suite does need
+`nvcc`: `NVGPU_NVCC_PATH` is deduced from an installed CUDA Toolkit, and with
+`LLDB_INCLUDE_TESTS` on, configure fails if it cannot be deduced or set. So
+building on a machine with no CUDA Toolkit means configuring with
+`LLDB_INCLUDE_TESTS=OFF`.
 
+Debugging needs the CUDA Driver, and building CUDA programs to debug needs the
+CUDA Toolkit. They can be installed following the `official download page <https://developer.nvidia.com/cuda-downloads>`_.
 The minimal version of the CUDA Toolkit and CUDA driver that is supported is
 13.0.0.
+
+CUDA debugger API headers
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+`cudadebugger.h` and `cudacoredump.h` are vendored in
+`lldb/third-party/cuda`, and those copies are what every build compiles
+against. A clean checkout builds without an installed CUDA Toolkit.
+
+They are imported verbatim from the CUDA driver sources.
+
+To build against a different copy without committing it, point
+`NVGPU_DEBUGGER_INCLUDE_DIR` at the folder holding both headers:
+
+.. code-block:: bash
+
+  cmake -DNVGPU_DEBUGGER_INCLUDE_DIR=/path/to/cuda/debugger/headers ...
+
+The override must be from the same supported CUDA major release (see
+`Driver compatibility` below) and no older than the vendored copy. The tree
+uses the API the vendored header describes with no compile-time gating, so an
+older revision will not compile.
 
 CMake requirements
 ^^^^^^^^^^^^^^^^^^
@@ -24,12 +51,10 @@ CMake variables
 ^^^^^^^^^^^^^^^
 
 - `LLDB_ENABLE_NVGPU_PLUGIN`: enables this plugin at the build system level.
-- `NVGPU_DEBUGGER_INCLUDE_DIR`: path to the CUDA debugger headers required
-  to build this plugin. This is the folder that contains the
-  `cudadebugger.h` and `cudacoredump.h` header files, e.g.
-  `/usr/local/cuda/extras/Debugger/include`. If the CUDA Toolkit is
-  installed in a standard location, this variable will be deduced
-  automatically.
+- `NVGPU_DEBUGGER_INCLUDE_DIR`: folder containing the `cudadebugger.h` and
+  `cudacoredump.h` header files to build against. Leave it unset to use the
+  copies vendored in `lldb/third-party/cuda`, which is the default. See the
+  CUDA debugger API headers section above.
 - `NVGPU_NVCC_PATH`: path to the NVCC compiler to use in tests. If the CUDA
   Toolkit is installed in a standard location, this variable will be deduced
   automatically.
@@ -86,7 +111,7 @@ Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^
 
 This plugin is built against a single CUDA debugger-API header
-(`cudadebugger.h`, provided by the CUDA Toolkit installation or the
+(`cudadebugger.h`, vendored in `lldb/third-party/cuda` or supplied via the
 `NVGPU_DEBUGGER_INCLUDE_DIR` CMake variable). The header's
 `CUDBG_API_VERSION_MAJOR` identifies the CUDA *major* release the build
 targets.
@@ -158,7 +183,7 @@ Then connect remotely to the lldb-server with the following command:
   > run
 
 Remote platforms - Android
-^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Android support is much simpler than the regular Linux remote support as you
 don't need to set any environment variables.
