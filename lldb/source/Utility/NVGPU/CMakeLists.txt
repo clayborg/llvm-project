@@ -2,6 +2,7 @@ include(SetupCUDA)
 
 add_lldb_library(lldbUtilityNVGPU
   CUDAAddressSpaces.cpp
+  CUDADebuggerAPIVersion.cpp
   CUDAException.cpp
   SASSRegisterInfo.cpp
   ThreadName.cpp

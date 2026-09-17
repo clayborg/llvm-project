@@ -14,40 +14,26 @@
 /// LLDB's NVGPU plugins are built against a single CUDA debugger-API header
 /// but must work against any CUDA driver -- or read any coredump -- within
 /// that same CUDA *major* release. There is no cross-major-release
-/// compatibility. These macros gate version-specific symbols on the compiled
-/// header's `CUDBG_API_VERSION_*` values; `CUDBG_API_VERSION_REVISION` is a
-/// monotonic build counter and is the reliable in-major discriminator.
+/// compatibility, and no compile-time gating within a major: the header is
+/// vendored, so every build has the same one. What varies at run time is the
+/// driver, which `CudbgApiVersion` below is for.
+///
+/// Which major that is, and the check that enforces it, live in
+/// `CUDADebuggerAPIVersion.cpp`.
+///
+/// The header is the copy vendored in `lldb/third-party/cuda`, unless
+/// `NVGPU_DEBUGGER_INCLUDE_DIR` points elsewhere; `SetupCUDA.cmake` makes
+/// that choice.
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLDB_UTILITY_NVGPU_CUDADEBUGGERVERSION_H
-#define LLDB_UTILITY_NVGPU_CUDADEBUGGERVERSION_H
+#ifndef LLDB_UTILITY_NVGPU_CUDADEBUGGERAPIVERSION_H
+#define LLDB_UTILITY_NVGPU_CUDADEBUGGERAPIVERSION_H
 
 #include "cudadebugger.h"
 
 #include <cstdint>
 #include <tuple>
-
-/// The CUDA major release this LLDB build targets. Cross-major-release
-/// compatibility is explicitly out of scope: a build works against any
-/// driver/coredump within this major only. It is a build constant rather
-/// than something derived from the header so that an accidental cross-major
-/// build is caught by the static_assert below instead of producing cryptic
-/// missing-symbol errors.
-#define LLDB_NVGPU_CUDA_TARGET_MAJOR 13
-
-static_assert(CUDBG_API_VERSION_MAJOR == LLDB_NVGPU_CUDA_TARGET_MAJOR,
-              "LLDB's NVGPU plugins support building against a single CUDA "
-              "debugger-API major release only (see "
-              "LLDB_NVGPU_CUDA_TARGET_MAJOR). The cudadebugger.h on the "
-              "include path is from a different major release.");
-
-/// True if the compiled CUDA debugger API revision is at least `revision`.
-/// Because cross-major builds are rejected above and
-/// `CUDBG_API_VERSION_REVISION` is monotonic within a major, the revision
-/// alone is a sufficient discriminator for version-specific symbols.
-#define LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(revision)                            \
-  (CUDBG_API_VERSION_REVISION >= (revision))
 
 namespace lldb_private::nvgpu {
 
@@ -86,4 +72,4 @@ struct CudbgApiVersion {
 
 } // namespace lldb_private::nvgpu
 
-#endif // LLDB_UTILITY_NVGPU_CUDADEBUGGERVERSION_H
+#endif // LLDB_UTILITY_NVGPU_CUDADEBUGGERAPIVERSION_H
