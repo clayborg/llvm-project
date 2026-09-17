@@ -27,15 +27,17 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_CUDBGENTRYPARSER_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_CUDBGENTRYPARSER_H
 
+// cudacoredump.h defines SHT_LOUSER as a macro, which breaks the
+// llvm::ELF::SHT_LOUSER enumerator. Its define is #ifndef-guarded, so an
+// unconditional #undef here would delete someone else's definition instead.
+// Save and restore whatever SHT_LOUSER was.
+#pragma push_macro("SHT_LOUSER")
 #include "cudacoredump.h"
-// cudacoredump.h conditionally defines SHT_LOUSER as a preprocessor macro
-// which conflicts with the llvm::ELF::SHT_LOUSER enum value. Undef it here
-// since the CudbgXxxTableEntry types are already declared.
-#undef SHT_LOUSER
+#pragma pop_macro("SHT_LOUSER")
 
-// Brings in cudadebugger.h (for the CUDBG_API_VERSION_* macros that gate the
-// version-specific field reads below) and the single-major static_assert.
-#include "lldb/Utility/NVGPU/CUDADebuggerVersion.h"
+// Brings in cudadebugger.h, for the CUDBG_API_VERSION_MAJOR that
+// ProcessNVGPUCore.cpp compares a coredump's producer version against.
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 
 #include "lldb/Core/Section.h"
 #include "lldb/Symbol/ObjectFile.h"

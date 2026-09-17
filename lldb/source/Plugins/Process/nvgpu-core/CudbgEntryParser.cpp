@@ -40,9 +40,7 @@ llvm::Expected<DeviceEntry> DeviceEntry::Decode(const DataExtractor &data,
   out.numUniformRegsPrWarp = data.GetU32(offset_ptr);
   out.numUniformPredicatesPrWarp = data.GetU32(offset_ptr);
   // Since CUDA driver r575 (CUDBG API revision 156).
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(156)
   out.numConvergenceBarriersPrWarp = data.GetU32(offset_ptr);
-#endif
   return out;
 }
 
@@ -78,9 +76,7 @@ llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
   out.clusterExceptionTargetBlockIdxY = data.GetU32(offset_ptr);
   out.clusterExceptionTargetBlockIdxZ = data.GetU32(offset_ptr);
   // Since CUDA driver r580 (CUDBG API revision 163).
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(163)
   out.exceptionString = data.GetU64(offset_ptr);
-#endif
   return out;
 }
 
@@ -171,11 +167,9 @@ llvm::Expected<WarpEntry> WarpEntry::Decode(const DataExtractor &data,
   out.cbuExitedLanesMask = data.GetU32(offset_ptr);
   out.cbuCollectiveLanesMask = data.GetU32(offset_ptr);
   // Since CUDA driver r590 (CUDBG API revision 167).
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
   out.barrierScope = data.GetU32(offset_ptr);
   out.padding3 = data.GetU32(offset_ptr);
   out.additionalBarrierInfo = data.GetU64(offset_ptr);
-#endif
   return out;
 }
 
@@ -196,15 +190,11 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   out.syscallCallDepth = data.GetU32(offset_ptr);
   out.ccRegister = data.GetU32(offset_ptr);
   // Since CUDA driver r575 (CUDBG API revision 156).
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(156)
   out.cbuThreadState = data.GetU32(offset_ptr);
   out.padding0 = data.GetU32(offset_ptr);
-#endif
   // Since CUDA driver r615 (CUDBG API revision 192).
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(192)
   out.rpcLo = data.GetU32(offset_ptr);
   out.rpcHi = data.GetU32(offset_ptr);
-#endif
   return out;
 }
 
