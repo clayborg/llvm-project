@@ -52,18 +52,12 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // Always call the stable 7-arg entry point. It lives at a fixed offset in
   // every in-major driver's API table, so it works regardless of the
   // (possibly older) driver we attached to -- no runtime version check is
-  // needed. CTK 13.2 (CUDBG API revision > 167) renamed it to
-  // readRegisterRange60 and appended a new 8-arg readRegisterRange variant we
-  // don't use; select the right name at compile time.
-#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(168)
+  // needed. CTK 13.2 (CUDBG API revision 168) renamed it to
+  // readRegisterRange60 and appended a new 8-arg readRegisterRange we do not
+  // use.
   CUDBGResult res = api->readRegisterRange60(
       thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
       thread_coords.thread_id, 0, num_regs_read, regs.val.regular);
-#else
-  CUDBGResult res = api->readRegisterRange(
-      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
-      thread_coords.thread_id, 0, num_regs_read, regs.val.regular);
-#endif
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
                            "readRegisterRange failed: {}",
