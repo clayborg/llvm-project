@@ -38,13 +38,9 @@ using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
 namespace {
-/// Lets ordinary signals pass through the inferior without stopping it, for
-/// the duration of a debugger-driven resume, restoring the prior disposition
-/// on scope exit. Mirrors cuda-gdb's cuda_gdb_bypass_signals.
-///
-/// SIGTRAP (breakpoint and step control), SIGKILL and SIGSTOP (cannot be
-/// ignored), SIGCHLD (process bookkeeping) and SIGURG (the debug API's
-/// notification signal) are excluded.
+/// Lets ordinary signals pass through the inferior without stopping it for the
+/// duration of a debugger-driven resume, excluding SIGTRAP, SIGKILL, SIGSTOP,
+/// SIGCHLD and the debug API's SIGURG. Mirrors cuda_gdb_bypass_signals.
 class ScopedInferiorSignalBypass {
 public:
   explicit ScopedInferiorSignalBypass(NativeProcessProtocol *process)
@@ -197,8 +193,6 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
   if (error.Fail())
     logAndReportFatalError("Failed to launch the GPU process. {}", error);
 
-  // Wire the back-pointer so ProcessNVGPU::Detach can delegate the detach
-  // cleanup sequence to this plugin.
   if (m_gpu)
     m_gpu->SetPlugin(this);
 }
@@ -214,14 +208,11 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
   Log *log = GetLog(GDBRLog::Plugin);
   using std::chrono::steady_clock;
 
-  // Take the lock only to read and to commit the transition; the procfs/ptrace
-  // reads and the FD write in between must not block the GPU event thread,
-  // which takes the same lock.
-  //
-  // Nothing can race the unlocked work: the native callbacks all run serially
-  // on the single LLGS MainLoop thread, and the only other writer of
-  // m_attach_state lives on the GPU MainLoop thread, which does not exist until
-  // InitializeAPIAndConnect creates it.
+  // The procfs/ptrace reads and the FD write below must not run under
+  // m_attach_mutex, which the GPU event thread also takes. Nothing can race
+  // them: native callbacks run serially on the LLGS MainLoop thread, and the
+  // only other writer of m_attach_state runs on the GPU MainLoop thread, which
+  // InitializeAPIAndConnect has not created yet.
   NativeProcessProtocol *cpu_process = nullptr;
   steady_clock::time_point deadline;
   {
@@ -232,8 +223,7 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
     cpu_process = m_native_process.GetCurrentProcess();
   }
 
-  // Everything below either commits eInjected or leaves the state at eProbing
-  // so a later stop retries.
+  // Everything below either commits eInjected or stays at eProbing to retry.
   if (!cpu_process) {
     LLDB_LOG(log, "TryInitiateAttachServerSide: no current native process yet");
     return;
@@ -268,8 +258,8 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
     return it->second;
   };
 
-  // Every required symbol resolved above, so an error here is a read failure
-  // rather than a missing symbol, and false means the flag is simply not set.
+  // Every required symbol resolved above, so an error here means a failed read
+  // rather than a missing symbol.
   Expected<bool> supported =
       CUDADebuggerAPI::IsLateAttachSupported(get_addr, *cpu_process);
   if (!supported) {
@@ -330,8 +320,7 @@ void LLDBServerPluginNVGPU::ScheduleAttachProbe() {
 }
 
 void LLDBServerPluginNVGPU::ScheduleInjectedPhaseWatchdog() {
-  // One-shot, so the warning cannot repeat. It runs on the GPU MainLoop, which
-  // by then is exactly the loop waiting for CUDBG_EVENT_ATTACH_COMPLETE.
+  // One-shot, so the warning cannot repeat.
   m_main_loop.AddCallback(
       [this](MainLoopBase &) {
         std::lock_guard<std::mutex> guard(m_attach_mutex);
@@ -503,9 +492,9 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
         "Failed to set the event callback for the CUDA Debugger API. {}",
         cudbgGetErrorString(res));
 
-  // Only now that the event callback is registered may the driver be told a
-  // client is ready, so no notification can be emitted before we can observe
-  // it. The launch path published the IPC flag during Initialize.
+  // Deferred until the event callback exists, so the driver cannot emit a
+  // notification before anything can observe it. Initialize already published
+  // the IPC flag on the launch path.
   if (is_late_attach) {
     if (Error err = FinishLateAttachIpcHandshake(get_symbol_address))
       return err;
@@ -528,8 +517,6 @@ llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
     return createStringError(
         "No native process available to complete the late attach handshake");
 
-  // Required on both branches below: the driver emits no callbacks at all,
-  // CUDBG_EVENT_ATTACH_COMPLETE included, until a client declares itself ready.
   if (Error err = CUDADebuggerAPI::SetIpcFlag(get_symbol_address, *cpu_process,
                                               /*enabled=*/true))
     return err;
@@ -560,15 +547,9 @@ llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   std::string library_name = *args.breakpoint.name_info->shlib;
-  // Either the cuInit-style breakpoint (launch) or
-  // CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED (late attach). The debug engine is
-  // present in both cases, and the hit args carry the handshake symbols.
-  //
-  // The breakpoint can fire more than once -- both libcuda sonames may resolve.
-  // Re-running InitializeAPIAndConnect would build a second API table and
-  // reverse connection and leak the live one, so just disable it. A plain flag
-  // suffices because BreakpointWasHit only ever runs on the LLGS MainLoop
-  // thread, which is also blocked inside the unlocked initialization below.
+  // Both libcuda sonames can resolve, so this fires more than once.
+  // Initializing twice would build a second API table and reverse connection
+  // and leak the live one.
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     if (m_api_initialized) {
@@ -594,9 +575,8 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     return actions.takeError();
   }
 
-  // Leaving eProbing stops the attach handshake retries. We are still probing
-  // when CUDA came up via the launch-style breakpoint during an attach; the
-  // normal late attach path is already at eInjected.
+  // Still probing means CUDA came up via the launch-style breakpoint during an
+  // attach; leaving eProbing stops the handshake retries.
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     m_api_initialized = true;
@@ -648,8 +628,6 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions(
 void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGV(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
-  // The async notifier path simply drives one drain pass. The synchronous
-  // detach loop calls DrainSyncEventsOnce directly.
   DrainSyncEventsOnce();
 }
 
@@ -659,8 +637,7 @@ int LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
 
   int events_handled = 0;
   while (true) {
-    // A poisoned API must not be touched again: the clean stop and structured
-    // error have already been reported.
+    // A poisoned API must not be touched again.
     {
       std::lock_guard<std::mutex> guard(m_attach_mutex);
       if (m_api_faulted)
@@ -847,8 +824,7 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
 
   CUDBGAPI api = m_gpu ? m_gpu->GetDebuggerAPI() : nullptr;
 
-  // A faulted API must not be called again; the steps below skip it and the
-  // caller still finishes the teardown.
+  // A faulted API must not be called again; the steps below skip it.
   bool faulted = false;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
@@ -859,8 +835,6 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
 
   NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess();
 
-  // Resolved server-side like the attach path: used to read the resume flag and
-  // to reset the driver globals below.
   std::optional<llvm::StringMap<uint64_t>> symbols;
   if (cpu) {
     Expected<llvm::StringMap<uint64_t>> syms =
@@ -970,7 +944,7 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     m_attach_state = AttachState::eNone;
   }
 
-  // 4. Clear the attach-specific driver state (unless the API is poisoned).
+  // 4. Clear the attach-specific driver state.
   if (api && !faulted) {
     CUDBGResult res = api->clearAttachState();
     if (res != CUDBG_SUCCESS)
@@ -978,12 +952,11 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
                cudbgGetErrorString(res));
   }
 
-  // 5. Only now reset the driver handshake flags, so a later debugger
-  // re-negotiates. Order matters: cudbgIpcFlag is what authorizes the driver to
-  // emit callbacks, so clearing it before step 3 would cut off the very
-  // mechanism that cleanup runs on, and the driver would go on believing a
-  // debugger is attached -- which stops it re-running its attach procedure for
-  // a later re-attach. Best-effort; a failed write does not abort the detach.
+  // 5. Only now reset the handshake flags, so a later debugger re-negotiates.
+  // cudbgIpcFlag is what authorizes the driver to emit callbacks, so clearing
+  // it before step 3 cuts off the mechanism that cleanup runs on and leaves the
+  // driver believing a debugger is still attached, which in turn stops it
+  // re-running its attach procedure for a later re-attach.
   if (cpu && symbols) {
     // Step 3 left the application running, and ptrace refuses to write to a
     // running tracee. cuda-gdb interrupts the target at this same point.
@@ -1013,9 +986,8 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     }
   }
 
-  // 6. Finalize and drop the API, mirroring initialization. The notifier goes
-  // first so nothing can dispatch into the API once it is gone, and the GPU
-  // process's copy of the table is cleared so it cannot dangle.
+  // 6. Finalize and drop the API. The notifier goes first so nothing can
+  // dispatch into it once it is gone.
   m_main_loop_event_notifier_up.reset();
   if (m_gpu) {
     m_gpu->SetSyncEventDrainNotifier(nullptr);
@@ -1026,8 +998,6 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     m_cuda_api.reset();
   }
 
-  // Return to a clean idle state. The caller (ProcessNVGPU::Detach) performs the
-  // final SetState(eStateDetached).
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     m_attach_state = AttachState::eNone;

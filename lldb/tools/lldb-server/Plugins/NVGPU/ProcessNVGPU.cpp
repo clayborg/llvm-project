@@ -166,7 +166,6 @@ Status ProcessNVGPU::Interrupt() {
 
   // A stop must be reported either way: the lldb-server interrupt handler does
   // not synthesize a stop reply, so the client would hang waiting for one.
-  // Without the API there is no device to suspend, so stop the fallback thread.
   if (!m_api) {
     LLDB_LOG(log, "NVGPU::Interrupt(). No debugger API; reporting a stop "
                   "without suspending any device.");
@@ -302,13 +301,9 @@ ProcessNVGPU::Manager::Launch(
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessNVGPU::Manager::Attach(
     lldb::pid_t pid, NativeProcessProtocol::NativeDelegate &native_delegate) {
-  // The GPU "process" is virtual: GPU debugging is driven by the CUDA debugger
-  // API, not by attaching to an OS process. The client connects to this GPU
-  // gdb-server rather than attaching to a pid, so this path mirrors Launch and
-  // creates the same fake stopped process the client can connect to. Late
-  // attach to a running CUDA application is handled on the CPU side by
-  // LLDBServerPluginNVGPU, which initializes the debugger API and refreshes
-  // device state once the attach procedure completes.
+  // There is no OS process to attach to, so this mirrors Launch and creates the
+  // same fake stopped process. LLDBServerPluginNVGPU drives the real late
+  // attach on the CPU side.
   auto gpu_up = std::make_unique<ProcessNVGPU>(pid, native_delegate);
   return gpu_up;
 }
@@ -491,18 +486,9 @@ void ProcessNVGPU::OnAllDevicesSuspended(
       breakpoint_thread_id.value_or(m_threads.front()->GetID()));
   SetCurrentThreadID(current_tid);
 
-  // For a debugger-initiated stop (late attach completing, or a user
-  // interrupt) the kernel was running freely, so no thread stopped for a
-  // breakpoint or exception (every lane reports eStopReasonNone). A stop with
-  // no actionable reason is treated as spurious by the LLDB client, which
-  // auto-resumes it -- leaving the GPU target stuck "running" and undebuggable.
-  // Report the selected thread with an exception-class stop reason and the
-  // supplied description: that is the only stop reason the client honors
-  // unconditionally for the GPU target, independent of the (non-host) GPU
-  // signal table. A signal stop does not work here -- the host SIGSTOP number
-  // maps to a non-stopping signal on the GPU target and gets auto-resumed.
-  // (We cannot gate on exception_thread_id: it tracks the first eStopReasonNone
-  // lane, not a genuine exception, so it is always set for a running kernel.)
+  // See the forced_stop_description parameter docs. exception_thread_id cannot
+  // gate this: it tracks the first eStopReasonNone lane rather than a genuine
+  // exception, so a running kernel always sets it.
   if (!forced_stop_description.empty()) {
     if (NativeThreadProtocol *thread = GetThreadByID(current_tid))
       static_cast<ThreadNVGPU *>(thread)->SetStopped(
@@ -529,10 +515,8 @@ void ProcessNVGPU::SuspendAllDevicesAndRefresh(
                device.GetDeviceId(), cudbgGetErrorString(res));
   }
 
-  // Drive the same state refresh + thread enumeration path used when the driver
-  // reports that all devices were suspended, but pass the stop description so it
-  // is reported as a debugger-forced stop and the client keeps the
-  // freely-running kernel stopped (see OnAllDevicesSuspended).
+  // The same path the driver's own suspend event takes, but with a stop
+  // description so the client keeps the freely-running kernel stopped.
   CUDBGEvent::cases_st::allDevicesSuspended_st event = {};
   OnAllDevicesSuspended(event, log_to_client_callback, stop_description);
 }
