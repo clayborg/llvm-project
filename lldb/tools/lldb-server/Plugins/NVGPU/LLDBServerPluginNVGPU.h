@@ -75,6 +75,33 @@ private:
 
   llvm::Error DetachCleanup();
 
+  /// Step 3 of DetachCleanup: ask the driver to clean up, resume the devices
+  /// and the application so it can, and drain until it reports completion.
+  /// Best effort; every failure is logged and detach continues.
+  void ResumeForDriverCleanup(CUDBGAPI api, NativeProcessProtocol *cpu,
+                              uint32_t resume_flags);
+
+  /// Drain events until CUDBG_EVENT_DETACH_COMPLETE, the API faults, the
+  /// inferior exits, or kDetachMaxIterations is reached. We occupy the GPU
+  /// MainLoop thread the notifier would dispatch on, so the event has to be
+  /// drained here rather than awaited.
+  void DrainUntilDetachComplete(NativeProcessProtocol *cpu);
+
+  /// Step 5 of DetachCleanup: clear the driver's handshake globals so a later
+  /// debugger re-negotiates. Only valid once the driver has finished its own
+  /// cleanup, which needs the IPC flag still set.
+  void ResetDriverHandshakeFlags(NativeProcessProtocol &cpu,
+                                 const llvm::StringMap<uint64_t> &symbols);
+
+  /// Step 6 of DetachCleanup: finalize and drop the debugger API along with
+  /// everything holding a pointer into it.
+  void ReleaseDebuggerAPI();
+
+  /// Send a monitor log line to the client. Only valid while the GPU is
+  /// running: the client is then waiting for a stop reply and will not mistake
+  /// it for a query response.
+  void SendMonitorLogToClient(llvm::StringRef message);
+
   llvm::Expected<GPUActions>
   InitializeAPIAndConnect(SymbolAddressProvider get_symbol_address,
                           llvm::StringRef libcuda_library_name,

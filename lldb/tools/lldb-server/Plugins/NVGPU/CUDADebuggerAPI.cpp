@@ -689,6 +689,57 @@ OpenInferiorLibcuda(lldb::pid_t pid, const InferiorLibrary &libcuda) {
 /// dynamic symbol table. Symbols in \a required must all resolve or an error is
 /// returned; any \a wanted symbol not in \a required is optional and simply
 /// absent from the result when libcuda does not export it.
+/// Reject anything we cannot parse as a 64-bit little-endian ELF, so a wrongly
+/// resolved file produces a targeted diagnostic rather than garbage addresses.
+static Error ValidateElf64LE(llvm::StringRef raw, llvm::StringRef path) {
+  if (raw.size() <= llvm::ELF::EI_DATA ||
+      raw.take_front(4) != llvm::StringRef(llvm::ELF::ElfMagic, 4))
+    return createStringErrorFmt("{0} is not an ELF object file", path);
+
+  const unsigned char ei_class =
+      static_cast<unsigned char>(raw[llvm::ELF::EI_CLASS]);
+  const unsigned char ei_data =
+      static_cast<unsigned char>(raw[llvm::ELF::EI_DATA]);
+  if (ei_class != llvm::ELF::ELFCLASS64 || ei_data != llvm::ELF::ELFDATA2LSB)
+    return createStringErrorFmt(
+        "{0} is not a 64-bit little-endian ELF image (EI_CLASS={1}, "
+        "EI_DATA={2}); the NVGPU late attach path only supports "
+        "ELFCLASS64/ELFDATA2LSB libcuda images",
+        path, static_cast<unsigned>(ei_class), static_cast<unsigned>(ei_data));
+  return Error::success();
+}
+
+/// \return how far the image moved from its link-time address, which is what a
+/// symbol's st_value has to be adjusted by. st_value is relative to the p_vaddr
+/// of the PT_LOAD mapping file offset 0, and load_base is where that segment
+/// actually landed; without such a segment there is no anchor at all.
+static Expected<uint64_t>
+ComputeLoadBias(const llvm::object::ELF64LEObjectFile &elf,
+                const InferiorLibrary &libcuda) {
+  Expected<llvm::object::ELF64LE::PhdrRange> phdrs_or =
+      elf.getELFFile().program_headers();
+  if (!phdrs_or)
+    return phdrs_or.takeError();
+
+  for (const llvm::object::ELF64LE::Phdr &phdr : *phdrs_or) {
+    if (phdr.p_type != llvm::ELF::PT_LOAD || phdr.p_offset != 0)
+      continue;
+    // A load base below the link-time base would underflow into a huge
+    // positive bias, so reject it rather than computing bogus addresses.
+    if (libcuda.load_base < phdr.p_vaddr)
+      return createStringErrorFmt(
+          "libcuda load base {0:x} is below its link-time base {1:x}; refusing "
+          "to compute a negative load bias",
+          libcuda.load_base, phdr.p_vaddr);
+    return libcuda.load_base - phdr.p_vaddr;
+  }
+
+  return createStringErrorFmt(
+      "{0} has no PT_LOAD segment mapping file offset 0; cannot compute the "
+      "load bias for the late-attach symbols",
+      libcuda.path);
+}
+
 static Expected<llvm::StringMap<uint64_t>>
 ResolveInferiorSymbols(NativeProcessProtocol &linux_process,
                        llvm::ArrayRef<std::string> wanted,
@@ -714,25 +765,8 @@ ResolveInferiorSymbols(NativeProcessProtocol &linux_process,
     return buffer_or.takeError();
   std::unique_ptr<llvm::MemoryBuffer> buffer = std::move(*buffer_or);
 
-  // Validate the ELF identity before parsing as 64-bit little-endian. A
-  // mismatch means we resolved the wrong file or libcuda is an unexpected
-  // format; either way returning a targeted diagnostic beats misinterpreting
-  // the bytes.
-  llvm::StringRef raw = buffer->getBuffer();
-  if (raw.size() <= llvm::ELF::EI_DATA ||
-      raw.take_front(4) != llvm::StringRef(llvm::ELF::ElfMagic, 4))
-    return createStringErrorFmt("{0} is not an ELF object file", libcuda.path);
-  const unsigned char ei_class =
-      static_cast<unsigned char>(raw[llvm::ELF::EI_CLASS]);
-  const unsigned char ei_data =
-      static_cast<unsigned char>(raw[llvm::ELF::EI_DATA]);
-  if (ei_class != llvm::ELF::ELFCLASS64 || ei_data != llvm::ELF::ELFDATA2LSB)
-    return createStringErrorFmt(
-        "{0} is not a 64-bit little-endian ELF image (EI_CLASS={1}, "
-        "EI_DATA={2}); the NVGPU late attach path only supports "
-        "ELFCLASS64/ELFDATA2LSB libcuda images",
-        libcuda.path, static_cast<unsigned>(ei_class),
-        static_cast<unsigned>(ei_data));
+  if (Error err = ValidateElf64LE(buffer->getBuffer(), libcuda.path))
+    return err;
 
   Expected<llvm::object::ELF64LEObjectFile> object_or =
       llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
@@ -740,33 +774,10 @@ ResolveInferiorSymbols(NativeProcessProtocol &linux_process,
     return object_or.takeError();
   const llvm::object::ELF64LEObjectFile &elf = *object_or;
 
-  // st_value is relative to the p_vaddr of the PT_LOAD mapping file offset 0,
-  // and load_base is where that segment actually landed, so the bias is the
-  // difference. Without such a segment there is no anchor at all.
-  Expected<llvm::object::ELF64LE::PhdrRange> phdrs_or =
-      elf.getELFFile().program_headers();
-  if (!phdrs_or)
-    return phdrs_or.takeError();
-  std::optional<uint64_t> link_time_base;
-  for (const llvm::object::ELF64LE::Phdr &phdr : *phdrs_or) {
-    if (phdr.p_type == llvm::ELF::PT_LOAD && phdr.p_offset == 0) {
-      link_time_base = phdr.p_vaddr;
-      break;
-    }
-  }
-  if (!link_time_base)
-    return createStringErrorFmt(
-        "{0} has no PT_LOAD segment mapping file offset 0; cannot compute the "
-        "load bias for the late-attach symbols",
-        libcuda.path);
-  // load_base < link_time_base would make the bias underflow into a huge
-  // positive value; reject it instead of computing bogus addresses.
-  if (libcuda.load_base < *link_time_base)
-    return createStringErrorFmt(
-        "libcuda load base {0:x} is below its link-time base {1:x}; refusing "
-        "to compute a negative load bias",
-        libcuda.load_base, *link_time_base);
-  const uint64_t load_bias = libcuda.load_base - *link_time_base;
+  Expected<uint64_t> load_bias_or = ComputeLoadBias(elf, libcuda);
+  if (!load_bias_or)
+    return load_bias_or.takeError();
+  const uint64_t load_bias = *load_bias_or;
 
   // Resolve each wanted symbol, tracking which required ones remain so we can
   // report an actionable error listing the missing ones instead of silently
