@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <csignal>
+#include <future>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -941,6 +942,41 @@ void LLDBServerPluginNVGPU::HandleInternalError(CUDBGResult error_type) {
   }
 }
 
+llvm::Error
+LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work,
+                                           std::chrono::milliseconds timeout) {
+  // Held by both this frame and the callback, so a timeout here cannot leave
+  // the native thread writing into a destroyed promise.
+  struct SharedWork {
+    std::function<llvm::Error()> work;
+    /// An empty string means success; otherwise the rendered error.
+    std::promise<std::string> result;
+  };
+  std::shared_ptr<SharedWork> shared = std::make_shared<SharedWork>();
+  shared->work = std::move(work);
+  std::future<std::string> future = shared->result.get_future();
+
+  if (!m_native_process.GetMainLoop().AddPendingCallback(
+          [shared](MainLoopBase &) {
+            std::string message;
+            if (Error err = shared->work())
+              message = llvm::toString(std::move(err));
+            shared->result.set_value(std::move(message));
+          }))
+    return createStringError("the native MainLoop is no longer accepting work");
+
+  if (future.wait_for(timeout) != std::future_status::ready)
+    return createStringErrorFmt(
+        "timed out after {0}ms waiting for the native MainLoop to run the "
+        "request",
+        timeout.count());
+
+  std::string message = future.get();
+  if (message.empty())
+    return Error::success();
+  return createStringError(message);
+}
+
 llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "LLDBServerPluginNVGPU::DetachCleanup()");
@@ -1001,11 +1037,32 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
            resume_for_detach, faulted);
 
   // 3. Reset the driver handshake flags (gap 7) so a later re-attach is clean.
+  //
+  // These are writes into the inferior, so they must run on the native MainLoop
+  // thread (see RunOnNativeMainLoop). Issued from this thread they fail with
+  // ESRCH, which silently leaves cudbgDebuggerCapabilities,
+  // cudbgDebuggerInitialized and cudbgIpcFlag set.
+  //
   // Best-effort: log but do not abort detach on a write failure.
   if (cpu && symbols) {
-    if (Error err = CUDADebuggerAPI::ResetDetachSymbols(get_addr, *cpu)) {
+    llvm::StringMap<uint64_t> detach_symbols = *symbols;
+    if (Error err = RunOnNativeMainLoop(
+            [cpu, detach_symbols = std::move(detach_symbols)]() -> Error {
+              auto addr_of =
+                  [&detach_symbols](StringRef name) -> std::optional<uint64_t> {
+                llvm::StringMap<uint64_t>::const_iterator it =
+                    detach_symbols.find(name);
+                if (it == detach_symbols.end())
+                  return std::nullopt;
+                return it->second;
+              };
+              return CUDADebuggerAPI::ResetDetachSymbols(addr_of, *cpu);
+            },
+            std::chrono::milliseconds(kNativeWorkTimeoutMs))) {
       LLDB_LOG(log, "DetachCleanup: failed to reset detach symbols: {0}",
                llvm::toString(std::move(err)));
+    } else {
+      LLDB_LOG(log, "DetachCleanup: reset the driver handshake flags");
     }
   }
 
@@ -1033,12 +1090,18 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     }
 
     if (cpu) {
-      ResumeActionList resume_actions(lldb::eStateRunning,
-                                      LLDB_INVALID_SIGNAL_NUMBER);
-      Status status = cpu->Resume(resume_actions);
-      if (status.Fail())
+      // PTRACE_CONT, so this has the same thread-affinity requirement as the
+      // flag writes above. The signal bypass is plain bookkeeping and stays on
+      // this thread, where it also covers the drain loop below.
+      if (Error err = RunOnNativeMainLoop(
+              [cpu]() -> Error {
+                ResumeActionList resume_actions(lldb::eStateRunning,
+                                                LLDB_INVALID_SIGNAL_NUMBER);
+                return cpu->Resume(resume_actions).ToError();
+              },
+              std::chrono::milliseconds(kNativeWorkTimeoutMs)))
         LLDB_LOG(log, "DetachCleanup: failed to resume the CPU process: {0}",
-                 status.AsCString());
+                 llvm::toString(std::move(err)));
     }
 
     // Inline drain loop. We are on the GPU MainLoop thread (the same thread the

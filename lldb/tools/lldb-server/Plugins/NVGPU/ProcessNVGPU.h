@@ -63,6 +63,13 @@ public:
   ///     Delegate for handling process events and notifications.
   ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate);
 
+  /// The inherited m_threads vector holds unique_ptrs that deliberately do NOT
+  /// own their ThreadNVGPU objects: they point either at m_fallback_thread (a
+  /// member subobject) or at threads owned by DeviceState. Letting the base
+  /// class destructor run would delete storage we do not own, so release the
+  /// pointers before that happens.
+  ~ProcessNVGPU() override;
+
   void SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }

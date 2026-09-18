@@ -166,6 +166,32 @@ private:
   ///     The CUDBGResult carried by the internal-error event.
   void HandleInternalError(CUDBGResult error_type);
 
+  /// Run \a work on the native (CPU) MainLoop thread and block until it
+  /// finishes.
+  ///
+  /// Linux accepts ptrace requests only from the thread that attached to the
+  /// tracee, which for lldb-server is the native MainLoop thread. Anything that
+  /// reaches PTRACE_POKEDATA or PTRACE_CONT -- writing inferior memory, or
+  /// resuming the process -- therefore fails with ESRCH when issued from the
+  /// GPU MainLoop thread, where the detach path runs. (Memory *reads* happen to
+  /// work because they go through process_vm_readv, which has no such
+  /// restriction, so the failure is easy to miss.)
+  ///
+  /// The caller must not hold m_attach_mutex, since the native thread may need
+  /// it. The shared state is kept alive independently of this call, so a
+  /// timeout cannot leave the callback writing to freed memory.
+  ///
+  /// \param[in] work
+  ///     The work to run on the native MainLoop thread.
+  /// \param[in] timeout
+  ///     How long to wait before giving up on the work being run.
+  ///
+  /// \return
+  ///     The error returned by \a work, or an error if it could not be
+  ///     scheduled or did not run within \a timeout.
+  llvm::Error RunOnNativeMainLoop(std::function<llvm::Error()> work,
+                                  std::chrono::milliseconds timeout);
+
   /// Plugin-owned detach cleanup: tear down device breakpoints, reset the
   /// driver handshake flags, optionally resume the application so the driver can
   /// finish its cleanup (draining the resulting events inline), then clear the
@@ -317,6 +343,10 @@ private:
   /// while waiting for CUDBG_EVENT_DETACH_COMPLETE before giving up. Mirrors
   /// cuda-gdb's remote sync detach loop bound.
   static constexpr int kDetachMaxIterations = 100;
+
+  /// How long the detach path waits for a piece of ptrace-bound work to run on
+  /// the native MainLoop thread (see RunOnNativeMainLoop).
+  static constexpr unsigned kNativeWorkTimeoutMs = 5000;
 };
 
 } // namespace lldb_private::lldb_server

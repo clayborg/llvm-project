@@ -30,6 +30,9 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
+static void ReleaseAndClearThreads(
+    std::vector<std::unique_ptr<NativeThreadProtocol>> &threads);
+
 ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate)
     : NativeProcessProtocol(pid, -1, delegate), m_arch(GetNVPTXArchitecture()),
       m_api(nullptr), m_fallback_thread(*this,
@@ -52,6 +55,8 @@ ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate)
       std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
   SetCurrentThreadID(m_fallback_thread.GetID());
 }
+
+ProcessNVGPU::~ProcessNVGPU() { ReleaseAndClearThreads(m_threads); }
 
 Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
   Log *log = GetLog(GDBRLog::Plugin);
