@@ -64,6 +64,19 @@ public:
   /// cannot overrun those buffers.
   static constexpr size_t CUDBG_INJECTION_PATH_MAX_SIZE = 4096;
 
+  /// Which path is bringing the debugger API up. The two differ only in how
+  /// the driver's IPC "client ready" flag is published; see \ref SetIpcFlag.
+  enum class InitContext {
+    /// cuInit-style initialization. The debugger is present before CUDA comes
+    /// up and there is no attach procedure to sequence against, so the IPC
+    /// flag is published as the last step of initialization.
+    eLaunch,
+    /// Late attach. The IPC flag must stay clear until the attach procedure
+    /// has finished, and even then it is only published conditionally, so
+    /// initialization leaves it alone entirely and the caller decides.
+    eLateAttach,
+  };
+
   /// Initialize the CUDA debugger API.
   ///
   /// \param get_symbol_address
@@ -74,10 +87,39 @@ public:
   ///     The name of the CUDA library that contains the CUDA debugger API.
   /// \param linux_process
   ///     The native (CPU) process being debugged.
+  /// \param init_context
+  ///     Whether this initialization is for a launch or a late attach.
   static llvm::Expected<CUDADebuggerAPI>
   Initialize(SymbolAddressProvider get_symbol_address,
              llvm::StringRef libcuda_library_name,
-             NativeProcessProtocol &linux_process);
+             NativeProcessProtocol &linux_process, InitContext init_context);
+
+  /// Publish (or clear) the driver's CUDBG_IPC_FLAG_NAME, the master "an API
+  /// client is ready, emit callbacks" flag.
+  ///
+  /// Sequencing matters, because the driver emits no callbacks at all until a
+  /// client has declared itself ready. The flag is written as the last step of
+  /// initialization so the driver never observes a ready client whose PID,
+  /// revision, session and capabilities have not been published yet. The attach
+  /// path additionally keeps it clear until the attach procedure has finished
+  /// and the new-event callback is registered, so no notification can be
+  /// emitted before there is anything able to observe it. It is then set
+  /// unconditionally, mirroring cuda-gdb's cuda_initialize_target, which
+  /// publishes the flag during API bring-up on both paths and before it reads
+  /// CUDBG_RESUME_FOR_ATTACH_DETACH.
+  ///
+  /// \param[in] get_symbol_address
+  ///     Resolver for native-process symbol load addresses.
+  /// \param[in] linux_process
+  ///     The native (CPU) process being debugged.
+  /// \param[in] enabled
+  ///     Whether to set (true) or clear (false) the flag.
+  ///
+  /// \return
+  ///     Error::success() on success, or an error describing the failed write.
+  static llvm::Error SetIpcFlag(SymbolAddressProvider get_symbol_address,
+                                NativeProcessProtocol &linux_process,
+                                bool enabled);
 
   /// \return the set of native-process symbol names needed for the late attach
   /// handshake, used by ResolveInferiorAttachSymbols.
@@ -175,6 +217,12 @@ public:
   static GPUBreakpointInfo
   GetAttachFinishedBreakpointInfo(llvm::StringRef library_name);
 
+  /// \return true if \a function_name is the attach-procedure-finished symbol,
+  /// meaning a breakpoint hit on it came from the late attach path rather than
+  /// from launch-style cuInit initialization. The two paths sequence the
+  /// driver's IPC flag differently, so they must be told apart.
+  static bool IsAttachFinishedBreakpoint(llvm::StringRef function_name);
+
   CUDBGAPI operator->() const { return m_api_up.get(); }
 
   CUDBGAPI GetRawAPI() const { return m_api_up.get(); }
@@ -203,7 +251,8 @@ private:
   static llvm::Expected<CUDADebuggerAPI>
   InitializeImpl(SymbolAddressProvider get_symbol_address,
                  llvm::StringRef libcuda_library_name,
-                 NativeProcessProtocol &linux_process);
+                 NativeProcessProtocol &linux_process,
+                 InitContext init_context);
 };
 
 } // namespace lldb_private::lldb_server

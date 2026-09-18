@@ -282,10 +282,10 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
   // Whether the driver wants the application to keep running to complete the
   // attach. In our model the CPU is resumed by the user's "continue" after
   // attach, after which the driver services the request and calls
-  // CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED; the rest of the handshake is then
-  // driven asynchronously off the GPU MainLoop by the debugger-API event
-  // callback (see OnDebuggerAPIEvent / CUDBG_EVENT_ATTACH_COMPLETE). We read the
-  // flag for diagnostics only.
+  // CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. We log the flag here only to make
+  // the handshake traceable; the decision it drives is made after the debugger
+  // API is up, once the driver has had a chance to set it (see
+  // FinishLateAttachIpcHandshake).
   bool resume_for_attach_detach = false;
   if (Expected<bool> resume =
           CUDADebuggerAPI::ShouldResumeForAttachDetach(get_addr, *cpu_process))
@@ -503,10 +503,13 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
 }
 
 Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
-    SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name) {
+    SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
+    bool is_late_attach) {
   Expected<CUDADebuggerAPI> api_or = CUDADebuggerAPI::Initialize(
       get_symbol_address, libcuda_library_name,
-      *m_native_process.GetCurrentProcess());
+      *m_native_process.GetCurrentProcess(),
+      is_late_attach ? CUDADebuggerAPI::InitContext::eLateAttach
+                     : CUDADebuggerAPI::InitContext::eLaunch);
   if (!api_or)
     return api_or.takeError();
 
@@ -546,6 +549,16 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
         "Failed to set the event callback for the CUDA Debugger API. {}",
         cudbgGetErrorString(res));
 
+  // Only now that the new-event callback is registered may the driver be told
+  // a client is ready, so that no notification can be emitted before we can
+  // observe it. On the launch path CUDADebuggerAPI::Initialize has already
+  // published the IPC flag; on the attach path it is still clear and the
+  // decision depends on the driver's replay intent.
+  if (is_late_attach) {
+    if (Error err = FinishLateAttachIpcHandshake(get_symbol_address))
+      return err;
+  }
+
   Expected<GPUPluginConnectionInfo> connection_info = CreateConnection();
   if (!connection_info)
     return connection_info.takeError();
@@ -553,6 +566,52 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
   GPUActions actions = GetNewGPUAction();
   actions.connect_info = std::move(*connection_info);
   return actions;
+}
+
+llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
+    SymbolAddressProvider get_symbol_address) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  NativeProcessProtocol *cpu_process = m_native_process.GetCurrentProcess();
+  if (!cpu_process)
+    return createStringError(
+        "No native process available to complete the late attach handshake");
+
+  // Publish the IPC flag now: the attach procedure has finished and the
+  // new-event callback is registered. This is not optional on either branch
+  // below -- the driver emits no callbacks at all, including
+  // CUDBG_EVENT_ATTACH_COMPLETE, until a client has declared itself ready.
+  if (Error err = CUDADebuggerAPI::SetIpcFlag(get_symbol_address, *cpu_process,
+                                              /*enabled=*/true))
+    return err;
+
+  Expected<bool> resume_for_attach =
+      CUDADebuggerAPI::ShouldResumeForAttachDetach(get_symbol_address,
+                                                   *cpu_process);
+  if (!resume_for_attach)
+    return resume_for_attach.takeError();
+
+  if (*resume_for_attach) {
+    // The driver has pre-existing contexts and modules to replay and needs the
+    // application to keep running to do it. The attach finishes when
+    // CUDBG_EVENT_ATTACH_COMPLETE arrives.
+    LLDB_LOG(log,
+             "FinishLateAttachIpcHandshake: driver will replay pre-existing "
+             "state; waiting for CUDBG_EVENT_ATTACH_COMPLETE.");
+    return Error::success();
+  }
+
+  // Nothing to replay, so no CUDBG_EVENT_ATTACH_COMPLETE is coming; complete
+  // the attach ourselves.
+  LLDB_LOG(log,
+           "FinishLateAttachIpcHandshake: no pre-existing state to replay; "
+           "completing the attach directly.");
+
+  // OnAttachComplete suspends the devices and refreshes state, which must
+  // happen on the GPU MainLoop like the event-driven path. That loop is started
+  // by the connection this call is a prelude to, so queue the work rather than
+  // running it inline on the CPU MainLoop thread.
+  m_main_loop.AddPendingCallback([this](MainLoopBase &) { OnAttachComplete(); });
+  return Error::success();
 }
 
 llvm::Expected<GPUPluginBreakpointHitResponse>
@@ -596,8 +655,10 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   auto get_addr = [&args](StringRef name) -> std::optional<uint64_t> {
     return args.GetSymbolValue(name);
   };
+  const bool is_late_attach = CUDADebuggerAPI::IsAttachFinishedBreakpoint(
+      args.breakpoint.name_info->function_name);
   Expected<GPUActions> actions =
-      InitializeAPIAndConnect(get_addr, library_name);
+      InitializeAPIAndConnect(get_addr, library_name, is_late_attach);
   if (!actions) {
     // Leave m_api_initialized false so a later breakpoint can retry the init.
     return actions.takeError();

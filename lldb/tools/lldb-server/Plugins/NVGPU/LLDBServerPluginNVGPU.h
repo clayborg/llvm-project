@@ -200,12 +200,39 @@ private:
   ///     Resolver for native-process symbol load addresses.
   /// \param[in] libcuda_library_name
   ///     The libcuda library to load the debugger API from.
+  /// \param[in] is_late_attach
+  ///     True when this initialization is the late attach path (the
+  ///     report-finished breakpoint), false for launch-style initialization.
+  ///     Controls how the driver's IPC "client ready" flag is sequenced; see
+  ///     FinishLateAttachIpcHandshake.
   ///
   /// \return
   ///     GPUActions carrying the connection info on success, or an error.
   llvm::Expected<GPUActions>
   InitializeAPIAndConnect(SymbolAddressProvider get_symbol_address,
-                          llvm::StringRef libcuda_library_name);
+                          llvm::StringRef libcuda_library_name,
+                          bool is_late_attach);
+
+  /// Perform the post-injection half of the late attach handshake, once the
+  /// debugger API is up and the new-event callback is registered.
+  ///
+  /// Publishes the driver's IPC flag (see CUDADebuggerAPI::SetIpcFlag), then
+  /// reads CUDBG_RESUME_FOR_ATTACH_DETACH to decide how the attach finishes:
+  ///
+  ///   - set: the driver has pre-existing contexts and modules to replay and
+  ///     needs the application to keep running to do it. The attach finishes
+  ///     when CUDBG_EVENT_ATTACH_COMPLETE arrives.
+  ///   - clear: there is nothing to replay, so no CUDBG_EVENT_ATTACH_COMPLETE
+  ///     will ever arrive and this completes the attach itself.
+  ///
+  /// \param[in] get_symbol_address
+  ///     Resolver for native-process symbol load addresses.
+  ///
+  /// \return
+  ///     Error::success() once the correct branch has been taken, or an error
+  ///     if the IPC flag could not be written or the resume flag not read.
+  llvm::Error
+  FinishLateAttachIpcHandshake(SymbolAddressProvider get_symbol_address);
 
   /// Drive the late attach handshake entirely server-side: resolve the driver
   /// handshake symbols in the inferior (no gdb-remote round-trip), probe whether

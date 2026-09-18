@@ -74,12 +74,11 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
         # by the time we attach. spawnSubprocess registers a teardown hook that
         # kills the process.
         #
-        # Force eager CUDA module loading in the inferior's environment. The
-        # driver rejects late attach to a process using lazy module loading
-        # ("Late attaching of a debugger that does not support CUDA lazy loading
-        # is not supported"), which would leave the GPU target never coming up.
+        # LATE_ATTACH_INFERIOR_ENV disables the driver's lazy loading features,
+        # without which the driver would refuse the attach and the GPU target
+        # would never come up.
         popen = self.spawnSubprocess(
-            exe, args=[ready_marker], extra_env=["CUDA_MODULE_LOADING=EAGER"]
+            exe, args=[ready_marker], extra_env=self.LATE_ATTACH_INFERIOR_ENV
         )
 
         # Wait for the inferior to signal that its kernel is resident before
@@ -100,7 +99,6 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
         # a synchronous Continue() would block forever because the CPU host of
         # the resident kernel never stops on its own.
         self.setAsync(True)
-        listener = self.dbg.GetListener()
         cpu_process = cpu_target.GetProcess()
         self.assertTrue(cpu_process and cpu_process.IsValid(), "no CPU process after attach")
         cpu_process.Continue()
@@ -115,31 +113,10 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
 
         # The GPU process must now reach a stopped state with the in-flight
         # kernel's threads enumerated.
-        #
-        # In async mode a process's *public* state (what SBProcess.GetState()
-        # returns) is only advanced when its state-changed event is pulled off
-        # a listener: Process::SetPublicState runs from
-        # ProcessEventData::DoOnRemoval as the event leaves the queue. The
-        # earlier version of this test polled gpu_process.GetState() without
-        # ever draining the debugger's listener, so the public state stayed
-        # "running" and the wait timed out even though the GPU had already
-        # stopped server-side. The interactive `continue` repro works precisely
-        # because its event loop drains these events; mirror that here by
-        # pumping the debugger listener until the GPU process reports stopped.
-        def gpu_stopped():
-            proc = self.gpu_process
-            return (
-                proc is not None
-                and proc.IsValid()
-                and proc.GetState() == lldb.eStateStopped
-            )
-
-        event = lldb.SBEvent()
-        deadline = time.time() + 60
-        while time.time() < deadline and not gpu_stopped():
-            listener.WaitForEvent(1, event)
-
-        self.assertTrue(gpu_stopped(), "GPU process did not stop after attach")
+        self.assertTrue(
+            self.wait_for_gpu_process_stopped(),
+            "GPU process did not stop after attach",
+        )
 
         self.select_gpu()
         self.assertGreater(

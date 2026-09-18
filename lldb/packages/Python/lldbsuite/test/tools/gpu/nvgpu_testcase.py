@@ -3,6 +3,7 @@ import math
 import os
 import shutil
 import subprocess
+import time
 from typing import Any, Callable, List, Optional
 
 import lldb
@@ -45,6 +46,19 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     """
 
     NO_DEBUG_INFO_TESTCASE = True
+
+    # Environment forced on a CUDA process that we start independently and then
+    # attach to. The driver's isLateAttachSupported() refuses late attach
+    # outright unless the debugger requests the lazy function loading and lazy
+    # function finalization capabilities ("Late attaching of a debugger that
+    # does not support CUDA lazy loading is not supported"). We do not request
+    # them yet, so disable the corresponding driver features in the inferior
+    # instead. Drop this once the capabilities are negotiated in
+    # WriteInitializationSymbolsToHost.
+    LATE_ATTACH_INFERIOR_ENV = [
+        "CUDA_MODULE_LOADING=EAGER",
+        "CUDA_DISABLE_FUNCTION_LAZY_FINALIZATION=1",
+    ]
 
     # TODO: the waits below assume the CPU keeps running while the
     # GPU is stopped, which holds only because lit.local.cfg sets
@@ -330,3 +344,31 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         """Skip the current test unless a usable NVIDIA CUDA device is present."""
         if not self.cuda_device_available():
             self.skipTest("no usable NVIDIA CUDA device available on this host")
+
+    def wait_for_gpu_process_stopped(self, timeout_seconds=60):
+        """Pump the debugger's listener until the GPU process reports stopped.
+
+        In async mode a process's *public* state -- what SBProcess.GetState()
+        returns -- only advances when its state-changed event is pulled off a
+        listener, because Process::SetPublicState runs from
+        ProcessEventData::DoOnRemoval as the event leaves the queue. Polling
+        GetState() while never draining the debugger's listener therefore keeps
+        reporting "running" even after the GPU has stopped server-side, so this
+        has to pump events rather than just sleep. An interactive `continue`
+        works precisely because its event loop drains these events.
+        """
+
+        def gpu_stopped():
+            proc = self.gpu_process
+            return (
+                proc is not None
+                and proc.IsValid()
+                and proc.GetState() == lldb.eStateStopped
+            )
+
+        listener = self.dbg.GetListener()
+        event = lldb.SBEvent()
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline and not gpu_stopped():
+            listener.WaitForEvent(1, event)
+        return gpu_stopped()

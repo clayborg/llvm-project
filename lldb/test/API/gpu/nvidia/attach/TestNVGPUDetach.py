@@ -71,10 +71,7 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
             "GPU target was not created after attaching to the running CUDA app",
         )
         self.assertTrue(
-            self._wait_for(
-                lambda: self.gpu_process is not None
-                and self.gpu_process.GetState() == lldb.eStateStopped
-            ),
+            self.wait_for_gpu_process_stopped(),
             "GPU process did not stop after attach",
         )
         return cpu_process
@@ -97,12 +94,11 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         # the time we attach. spawnSubprocess registers a teardown hook that
         # kills the process.
         #
-        # Force eager CUDA module loading in the inferior's environment. The
-        # driver rejects late attach to a process using lazy module loading
-        # ("Late attaching of a debugger that does not support CUDA lazy loading
-        # is not supported"), which would leave the GPU target never coming up.
+        # LATE_ATTACH_INFERIOR_ENV disables the driver's lazy loading features,
+        # without which the driver would refuse the attach and the GPU target
+        # would never come up.
         self._popen = self.spawnSubprocess(
-            exe, args=[ready_marker], extra_env=["CUDA_MODULE_LOADING=EAGER"]
+            exe, args=[ready_marker], extra_env=self.LATE_ATTACH_INFERIOR_ENV
         )
         self._wait_for_marker_or_exit(self._popen, ready_marker)
 

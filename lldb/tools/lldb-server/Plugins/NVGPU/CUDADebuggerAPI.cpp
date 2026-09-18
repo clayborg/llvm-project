@@ -202,18 +202,21 @@ static Error WriteInjectionPathToInferior(SymbolAddressProvider get_addr,
   return Error::success();
 }
 
+/// Publish the client identity and requested capabilities into the inferior.
+///
+/// \a set_ipc_flag controls the master "client ready" flag, which is written
+/// last so the driver never sees a ready client whose identity and
+/// capabilities have not landed yet. The attach path passes false and
+/// publishes the flag once the attach procedure has finished, via SetIpcFlag.
 static Error WriteInitializationSymbolsToHost(SymbolAddressProvider get_addr,
                                               NativeProcessProtocol &linux_process,
                                               uint32_t pid, uint32_t session_id,
-                                              uint32_t revision) {
+                                              uint32_t revision,
+                                              bool set_ipc_flag) {
   auto write_uint32_t = [&](const std::string &symbol_name,
                             const uint32_t &value) -> Error {
     return WriteToHostSymbol(get_addr, linux_process, symbol_name, value);
   };
-
-  const uint32_t ipc_flag = 1;
-  if (Error err = write_uint32_t(Symbols::CUDBG_IPC_FLAG_NAME, ipc_flag))
-    return err;
 
   if (Error err = write_uint32_t(Symbols::CUDBG_APICLIENT_PID, pid))
     return err;
@@ -231,7 +234,11 @@ static Error WriteInitializationSymbolsToHost(SymbolAddressProvider get_addr,
           write_uint32_t(Symbols::CUDBG_DEBUGGER_CAPABILITIES, capabilities))
     return err;
 
-  return Error::success();
+  if (!set_ipc_flag)
+    return Error::success();
+
+  return CUDADebuggerAPI::SetIpcFlag(get_addr, linux_process,
+                                     /*enabled=*/true);
 }
 
 static Error WriteConfigurationToLibcuda(llvm::sys::DynamicLibrary &libcuda,
@@ -355,7 +362,8 @@ GetRawAPIInstance(llvm::sys::DynamicLibrary &libcuda,
 Expected<CUDADebuggerAPI>
 CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
                                 StringRef libcuda_library_name,
-                                NativeProcessProtocol &linux_process) {
+                                NativeProcessProtocol &linux_process,
+                                InitContext init_context) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "CUDADebuggerAPI::Initialize()");
 
@@ -404,7 +412,8 @@ CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
            api_version.minor, api_version.revision);
 
   if (Error err = WriteInitializationSymbolsToHost(
-          get_symbol_address, linux_process, pid, session_id, revision))
+          get_symbol_address, linux_process, pid, session_id, revision,
+          /*set_ipc_flag=*/init_context == InitContext::eLaunch))
     return err;
 
   if (Error err = WriteConfigurationToLibcuda(libcuda, pid, revision,
@@ -464,9 +473,10 @@ CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
 Expected<CUDADebuggerAPI>
 CUDADebuggerAPI::Initialize(SymbolAddressProvider get_symbol_address,
                             StringRef libcuda_library_name,
-                            NativeProcessProtocol &linux_process) {
-  Expected<CUDADebuggerAPI> api =
-      InitializeImpl(get_symbol_address, libcuda_library_name, linux_process);
+                            NativeProcessProtocol &linux_process,
+                            InitContext init_context) {
+  Expected<CUDADebuggerAPI> api = InitializeImpl(
+      get_symbol_address, libcuda_library_name, linux_process, init_context);
   if (!api)
     return createStringErrorFmt(
         "Failed to initialize the CUDA Debugger API. {}",
@@ -936,6 +946,14 @@ CUDADebuggerAPI::IsLateAttachSupported(SymbolAddressProvider get_symbol_address,
   return *available != 0;
 }
 
+Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,
+                                  NativeProcessProtocol &linux_process,
+                                  bool enabled) {
+  const uint32_t value = enabled ? 1 : 0;
+  return WriteToHostSymbol(get_symbol_address, linux_process,
+                           Symbols::CUDBG_IPC_FLAG_NAME, value);
+}
+
 Expected<bool> CUDADebuggerAPI::ShouldResumeForAttachDetach(
     SymbolAddressProvider get_symbol_address,
     NativeProcessProtocol &linux_process) {
@@ -961,9 +979,14 @@ Error CUDADebuggerAPI::InitiateSafeAttach(
   const uint32_t revision = nvgpu::CudbgApiVersion::Compiled().revision;
 
   // Publish the client handshake globals into the running process so the driver
-  // knows who is attaching before it injects the debug engine.
+  // knows who is attaching before it injects the debug engine. The IPC "client
+  // ready" flag is deliberately NOT published here: on the attach path it must
+  // stay clear until the attach procedure has finished, and is then only set
+  // when the driver does not want the application resumed to replay its state.
+  // See CUDADebuggerAPI::SetIpcFlag.
   if (Error err = WriteInitializationSymbolsToHost(
-          get_symbol_address, linux_process, pid, session_id, revision))
+          get_symbol_address, linux_process, pid, session_id, revision,
+          /*set_ipc_flag=*/false))
     return err;
 
   // If an alternate debug engine library is configured, publish it into the
@@ -1051,6 +1074,10 @@ CUDADebuggerAPI::GetInitializationBreakpointInfo(StringRef library_name) {
   return bp;
 }
 
+bool CUDADebuggerAPI::IsAttachFinishedBreakpoint(StringRef function_name) {
+  return function_name == Symbols::CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED;
+}
+
 GPUBreakpointInfo
 CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(StringRef library_name) {
   GPUBreakpointInfo bp;
@@ -1058,7 +1085,11 @@ CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(StringRef library_name) {
                   Symbols::CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED};
   // When the attach procedure finishes the debug engine has been injected, so
   // resolving these symbols at the breakpoint lets the plugin initialize the
-  // API exactly like the launch path does.
+  // API exactly like the launch path does. CUDBG_RESUME_FOR_ATTACH_DETACH is
+  // additionally needed to decide, once the API is up, whether the driver will
+  // replay pre-existing state (and send CUDBG_EVENT_ATTACH_COMPLETE) or whether
+  // the client must publish the IPC flag and finish the attach itself.
+  bp.symbol_names.push_back(Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
   bp.symbol_names.push_back(Symbols::CUDBG_IPC_FLAG_NAME);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_PID);
   bp.symbol_names.push_back(Symbols::CUDBG_APICLIENT_REVISION);
