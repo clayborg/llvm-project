@@ -74,30 +74,22 @@ public:
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
-  /// Drop the debugger API pointer. Called during detach, just before the
-  /// plugin finalizes and destroys the API, so this process cannot be left
-  /// holding a dangling table.
+  /// Drop the debugger API pointer, just before the plugin finalizes and
+  /// destroys it on detach, so this process cannot be left holding a dangling
+  /// table.
   void ClearDebuggerAPI() { m_api = nullptr; }
 
-  /// Set the owning plugin so Detach can delegate the late-attach detach
-  /// cleanup (breakpoint teardown, flag reset, optional resume + inline event
-  /// drain) back to it.
+  /// Set the owning plugin, to which Detach delegates its cleanup sequence.
   void SetPlugin(LLDBServerPluginNVGPU *plugin) { m_plugin = plugin; }
 
-  /// Remove every tracked device breakpoint from every device.
-  ///
-  /// Called first during detach, while the debugger API and devices are still
-  /// valid. A debug-API bug leaves breakpoints set on the device if they are not
-  /// explicitly removed before teardown, so iterate the tracked set and unset
-  /// each on every device (errors are logged, not fatal, so detach proceeds).
+  /// Remove every tracked device breakpoint from every device. Detach must do
+  /// this while the API and devices are still valid, because the debug API
+  /// leaves them set on the device otherwise.
   void TeardownDeviceBreakpoints();
 
-  /// Register a notifier used to re-run the debugger-API sync-event processing
-  /// loop after the deferred ack on a dyld fake-stop resume. The driver only
-  /// notifies on newly enqueued events, so events queued behind a deferred
-  /// CUDBG_EVENT_ELF_IMAGE_LOADED (e.g. CUDBG_EVENT_ATTACH_COMPLETE) need an
-  /// explicit re-trigger to be drained -- otherwise they sit unhandled and
-  /// unacked, wedging the attach.
+  /// Register a notifier that re-runs sync-event processing after the deferred
+  /// ack on a dyld fake-stop resume, without which events queued behind the
+  /// deferred CUDBG_EVENT_ELF_IMAGE_LOADED are never drained.
   void SetSyncEventDrainNotifier(std::function<void()> notifier) {
     m_sync_event_drain_notifier = std::move(notifier);
   }
@@ -334,38 +326,30 @@ public:
   ///     Function to log messages to the client.
   ///
   /// \param[in] forced_stop_description
-  ///     When non-empty, this suspension was initiated by the debugger (a late
-  ///     attach completing, or a user interrupt) rather than by a
-  ///     breakpoint/exception. A freely-running kernel has no breakpoint or
-  ///     exception, so the resulting stop would have no actionable reason and
-  ///     the client would treat it as spurious and auto-resume. To keep the GPU
-  ///     stopped, the selected thread is reported with this description as an
-  ///     exception-class stop -- the only signal-table-independent stop reason
-  ///     the client honors unconditionally for the GPU target. (A signal stop
-  ///     does not work: the GPU's signal table is not the host's, so the host
-  ///     SIGSTOP number is auto-resumed.)
+  ///     When non-empty, the debugger initiated this suspension rather than a
+  ///     breakpoint or exception, and the selected thread is reported with this
+  ///     description as an exception-class stop. A freely-running kernel gives
+  ///     the stop no actionable reason otherwise, and the client auto-resumes
+  ///     it. A signal stop cannot be used instead: the GPU's signal table is
+  ///     not the host's, so the host SIGSTOP number is auto-resumed.
   void OnAllDevicesSuspended(
       const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
       std::function<void(llvm::StringRef message)> log_to_client_callback,
       llvm::StringRef forced_stop_description = llvm::StringRef());
 
-  /// Suspend all devices and refresh device state, then enumerate threads and
-  /// report a stop.
+  /// Suspend every device, refresh state so running kernels' CUDA threads
+  /// appear in the thread list, and report a stop.
   ///
-  /// Used for debugger-initiated stops where the driver does not autonomously
-  /// emit a CUDBG_EVENT_ALL_DEVICES_SUSPENDED event: completing a late attach,
-  /// and servicing a user interrupt of a running kernel. It explicitly suspends
-  /// every device, runs a full state refresh so the CUDA threads of any running
-  /// kernels appear in the thread list, and reports the stop with the given
-  /// description so the client keeps the GPU stopped.
+  /// For the debugger-initiated stops the driver emits no
+  /// CUDBG_EVENT_ALL_DEVICES_SUSPENDED of its own for: completing a late attach
+  /// and interrupting a running kernel.
   ///
   /// \param[in] log_to_client_callback
   ///     Function to log messages to the client.
   ///
   /// \param[in] stop_description
-  ///     Human-readable reason for the stop (e.g. "attached to running CUDA
-  ///     application" or "interrupted"), reported to the client so the GPU
-  ///     stays stopped and the user sees why.
+  ///     Why the GPU stopped, e.g. "interrupted", reported to the client so it
+  ///     keeps the GPU stopped and the user sees the reason.
   void SuspendAllDevicesAndRefresh(
       std::function<void(llvm::StringRef message)> log_to_client_callback,
       llvm::StringRef stop_description);
@@ -447,13 +431,11 @@ private:
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
 
-  /// Notifier registered by the plugin to re-run sync-event processing after
-  /// the deferred ack on a dyld fake-stop resume. See SetSyncEventDrainNotifier.
+  /// See SetSyncEventDrainNotifier.
   std::function<void()> m_sync_event_drain_notifier;
 
-  /// Addresses of breakpoints this process has inserted on the GPU devices.
-  /// Tracked so they can be explicitly removed on detach (see
-  /// TeardownDeviceBreakpoints); the debug API otherwise leaves them set.
+  /// Breakpoints inserted on the GPU devices, tracked so
+  /// TeardownDeviceBreakpoints can remove them on detach.
   llvm::DenseSet<lldb::addr_t> m_device_breakpoints;
 
   /// The owning plugin, used by Detach to delegate the detach cleanup sequence.

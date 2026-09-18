@@ -345,6 +345,45 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         if not self.cuda_device_available():
             self.skipTest("no usable NVIDIA CUDA device available on this host")
 
+    def wait_for(self, predicate, timeout_seconds=60):
+        """Poll predicate() until it is truthy or the timeout elapses."""
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.5)
+        return predicate()
+
+    def start_resident_kernel(self, exe, ready_marker):
+        """Start a CUDA inferior outside the debugger and wait until it reports
+        a kernel resident on the GPU, so that attaching to it is a true late
+        attach rather than a race with cuInit.
+
+        Returns the spawned process, which spawnSubprocess kills on teardown.
+        """
+        if os.path.exists(ready_marker):
+            os.remove(ready_marker)
+
+        popen = self.spawnSubprocess(
+            exe, args=[ready_marker], extra_env=self.LATE_ATTACH_INFERIOR_ENV
+        )
+
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if os.path.exists(ready_marker):
+                return popen
+            # On a host with no usable GPU the inferior dies on its first CUDA
+            # call, so bail out instead of waiting out the whole timeout.
+            exit_code = popen.poll()
+            if exit_code is not None:
+                self.skipTest(
+                    "CUDA inferior exited (code %s) before signalling a "
+                    "resident kernel; the host likely lacks a usable CUDA "
+                    "device or driver (see the inferior's stderr)" % exit_code
+                )
+            time.sleep(0.5)
+        self.fail("CUDA inferior did not report a resident kernel before attach")
+
     def wait_for_no_tracer(self, pid, timeout_seconds=30):
         """Wait until nothing is ptrace-attached to the given pid.
 

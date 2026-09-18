@@ -65,23 +65,16 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
 
   if (m_is_faking_a_stop_for_dyld) {
     m_is_faking_a_stop_for_dyld = false;
-    // Ack the sync events read before the deferred dyld stop. Per the CUDA
-    // debugger API, acknowledgeSyncEvents acknowledges only events already read
-    // with getNextEvent; events enqueued behind the deferred
-    // CUDBG_EVENT_ELF_IMAGE_LOADED were intentionally left unread so their
-    // handlers had not run yet.
+    // Acknowledges only the events already read before the deferred dyld stop;
+    // the ones left unread behind it are untouched.
     CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(
           "Failed to acknowledge CUDA Debugger API events. {}",
           cudbgGetErrorString(res));
     }
-    // The driver only fires the new-event notification for newly enqueued
-    // events, so any events still queued from the deferred batch (e.g. a
-    // CUDBG_EVENT_ATTACH_COMPLETE behind the ELF image load) would never be
-    // drained or acked on their own -- wedging the attach before the device
-    // refresh. Re-run the event-processing loop now that the dyld stop has been
-    // resumed so those already-queued events are handled.
+    // The driver only notifies for newly enqueued events, so anything still
+    // queued behind the ELF image load would never be drained on its own.
     if (m_sync_event_drain_notifier)
       m_sync_event_drain_notifier();
   } else {
@@ -145,21 +138,14 @@ void ProcessNVGPU::ChangeStateToStopped() {
 Status ProcessNVGPU::Detach() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::Detach()");
-  // Delegate the late-attach detach cleanup to the owning plugin: tear down
-  // device breakpoints, reset the driver handshake flags, optionally resume the
-  // application so the driver completes its cleanup (draining the resulting
-  // events inline), then clear the attach state. The plugin owns the debugger
-  // API and the native CPU process, and runs on the GPU MainLoop thread, so it
-  // can drain detach events without a client round-trip. The API table's
-  // finalize() is invoked separately by the CUDADebuggerAPI deleter when the
-  // session ends.
+  // The plugin owns the debugger API and the native process, so the cleanup
+  // sequence lives there.
   if (m_plugin) {
     if (llvm::Error err = m_plugin->DetachCleanup())
       LLDB_LOG(log, "NVGPU::Detach(). Detach cleanup reported: {0}",
                llvm::toString(std::move(err)));
   } else if (m_api) {
-    // Fallback if the plugin back-pointer was never wired: at least clear the
-    // attach-specific state, mirroring the previous behavior.
+    // The back-pointer was never wired; at least clear the attach state.
     CUDBGResult res = m_api->clearAttachState();
     if (res != CUDBG_SUCCESS)
       LLDB_LOG(log, "NVGPU::Detach(). clearAttachState failed: {0}",
@@ -178,12 +164,9 @@ Status ProcessNVGPU::Interrupt() {
   LLDB_LOG(log, "NVGPU::Interrupt(). Pre-interrupt state: {}",
            StateToString(GetState()));
 
-  // An interrupt arrives when the user halts a running GPU (e.g. "process
-  // interrupt"). Without the debugger API there are no devices to suspend, but
-  // we must still report a stop: the client issued the interrupt and will hang
-  // waiting for a stop reply otherwise (the lldb-server interrupt handler does
-  // not synthesize one itself). Report the fallback thread as stopped, which
-  // notifies the delegate and produces the stop reply.
+  // A stop must be reported either way: the lldb-server interrupt handler does
+  // not synthesize a stop reply, so the client would hang waiting for one.
+  // Without the API there is no device to suspend, so stop the fallback thread.
   if (!m_api) {
     LLDB_LOG(log, "NVGPU::Interrupt(). No debugger API; reporting a stop "
                   "without suspending any device.");
@@ -193,11 +176,6 @@ Status ProcessNVGPU::Interrupt() {
     return Status();
   }
 
-  // Suspend every device, refresh state, and report a stop (see
-  // SuspendAllDevicesAndRefresh / OnAllDevicesSuspended). SetState(stopped)
-  // then notifies the delegate, which sends the stop reply the client's
-  // interrupt is waiting for. The lldb-server interrupt handler does not send a
-  // stop reply itself.
   auto log_to_client_callback = [](llvm::StringRef message) {};
   SuspendAllDevicesAndRefresh(log_to_client_callback, "interrupted");
   return Status();
@@ -241,8 +219,8 @@ Status ProcessNVGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
     }
   }
 
-  // Track the breakpoint so it can be explicitly torn down on detach; the debug
-  // API otherwise leaves device breakpoints set after the session ends.
+  // Tracked so detach can remove it; the debug API otherwise leaves device
+  // breakpoints set after the session ends.
   m_device_breakpoints.insert(addr);
 
   return Status();
@@ -272,9 +250,8 @@ void ProcessNVGPU::TeardownDeviceBreakpoints() {
     return;
   for (lldb::addr_t addr : m_device_breakpoints) {
     for (DeviceState &device : m_devices.GetDevices()) {
+      // Detach must proceed even if a device rejects the removal.
       CUDBGResult res = m_api->unsetBreakpoint(device.GetDeviceId(), addr);
-      // Log, don't fail: detach must proceed even if a device rejects the
-      // removal (e.g. it is already gone).
       if (res != CUDBG_SUCCESS)
         LLDB_LOG(log,
                  "NVGPU::TeardownDeviceBreakpoints(). Failed to unset "
