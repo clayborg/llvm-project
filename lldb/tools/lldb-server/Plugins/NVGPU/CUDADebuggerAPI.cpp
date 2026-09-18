@@ -954,14 +954,11 @@ Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,
                            Symbols::CUDBG_IPC_FLAG_NAME, value);
 }
 
-Expected<bool> CUDADebuggerAPI::ShouldResumeForAttachDetach(
+Expected<uint32_t> CUDADebuggerAPI::ReadResumeForAttachDetach(
     SymbolAddressProvider get_symbol_address,
     NativeProcessProtocol &linux_process) {
-  Expected<uint32_t> resume = ReadUInt32FromHost(
-      get_symbol_address, linux_process, Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
-  if (!resume)
-    return resume.takeError();
-  return *resume != 0;
+  return ReadUInt32FromHost(get_symbol_address, linux_process,
+                            Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
 }
 
 Error CUDADebuggerAPI::InitiateSafeAttach(

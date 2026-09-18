@@ -3,7 +3,6 @@ import time
 
 import lldb
 from lldbsuite.test import lldbutil
-from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -115,6 +114,15 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.select_cpu()
         self.runCmd("detach")
 
+        # Drop both detached targets. They linger in the debugger otherwise, and
+        # the cpu_target/gpu_target helpers match on triple and would hand back
+        # this session's dead GPU target after a later re-attach.
+        targets = [
+            self.dbg.GetTargetAtIndex(i) for i in range(self.dbg.GetNumTargets())
+        ]
+        for target in targets:
+            self.dbg.DeleteTarget(target)
+
     def test_detach_keeps_cpu_running(self):
         """Attach, set a GPU breakpoint, detach, and verify the CPU app keeps
         running."""
@@ -140,17 +148,6 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
             "the CPU application must keep running after detach",
         )
 
-    # Re-attaching to a process we have already detached from does not work yet.
-    # The detach itself is clean (device breakpoints removed, handshake flags
-    # reset, driver cleanup acknowledged), but the driver does not re-run its
-    # attach procedure for a process whose debug engine is still injected, so
-    # CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED never fires and the GPU target
-    # never comes up. Skipping the injection instead is not a workaround: with
-    # no attach procedure the driver replays no contexts or modules, so the API
-    # comes up with no state and the stop carries no CUDA threads.
-    @expectedFailureAll(
-        bugnumber="re-attach after detach is not implemented yet"
-    )
     def test_reattach_after_detach(self):
         """Attach, detach, then verify a re-attach to the same pid brings the
         GPU target back up."""
@@ -175,6 +172,10 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.assertTrue(
             self._wait_for(lambda: self._popen.poll() is None, timeout_seconds=5),
             "the CPU application exited before re-attach",
+        )
+        self.assertTrue(
+            self.wait_for_no_tracer(self._popen.pid),
+            "lldb-server was still attached to the inferior after detach",
         )
         self._attach_and_bring_up_gpu(exe, ready_marker)
         self.select_gpu()

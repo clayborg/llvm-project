@@ -345,6 +345,29 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         if not self.cuda_device_available():
             self.skipTest("no usable NVIDIA CUDA device available on this host")
 
+    def wait_for_no_tracer(self, pid, timeout_seconds=30):
+        """Wait until nothing is ptrace-attached to the given pid.
+
+        `detach` returning means the client is done, but lldb-server still has
+        to exit and release the inferior. Attaching again before that has
+        happened races the old server's teardown, so anything that detaches and
+        re-attaches has to wait for the tracer to actually go away.
+        """
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                with open("/proc/%d/status" % pid) as status:
+                    for line in status:
+                        if line.startswith("TracerPid:"):
+                            if int(line.split()[1]) == 0:
+                                return True
+                            break
+            except OSError:
+                # The process is gone, which is not "no tracer" for our callers.
+                return False
+            time.sleep(0.2)
+        return False
+
     def wait_for_gpu_process_stopped(self, timeout_seconds=60):
         """Pump the debugger's listener until the GPU process reports stopped.
 

@@ -74,6 +74,11 @@ public:
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
+  /// Drop the debugger API pointer. Called during detach, just before the
+  /// plugin finalizes and destroys the API, so this process cannot be left
+  /// holding a dangling table.
+  void ClearDebuggerAPI() { m_api = nullptr; }
+
   /// Set the owning plugin so Detach can delegate the late-attach detach
   /// cleanup (breakpoint teardown, flag reset, optional resume + inline event
   /// drain) back to it.

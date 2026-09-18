@@ -187,12 +187,20 @@ public:
   IsLateAttachSupported(SymbolAddressProvider get_symbol_address,
                         NativeProcessProtocol &linux_process);
 
-  /// Read the value of the CUDBG_RESUME_FOR_ATTACH_DETACH flag from the running
-  /// process. When set, the application (including the CPU) must keep running
-  /// for the driver to complete the attach procedure.
-  static llvm::Expected<bool>
-  ShouldResumeForAttachDetach(SymbolAddressProvider get_symbol_address,
-                              NativeProcessProtocol &linux_process);
+  /// Read the raw value of the CUDBG_RESUME_FOR_ATTACH_DETACH global from the
+  /// running process.
+  ///
+  /// A non-zero value means the application (including the CPU) must keep
+  /// running for the driver to complete the attach or detach procedure, but the
+  /// value is NOT a boolean: the driver packs flags into it (observed as 3 in
+  /// practice) and requestCleanupOnDetach is documented to take it verbatim, as
+  /// "the value of CUDBG_RESUME_FOR_ATTACH_DETACH as read from the
+  /// application's process space". Passing a recomputed 1 instead makes the
+  /// driver perform a different, partial cleanup. Callers that only need the
+  /// yes/no answer should compare against zero themselves.
+  static llvm::Expected<uint32_t>
+  ReadResumeForAttachDetach(SymbolAddressProvider get_symbol_address,
+                            NativeProcessProtocol &linux_process);
 
   /// Initiate the safe debugger attach procedure on a running process.
   ///
