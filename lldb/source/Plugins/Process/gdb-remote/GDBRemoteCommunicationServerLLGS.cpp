@@ -3922,23 +3922,16 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUGetKernelInfos(
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginInitialize(
     StringExtractorGDBRemote &packet) {
-  // The packet may carry optional JSON arguments after a ':' separator. The
-  // bare "jGPUPluginInitialize" form (no arguments) is still supported for
-  // backward compatibility and defaults is_attach to false.
-  GPUPluginInitializeArgs args;
-  if (packet.ConsumeFront("jGPUPluginInitialize:")) {
-    if (Expected<GPUPluginInitializeArgs> parsed =
-            json::parse<GPUPluginInitializeArgs>(packet.Peek(),
-                                                 "GPUPluginInitializeArgs")) {
-      args = std::move(*parsed);
-    } else {
-      return SendErrorResponse(parsed.takeError());
-    }
-  }
+  packet.ConsumeFront("jGPUPluginInitialize:");
+  Expected<GPUPluginInitializeArgs> args =
+      json::parse<GPUPluginInitializeArgs>(packet.Peek(),
+                                           "GPUPluginInitializeArgs");
+  if (!args)
+    return SendErrorResponse(args.takeError());
 
   std::vector<GPUActions> gpu_actions;
   for (auto &plugin_up : m_plugins)
-    gpu_actions.push_back(plugin_up->GetInitializeActions(args));
+    gpu_actions.push_back(plugin_up->GetInitializeActions(*args));
   StreamGDBRemote response;
   response.PutAsJSONArray(gpu_actions);
   return SendPacketNoLock(response.GetString());
