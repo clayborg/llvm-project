@@ -116,7 +116,8 @@ public:
   /// \param[in] args
   ///     Context for the initialization, such as whether the native process is
   ///     being attached to versus launched.
-  virtual GPUActions GetInitializeActions(const GPUPluginInitializeArgs &args) = 0;
+  virtual GPUActions
+  GetInitializeActions(const GPUPluginInitializeArgs &args) = 0;
 
   /// Get a file descriptor to listen for in the ptrace epoll loop.
   ///

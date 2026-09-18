@@ -154,7 +154,11 @@ uses the driver's safe attach mechanism:
 #. When the driver finishes injecting the debug engine it calls
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
    it initializes the CUDA debugger API exactly like the launch path.
-#. The plugin then waits for ``CUDBG_EVENT_ATTACH_COMPLETE``, suspends all
+#. Finally the plugin reads ``CUDBG_RESUME_FOR_ATTACH_DETACH``. When it is set
+   the driver has pre-existing contexts and modules to replay and needs the
+   application to keep running, so the attach completes on
+   ``CUDBG_EVENT_ATTACH_COMPLETE``; when it is clear there is nothing to replay
+   and the attach completes immediately. Either way the plugin suspends all
    devices, refreshes device state, and reports the GPU as stopped so the
    kernel's threads appear in the thread list.
 
@@ -165,6 +169,22 @@ call in the inferior, and is error-prone when the application is stopped in a
 signal-unsafe state) is intentionally not supported. Attaching to a process
 running on a CUDA driver that is too old to provide the safe attach procedure
 is not supported; use a newer driver.
+
+Detaching and re-attaching
+""""""""""""""""""""""""""
+
+``detach`` leaves the application running. The plugin removes the breakpoints
+it set on the device, lets the driver run its own cleanup, then resets the
+driver's handshake globals and finalizes the debugger API, so the process is
+left in a state a later debugger can attach to again. Detach the GPU target
+before the CPU target, and re-select the host platform before re-attaching::
+
+  > target select <gpu-target-index>
+  > detach
+  > target select <cpu-target-index>
+  > detach
+  > platform select host
+  > process attach -p <pid>
 
 Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^

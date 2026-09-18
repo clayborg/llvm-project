@@ -540,7 +540,8 @@ llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
 
   // OnAttachComplete belongs on the GPU MainLoop, like the event-driven path.
   // That loop is started by the connection this call precedes, so queue it.
-  m_main_loop.AddPendingCallback([this](MainLoopBase &) { OnAttachComplete(); });
+  m_main_loop.AddPendingCallback(
+      [this](MainLoopBase &) { OnAttachComplete(); });
   return Error::success();
 }
 
@@ -962,7 +963,8 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     // running tracee. cuda-gdb interrupts the target at this same point.
     bool was_halted = false;
     lldb::StateType state = HaltNativeProcessIfNeeded(was_halted);
-    LLDB_LOG(log, "DetachCleanup: halted the app for the flag reset (state {0})",
+    LLDB_LOG(log,
+             "DetachCleanup: halted the app for the flag reset (state {0})",
              StateToString(state));
 
     llvm::StringMap<uint64_t> detach_symbols = *symbols;

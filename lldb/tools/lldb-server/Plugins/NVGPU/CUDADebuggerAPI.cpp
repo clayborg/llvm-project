@@ -145,9 +145,8 @@ static Error WriteToHostSymbol(SymbolAddressProvider get_addr,
 
   const size_t value_size = sizeof(value);
   size_t bytes_written = 0;
-  Status status =
-      linux_process.WriteMemory(*symbol_address, &value, value_size,
-                                bytes_written);
+  Status status = linux_process.WriteMemory(*symbol_address, &value, value_size,
+                                            bytes_written);
   if (status.Fail())
     return createStringErrorFmt("Failed to write symbol {}: {}", symbol_name,
                                 status.AsCString());
@@ -189,11 +188,9 @@ static Error WriteInjectionPathToInferior(SymbolAddressProvider get_addr,
 /// Publish the client identity and requested capabilities into the inferior,
 /// and optionally the IPC flag -- which must come last, and which the attach
 /// path defers entirely (see CUDADebuggerAPI::SetIpcFlag).
-static Error WriteInitializationSymbolsToHost(SymbolAddressProvider get_addr,
-                                              NativeProcessProtocol &linux_process,
-                                              uint32_t pid, uint32_t session_id,
-                                              uint32_t revision,
-                                              bool set_ipc_flag) {
+static Error WriteInitializationSymbolsToHost(
+    SymbolAddressProvider get_addr, NativeProcessProtocol &linux_process,
+    uint32_t pid, uint32_t session_id, uint32_t revision, bool set_ipc_flag) {
   auto write_uint32_t = [&](const std::string &symbol_name,
                             const uint32_t &value) -> Error {
     return WriteToHostSymbol(get_addr, linux_process, symbol_name, value);
@@ -254,11 +251,10 @@ static Error WriteConfigurationToLibcuda(llvm::sys::DynamicLibrary &libcuda,
   return Error::success();
 }
 
-static Error
-WriteInjectionPathToLibcuda(SymbolAddressProvider get_addr,
-                            NativeProcessProtocol &linux_process,
-                            llvm::sys::DynamicLibrary &libcuda,
-                            StringRef libcuda_library_name) {
+static Error WriteInjectionPathToLibcuda(SymbolAddressProvider get_addr,
+                                         NativeProcessProtocol &linux_process,
+                                         llvm::sys::DynamicLibrary &libcuda,
+                                         StringRef libcuda_library_name) {
   const char *path = getenv("CUDBG_INJECTION_PATH");
   if (!path)
     return Error::success();
@@ -340,11 +336,9 @@ GetRawAPIInstance(llvm::sys::DynamicLibrary &libcuda,
   return api;
 }
 
-Expected<CUDADebuggerAPI>
-CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
-                                StringRef libcuda_library_name,
-                                NativeProcessProtocol &linux_process,
-                                InitContext init_context) {
+Expected<CUDADebuggerAPI> CUDADebuggerAPI::InitializeImpl(
+    SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
+    NativeProcessProtocol &linux_process, InitContext init_context) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "CUDADebuggerAPI::Initialize()");
 
@@ -436,8 +430,7 @@ CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
     // (capped) for the next attempt.
     milliseconds remaining =
         std::chrono::duration_cast<milliseconds>(deadline - now);
-    std::this_thread::sleep_for(
-        std::min(milliseconds(backoff_ms), remaining));
+    std::this_thread::sleep_for(std::min(milliseconds(backoff_ms), remaining));
     backoff_ms = std::min(backoff_ms * 2, kInitMaxRetryDelayMs);
   }
 
@@ -447,11 +440,9 @@ CUDADebuggerAPI::InitializeImpl(SymbolAddressProvider get_symbol_address,
   return api;
 }
 
-Expected<CUDADebuggerAPI>
-CUDADebuggerAPI::Initialize(SymbolAddressProvider get_symbol_address,
-                            StringRef libcuda_library_name,
-                            NativeProcessProtocol &linux_process,
-                            InitContext init_context) {
+Expected<CUDADebuggerAPI> CUDADebuggerAPI::Initialize(
+    SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
+    NativeProcessProtocol &linux_process, InitContext init_context) {
   Expected<CUDADebuggerAPI> api = InitializeImpl(
       get_symbol_address, libcuda_library_name, linux_process, init_context);
   if (!api)
@@ -495,10 +486,10 @@ struct InferiorLibrary {
 };
 } // namespace
 
-/// \return true if \a filename is libcuda's soname: the unversioned "libcuda.so"
-/// or a versioned "libcuda.so.<digits-and-dots>" (e.g. libcuda.so.1,
-/// libcuda.so.550.54.15). This avoids matching unrelated paths that merely
-/// contain "libcuda.so" as a substring.
+/// \return true if \a filename is libcuda's soname: the unversioned
+/// "libcuda.so" or a versioned "libcuda.so.<digits-and-dots>" (e.g.
+/// libcuda.so.1, libcuda.so.550.54.15). This avoids matching unrelated paths
+/// that merely contain "libcuda.so" as a substring.
 static bool IsLibcudaSoname(llvm::StringRef filename) {
   if (filename == "libcuda.so")
     return true;
@@ -654,15 +645,15 @@ OpenInferiorLibcuda(lldb::pid_t pid, const InferiorLibrary &libcuda) {
     }
     struct stat st;
     if (::fstat(fd, &st) != 0) {
-      errors +=
-          llvm::formatv("  {0}: fstat failed: {1}\n", candidate, ::strerror(errno))
-              .str();
+      errors += llvm::formatv("  {0}: fstat failed: {1}\n", candidate,
+                              ::strerror(errno))
+                    .str();
       ::close(fd);
       continue;
     }
-    // Verify the opened file's identity against what the kernel reported for the
-    // mapping. (inode 0 means maps did not report a backing file; skip the check
-    // in that unusual case rather than rejecting outright.)
+    // Verify the opened file's identity against what the kernel reported for
+    // the mapping. (inode 0 means maps did not report a backing file; skip the
+    // check in that unusual case rather than rejecting outright.)
     if (libcuda.inode != 0 &&
         (st.st_ino != libcuda.inode || st.st_dev != libcuda.dev)) {
       errors += llvm::formatv("  {0}: device/inode mismatch with the mapped "
@@ -682,9 +673,9 @@ OpenInferiorLibcuda(lldb::pid_t pid, const InferiorLibrary &libcuda) {
             /*RequiresNullTerminator=*/false);
     ::close(fd);
     if (!buffer_or) {
-      errors +=
-          llvm::formatv("  {0}: {1}\n", candidate, buffer_or.getError().message())
-              .str();
+      errors += llvm::formatv("  {0}: {1}\n", candidate,
+                              buffer_or.getError().message())
+                    .str();
       continue;
     }
     return std::move(*buffer_or);
@@ -895,8 +886,9 @@ CUDADebuggerAPI::IsLateAttachSupported(SymbolAddressProvider get_symbol_address,
   // The driver sets CUDBG_ATTACH_HANDLER_AVAILABLE once it can service an
   // attach request. If the symbol cannot be resolved at all the running process
   // is not a (debuggable) CUDA process.
-  Expected<uint32_t> available = ReadUInt32FromHost(
-      get_symbol_address, linux_process, Symbols::CUDBG_ATTACH_HANDLER_AVAILABLE);
+  Expected<uint32_t> available =
+      ReadUInt32FromHost(get_symbol_address, linux_process,
+                         Symbols::CUDBG_ATTACH_HANDLER_AVAILABLE);
   if (!available)
     return available.takeError();
   return *available != 0;
@@ -964,7 +956,8 @@ Error CUDADebuggerAPI::InitiateSafeAttach(
   if (attach_fd < 0)
     return createStringError(
         "The driver did not publish a safe attach procedure FD "
-        "(cudbgInitiateDebuggerAttachProcedureFd is -1): it is either not ready "
+        "(cudbgInitiateDebuggerAttachProcedureFd is -1): it is either not "
+        "ready "
         "yet or this driver is too old to support the safe attach mechanism. "
         "LLDB only supports the safe debugger attach mechanism for CUDA late "
         "attach; the legacy cudbgApiAttach() injection path is not supported. "
@@ -975,7 +968,8 @@ Error CUDADebuggerAPI::InitiateSafeAttach(
   // safely inject the debug engine.
   std::string fd_path =
       llvm::formatv("/proc/{0}/fd/{1}", linux_process.GetID(), attach_fd).str();
-  LLDB_LOG(log, "CUDADebuggerAPI::InitiateSafeAttach(). Writing magic byte to {0}",
+  LLDB_LOG(log,
+           "CUDADebuggerAPI::InitiateSafeAttach(). Writing magic byte to {0}",
            fd_path);
 
   int host_fd = ::open(fd_path.c_str(), O_WRONLY | O_CLOEXEC);

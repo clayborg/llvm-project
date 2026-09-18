@@ -666,8 +666,7 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
 
   // Parse a successful (non-error, non-unsupported) response as a GPUActions
   // array, reporting a user-facing error on malformed JSON.
-  auto parse_response =
-      [](StringExtractorGDBRemote &response)
+  auto parse_response = [](StringExtractorGDBRemote &response)
       -> std::optional<std::vector<GPUActions>> {
     if (response.IsErrorResponse()) {
       Debugger::ReportError(response.GetStatus().AsCString());

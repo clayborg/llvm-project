@@ -274,10 +274,8 @@ llvm::json::Value toJSON(const GPUActions &data);
 /// initialization actions.
 ///-----------------------------------------------------------------------------
 struct GPUPluginInitializeArgs {
-  /// True if the native process is being attached to, false if it is being
-  /// launched. GPU plug-ins use this to decide whether to set up the late
-  /// attach handshake instead of (or in addition to) the launch-time
-  /// initialization breakpoints.
+  /// True if the native process is being attached to rather than launched, so
+  /// plug-ins know to set up a late attach handshake.
   bool is_attach = false;
 };
 

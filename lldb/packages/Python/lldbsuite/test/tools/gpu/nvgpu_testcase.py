@@ -47,14 +47,10 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
     NO_DEBUG_INFO_TESTCASE = True
 
-    # Environment forced on a CUDA process that we start independently and then
-    # attach to. The driver's isLateAttachSupported() refuses late attach
-    # outright unless the debugger requests the lazy function loading and lazy
-    # function finalization capabilities ("Late attaching of a debugger that
-    # does not support CUDA lazy loading is not supported"). We do not request
-    # them yet, so disable the corresponding driver features in the inferior
-    # instead. Drop this once the capabilities are negotiated in
-    # WriteInitializationSymbolsToHost.
+    # The driver refuses late attach outright unless the debugger requests the
+    # lazy function loading and finalization capabilities, which we do not yet,
+    # so disable those driver features in the inferior instead. Drop once
+    # WriteInitializationSymbolsToHost negotiates the capabilities.
     LATE_ATTACH_INFERIOR_ENV = [
         "CUDA_MODULE_LOADING=EAGER",
         "CUDA_DISABLE_FUNCTION_LAZY_FINALIZATION=1",

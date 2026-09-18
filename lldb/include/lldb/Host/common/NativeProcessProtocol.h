@@ -87,9 +87,8 @@ public:
   // reinject them back.
   virtual Status IgnoreSignals(llvm::ArrayRef<int> signals);
 
-  // Returns a copy of the current set of signals the process passes through
-  // without stopping. Used to save/restore the disposition around a temporary
-  // resume window (see the NVGPU detach signal bypass).
+  // Returns a copy of the signals the process currently passes through without
+  // stopping, so a caller can restore the disposition after changing it.
   llvm::DenseSet<int> GetIgnoredSignals() const { return m_signals_to_ignore; }
 
   // Memory and memory region functions

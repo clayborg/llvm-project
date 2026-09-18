@@ -667,10 +667,8 @@ Status ProcessGDBRemote::DoLaunch(lldb_private::Module *exe_module,
 
   LLDB_LOGF(log, "ProcessGDBRemote::%s() entered", __FUNCTION__);
 
-  // This is a launch, not an attach. Clear any late-attach arming left over
-  // from a prior attach on a reused ProcessGDBRemote so we never report
-  // is_attach=true to GPU plug-ins on a launch path (which would arm the late
-  // attach handshake against a freshly launched process).
+  // Clear any arming left over from a prior attach on a reused object, so a
+  // launch never reports is_attach to the GPU plug-ins.
   m_gpu_is_attaching = false;
 
   uint32_t launch_flags = launch_info.GetFlags().Get();
@@ -1471,8 +1469,7 @@ Status ProcessGDBRemote::DoAttachToProcessWithID(
 
   // Clear out and clean up from any current state
   Clear();
-  // Let GPU plug-ins know (via jGPUPluginInitialize during connection setup)
-  // that we are attaching, so they can set up the late attach handshake.
+  // Reported to the GPU plug-ins by ConnectToDebugserver below.
   m_gpu_is_attaching = true;
   if (attach_pid != LLDB_INVALID_PROCESS_ID) {
     error = EstablishConnectionIfNeeded(attach_info);
@@ -1498,8 +1495,7 @@ Status ProcessGDBRemote::DoAttachToProcessWithName(
   Status error;
   // Clear out and clean up from any current state
   Clear();
-  // Let GPU plug-ins know (via jGPUPluginInitialize during connection setup)
-  // that we are attaching, so they can set up the late attach handshake.
+  // Reported to the GPU plug-ins by ConnectToDebugserver below.
   m_gpu_is_attaching = true;
 
   if (process_name && process_name[0]) {
@@ -4020,10 +4016,6 @@ Status ProcessGDBRemote::DisableWatchpoint(WatchpointSP wp_sp, bool notify) {
 void ProcessGDBRemote::Clear() {
   m_thread_list_real.Clear();
   m_thread_list.Clear();
-  // Reset the late-attach arming on teardown so a reused ProcessGDBRemote does
-  // not carry an attach's is_attach=true into a later launch. The attach paths
-  // call Clear() and then set this true again for the new connection.
-  m_gpu_is_attaching = false;
 }
 
 Status ProcessGDBRemote::DoSignal(int signo) {

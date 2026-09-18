@@ -27,9 +27,7 @@ LLDBServerPlugin::HaltNativeProcessIfNeeded(bool &was_halted,
   using namespace std::chrono;
   was_halted = false;
   NativeProcessProtocol *process = m_native_process.GetCurrentProcess();
-  // The current native process can be null if the inferior is exiting while a
-  // GPU-thread callback races to halt it. There is nothing to halt in that
-  // case; report an invalid state rather than dereferencing null.
+  // Null when the inferior exits while a GPU-thread callback races to halt it.
   if (!process)
     return lldb::eStateInvalid;
   if (process->IsRunning()) {

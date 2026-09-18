@@ -491,8 +491,8 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   // exception, so a running kernel always sets it.
   if (!forced_stop_description.empty()) {
     if (NativeThreadProtocol *thread = GetThreadByID(current_tid))
-      static_cast<ThreadNVGPU *>(thread)->SetStopped(
-          lldb::eStopReasonException, forced_stop_description);
+      static_cast<ThreadNVGPU *>(thread)->SetStopped(lldb::eStopReasonException,
+                                                     forced_stop_description);
   }
 
   ChangeStateToStopped();

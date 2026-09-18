@@ -17,13 +17,13 @@ __global__ void spinKernel(volatile int *keep_running, volatile int *started) {
   }
 }
 
-#define CHECK_CUDA(call)                                                        \
-  do {                                                                          \
-    cudaError_t _err = (call);                                                  \
-    if (_err != cudaSuccess) {                                                  \
-      fprintf(stderr, "%s failed: %s\n", #call, cudaGetErrorString(_err));      \
-      return 1;                                                                 \
-    }                                                                           \
+#define CHECK_CUDA(call)                                                       \
+  do {                                                                         \
+    cudaError_t _err = (call);                                                 \
+    if (_err != cudaSuccess) {                                                 \
+      fprintf(stderr, "%s failed: %s\n", #call, cudaGetErrorString(_err));     \
+      return 1;                                                                \
+    }                                                                          \
   } while (0)
 
 int main(int argc, char **argv) {
@@ -43,8 +43,8 @@ int main(int argc, char **argv) {
   // Pinned, host-mapped flag the kernel sets once it is resident. Zero-copy
   // mapped memory is safe to poll from the host while the kernel runs.
   int *h_started = nullptr;
-  CHECK_CUDA(cudaHostAlloc((void **)&h_started, sizeof(int),
-                           cudaHostAllocMapped));
+  CHECK_CUDA(
+      cudaHostAlloc((void **)&h_started, sizeof(int), cudaHostAllocMapped));
   *h_started = 0;
   int *d_started = nullptr;
   CHECK_CUDA(cudaHostGetDevicePointer((void **)&d_started, h_started, 0));
