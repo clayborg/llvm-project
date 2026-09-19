@@ -69,9 +69,15 @@ public:
 
   static std::vector<std::string> GetAttachSymbolNames();
 
-  /// Resolve the handshake symbols from the inferior without a gdb-remote
-  /// round-trip, which during attach stop processing would corrupt the
-  /// in-flight continue cycle.
+  /// Resolve the handshake symbols by parsing libcuda out of the inferior.
+  ///
+  /// Everywhere else the LLDB client resolves symbols for us, by way of
+  /// GPUBreakpointInfo::symbol_names, and hands the values back on a
+  /// breakpoint hit. That is unavailable here: we need these addresses before
+  /// injection, on the initial attach stop, when no breakpoint has been hit --
+  /// and the GPU protocol is client-initiated, so lldb-server cannot ask for
+  /// them. Resolving from the inferior's own view also keeps the answer
+  /// correct when the client is on a different machine.
   static llvm::Expected<llvm::StringMap<uint64_t>>
   ResolveInferiorAttachSymbols(NativeProcessProtocol &linux_process);
 
