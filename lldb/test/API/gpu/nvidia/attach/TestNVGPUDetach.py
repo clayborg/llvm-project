@@ -53,6 +53,16 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         """Detach the GPU target, then the CPU target."""
         self.select_gpu()
         self.runCmd("detach")
+
+        # The CPU was resumed for the attach handshake and the server has
+        # since halted it, but its public state only advances as that stop
+        # event is drained. Detaching while LLDB still believes it is
+        # running makes Process::Detach interrupt and then wait out
+        # target.process.interrupt-timeout for a stop that already happened.
+        self.assertTrue(
+            self.wait_for_cpu_process_stopped(),
+            "CPU process never reported stopped before detach",
+        )
         self.select_cpu()
         self.runCmd("detach")
 

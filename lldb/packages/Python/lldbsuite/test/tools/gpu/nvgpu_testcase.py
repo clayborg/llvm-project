@@ -403,21 +403,21 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             time.sleep(0.2)
         return False
 
-    def wait_for_gpu_process_stopped(self, timeout_seconds=60):
-        """Pump the debugger's listener until the GPU process reports stopped.
+    def wait_for_process_stopped(self, get_process, timeout_seconds=60):
+        """Pump the debugger's listener until get_process() reports stopped.
 
         In async mode a process's *public* state -- what SBProcess.GetState()
         returns -- only advances when its state-changed event is pulled off a
         listener, because Process::SetPublicState runs from
         ProcessEventData::DoOnRemoval as the event leaves the queue. Polling
         GetState() while never draining the debugger's listener therefore keeps
-        reporting "running" even after the GPU has stopped server-side, so this
-        has to pump events rather than just sleep. An interactive `continue`
-        works precisely because its event loop drains these events.
+        reporting "running" long after the process has stopped, so this has to
+        pump events rather than just sleep. An interactive `continue` works
+        precisely because its event loop drains these events.
         """
 
-        def gpu_stopped():
-            proc = self.gpu_process
+        def stopped():
+            proc = get_process()
             return (
                 proc is not None
                 and proc.IsValid()
@@ -427,6 +427,16 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         listener = self.dbg.GetListener()
         event = lldb.SBEvent()
         deadline = time.time() + timeout_seconds
-        while time.time() < deadline and not gpu_stopped():
+        while time.time() < deadline and not stopped():
             listener.WaitForEvent(1, event)
-        return gpu_stopped()
+        return stopped()
+
+    def wait_for_gpu_process_stopped(self, timeout_seconds=60):
+        return self.wait_for_process_stopped(
+            lambda: self.gpu_process, timeout_seconds
+        )
+
+    def wait_for_cpu_process_stopped(self, timeout_seconds=60):
+        return self.wait_for_process_stopped(
+            lambda: self.cpu_process, timeout_seconds
+        )
