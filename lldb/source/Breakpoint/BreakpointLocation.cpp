@@ -376,9 +376,13 @@ BreakpointOptions &BreakpointLocation::GetLocationOptions() {
 }
 
 bool BreakpointLocation::ValidForThisThread(Thread &thread) {
-  return thread.MatchesSpec(
+  const ThreadSpec *thread_spec =
       GetOptionsSpecifyingKind(BreakpointOptions::eThreadSpec)
-          .GetThreadSpecNoCreate());
+          .GetThreadSpecNoCreate();
+  // An inactive GPU lane cannot claim a thread-specific breakpoint hit.
+  if (thread_spec && thread_spec->HasSpecification() && !thread.GetIsActive())
+    return false;
+  return thread.MatchesSpec(thread_spec);
 }
 
 BreakpointLocationSP
