@@ -321,6 +321,14 @@ void ThreadPlanStepRange::ClearNextBranchBreakpoint() {
     m_could_not_resolve_hw_bp = false;
     m_found_calls = false;
   }
+  m_next_branch_bp_stop_id = LLDB_INVALID_STOP_ID;
+}
+
+void ThreadPlanStepRange::ClearStaleNextBranchBreakpoint() {
+  // A stop may consume this thread-specific breakpoint through another
+  // logical thread, so only reuse it in the stop generation that created it.
+  if (m_next_branch_bp_sp && m_next_branch_bp_stop_id != m_process.GetStopID())
+    ClearNextBranchBreakpoint();
 }
 
 void ThreadPlanStepRange::ClearNextBranchBreakpointExplainedStop() {
@@ -329,6 +337,10 @@ void ThreadPlanStepRange::ClearNextBranchBreakpointExplainedStop() {
 }
 
 bool ThreadPlanStepRange::SetNextBranchBreakpoint() {
+  // Stop processing can call this before GetPlanRunState().  Invalidate a
+  // breakpoint from an earlier stop so we compute a replacement from the
+  // current PC instead of treating the stale pointer as reusable.
+  ClearStaleNextBranchBreakpoint();
   if (m_next_branch_bp_sp)
     return true;
 
@@ -446,6 +458,7 @@ bool ThreadPlanStepRange::SetNextBranchBreakpoint() {
         }
         m_next_branch_bp_sp->SetThreadID(m_tid);
         m_next_branch_bp_sp->SetBreakpointKind("next-branch-location");
+        m_next_branch_bp_stop_id = m_process.GetStopID();
 
         return true;
       } else
@@ -493,6 +506,8 @@ bool ThreadPlanStepRange::NextRangeBreakpointExplainsStop(
 bool ThreadPlanStepRange::WillStop() { return true; }
 
 StateType ThreadPlanStepRange::GetPlanRunState() {
+  // Never let a breakpoint cached before an intervening stop select running.
+  ClearStaleNextBranchBreakpoint();
   if (m_next_branch_bp_sp)
     return eStateRunning;
   else
