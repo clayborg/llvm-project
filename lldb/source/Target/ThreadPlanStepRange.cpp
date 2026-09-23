@@ -534,6 +534,9 @@ bool ThreadPlanStepRange::MischiefManaged() {
 
 bool ThreadPlanStepRange::IsPlanStale() {
   Log *log = GetLog(LLDBLog::Step);
+  if (!IsPlanComplete() && ShouldContinueForThreadActivity())
+    return false;
+
   FrameComparison frame_order = CompareCurrentFrameToStartFrame();
 
   if (frame_order == eFrameCompareOlder) {
@@ -561,4 +564,8 @@ bool ThreadPlanStepRange::IsPlanStale() {
     }
   }
   return false;
+}
+
+bool ThreadPlanStepRange::ShouldContinueForThreadActivity() {
+  return !GetThread().GetIsActive();
 }

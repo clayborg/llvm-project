@@ -65,3 +65,10 @@ ProcessAMDGPU &ThreadAMDGPU::GetProcess() {
 const ProcessAMDGPU &ThreadAMDGPU::GetProcess() const {
   return static_cast<const ProcessAMDGPU &>(m_process);
 }
+
+bool ThreadAMDGPU::GetIsActive() const {
+  if (IsShadowThread())
+    return true;
+
+  return m_wave->GetExecMask() & (1ULL << m_lane_id);
+}

@@ -1441,7 +1441,7 @@ protected:
   /// that are visible but can't be stepping yet. They can set a breakpoint on
   /// the PC and when the software thread gets contexted switched back onto a
   /// real thread, stepping can be resumed.
-  bool m_active = false;
+  bool m_active = true;
 
 private:
   bool m_extended_info_fetched; // Have we tried to retrieve the m_extended_info

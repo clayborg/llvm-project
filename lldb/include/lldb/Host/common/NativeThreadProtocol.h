@@ -44,7 +44,7 @@ public:
   lldb::tid_t GetID() const { return m_tid; }
   std::optional<lldb::tid_t> GetLaneID() const { return m_lane_id; }
   std::optional<lldb::tid_t> GetSIMD() const { return m_simd_id; }
-  bool GetIsActive() const { return m_active; }
+  virtual bool GetIsActive() const { return m_active; }
   void SetIsActive(bool b) { m_active = b; }
   NativeProcessProtocol &GetProcess() { return m_process; }
 

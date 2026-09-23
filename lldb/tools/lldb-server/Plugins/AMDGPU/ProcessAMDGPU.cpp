@@ -543,7 +543,18 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
               stop_reason);
   }
 
-  GetOrCreateWave(wave_id).UpdateStopReason(stop_reason);
+  uint64_t exec_mask;
+  status = amd_dbgapi_wave_get_info(wave_id, AMD_DBGAPI_WAVE_INFO_EXEC_MASK,
+                                    sizeof(exec_mask), &exec_mask);
+  if (status != AMD_DBGAPI_STATUS_SUCCESS) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "amd_dbgapi_wave_get_info failed: %d",
+              status);
+    return false;
+  }
+
+  WaveAMDGPU &wave = GetOrCreateWave(wave_id);
+  wave.SetExecMask(exec_mask);
+  wave.UpdateStopReason(stop_reason);
   return true;
 }
 

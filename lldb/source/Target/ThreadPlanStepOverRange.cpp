@@ -148,6 +148,17 @@ bool ThreadPlanStepOverRange::ShouldStop(Event *event_ptr) {
   }
   ClearNextBranchBreakpointExplainedStop();
 
+  // An inactive logical thread may expose the PC of another executing member
+  // of its SIMD group.  Keep stepping until this thread participates again
+  // rather than interpreting that PC as progress by this thread.
+  if (ShouldContinueForThreadActivity()) {
+    LLDB_LOGF(log, "ThreadPlanStepRange continuing because thread is "
+                   "inactive.");
+    ClearNextBranchBreakpoint();
+    m_no_more_plans = false;
+    return false;
+  }
+
   // If we're out of the range but in the same frame or in our caller's frame
   // then we should stop. When stepping out we only stop others if we are
   // forcing running one thread.
@@ -335,9 +346,9 @@ bool ThreadPlanStepOverRange::ShouldStop(Event *event_ptr) {
     new_plan_sp = CheckShouldStopHereAndQueueStepOut(frame_order, m_status);
   }
 
-  if (!new_plan_sp)
+  if (!new_plan_sp) {
     m_no_more_plans = true;
-  else {
+  } else {
     // Any new plan will be an implementation plan, so mark it private:
     new_plan_sp->SetPrivate(true);
     m_no_more_plans = false;
