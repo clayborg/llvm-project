@@ -198,6 +198,9 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         nonzero_breakpoint_id = self.set_gpu_source_breakpoint(
             source, "// NONZERO LANE BRANCH"
         )
+        sentinel_breakpoint_id = self.set_gpu_source_breakpoint(
+            source, "// GPU BREAKPOINT"
+        )
         gpu_threads = self.continue_to_gpu_breakpoint(divergent_breakpoint_id)
         self.assertTrue(gpu_threads)
 
@@ -239,14 +242,43 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
             breakpoint_threads,
             "the nonzero branch breakpoint should interrupt the step",
         )
-        return source, lane_zero_thread, breakpoint_threads
+        return (
+            source,
+            lane_zero_thread,
+            breakpoint_threads,
+            sentinel_breakpoint_id,
+        )
+
+    def _step_selected_lane_from_nonzero_branch_breakpoint(self):
+        active_thread = self.gpu_process.GetSelectedThread()
+        self.assertTrue(active_thread.IsActive())
+        self.assertEqual(lldb.eStopReasonBreakpoint, active_thread.GetStopReason())
+
+        before_pc = active_thread.GetFrameAtIndex(0).GetPC()
+        listener = self.prepare_for_gpu_step()
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        error = lldb.SBError()
+        active_thread.StepInstruction(False, error)
+        self.assertSuccess(error, "step the active nonzero lane")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        self.assertEqual(
+            active_thread.GetThreadID(),
+            self.gpu_process.GetSelectedThread().GetThreadID(),
+        )
+        self.assertEqual(lldb.eStopReasonPlanComplete, active_thread.GetStopReason())
+        self.assertNotEqual(before_pc, active_thread.GetFrameAtIndex(0).GetPC())
 
     def test_gpu_continue_from_breakpoint_while_stepped_lane_inactive(self):
         """Lane 0 starts a step, becomes inactive while the wave executes the
         nonzero branch, and is interrupted by that branch's breakpoint.
         Continuing from the breakpoint without deleting it must step the wave
         past the breakpoint and finish lane 0's original step."""
-        source, lane_zero_thread, _ = (
+        source, lane_zero_thread, _, _ = (
             self._step_lane_zero_to_nonzero_branch_breakpoint()
         )
 
@@ -281,38 +313,103 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         breakpoint. An instruction step on the selected active nonzero lane
         must take priority and report completion on that lane rather than
         allowing lane 0's older step plan to control the stop."""
-        _, lane_zero_thread, _ = (
+        _, lane_zero_thread, _, _ = self._step_lane_zero_to_nonzero_branch_breakpoint()
+        self._step_selected_lane_from_nonzero_branch_breakpoint()
+        self.assertFalse(lane_zero_thread.IsActive())
+
+    def test_gpu_source_step_resumes_after_other_lane_step_completes(self):
+        """Lane 0 starts a source step and becomes inactive when the nonzero
+        branch hits a breakpoint. Source-stepping the selected nonzero lane
+        switches execution back to lane 0, whose older plan completes first.
+        Continuing must then finish the nonzero lane's pending source step
+        before reaching a later safety breakpoint."""
+        source, lane_zero_thread, _, sentinel_breakpoint_id = (
             self._step_lane_zero_to_nonzero_branch_breakpoint()
         )
-        active_thread = self.gpu_process.GetSelectedThread()
-        self.assertTrue(active_thread.IsActive())
-        self.assertEqual(
-            lldb.eStopReasonBreakpoint, active_thread.GetStopReason()
+        self.gpu_target.FindBreakpointByID(sentinel_breakpoint_id).SetEnabled(False)
+        later_breakpoint_id = self.set_gpu_source_breakpoint(
+            source, "// GPU BREAKPOINT AFTER"
         )
 
-        before_pc = active_thread.GetFrameAtIndex(0).GetPC()
+        nonzero_thread = self.gpu_process.GetSelectedThread()
+        self.assertTrue(nonzero_thread.IsActive())
+        self.assertEqual(lldb.eStopReasonBreakpoint, nonzero_thread.GetStopReason())
+
         listener = self.prepare_for_gpu_step()
         self.dbg.SetSelectedTarget(self.gpu_target)
         error = lldb.SBError()
-        active_thread.StepInstruction(False, error)
-        self.assertSuccess(error, "step the active nonzero lane")
+        nonzero_thread.StepOver(lldb.eOnlyDuringStepping, error)
+        self.assertSuccess(error, "source-step the selected nonzero lane")
         lldbutil.expect_state_changes(
             self,
             listener,
             self.gpu_process,
             [lldb.eStateRunning, lldb.eStateStopped],
         )
+
         self.assertEqual(
-            active_thread.GetThreadID(),
+            lane_zero_thread.GetThreadID(),
             self.gpu_process.GetSelectedThread().GetThreadID(),
         )
+        self.assertEqual(lldb.eStopReasonPlanComplete, lane_zero_thread.GetStopReason())
+
+        listener = self.dbg.GetListener()
+        error = self.gpu_process.Continue()
+        self.assertSuccess(error, "continue the pending nonzero-lane source step")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        self.setAsync(False)
+
+        self.assertFalse(
+            lldbutil.get_threads_stopped_at_breakpoint_id(
+                self.gpu_process, later_breakpoint_id
+            ),
+            "the nonzero lane's source step should complete before the safety breakpoint",
+        )
         self.assertEqual(
-            lldb.eStopReasonPlanComplete, active_thread.GetStopReason()
+            nonzero_thread.GetThreadID(),
+            self.gpu_process.GetSelectedThread().GetThreadID(),
         )
-        self.assertNotEqual(
-            before_pc, active_thread.GetFrameAtIndex(0).GetPC()
+        self.assertEqual(lldb.eStopReasonPlanComplete, nonzero_thread.GetStopReason())
+
+    def test_gpu_continue_pending_step_after_stepping_breakpoint_lane(self):
+        """Lane 0's source step is interrupted while inactive by a breakpoint
+        in the nonzero branch. After instruction-stepping the selected active
+        lane past that breakpoint, continuing must complete lane 0's pending
+        step before reaching the later sentinel breakpoint."""
+        _, lane_zero_thread, _, sentinel_breakpoint_id = (
+            self._step_lane_zero_to_nonzero_branch_breakpoint()
         )
+        self._step_selected_lane_from_nonzero_branch_breakpoint()
         self.assertFalse(lane_zero_thread.IsActive())
+
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+        error = self.gpu_process.Continue()
+        self.assertSuccess(error, "continue lane 0's pending step")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        self.setAsync(False)
+
+        self.assertFalse(
+            lldbutil.get_threads_stopped_at_breakpoint_id(
+                self.gpu_process, sentinel_breakpoint_id
+            ),
+            "lane 0's step should complete before the sentinel breakpoint",
+        )
+        self.assertEqual(lldb.eStopReasonPlanComplete, lane_zero_thread.GetStopReason())
+        self.assertEqual(
+            lane_zero_thread.GetThreadID(),
+            self.gpu_process.GetSelectedThread().GetThreadID(),
+        )
 
     def test_gpu_resume_to_next_breakpoint(self):
         """Test that resuming GPU threads can hit a later breakpoint."""

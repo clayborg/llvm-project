@@ -67,6 +67,10 @@ protected:
 
   void ClearNextBranchBreakpoint();
 
+  /// Clear the cached next-branch breakpoint if the process has stopped since
+  /// it was created.
+  void ClearStaleNextBranchBreakpoint();
+
   void ClearNextBranchBreakpointExplainedStop();
 
   bool NextRangeBreakpointExplainsStop(lldb::StopInfoSP stop_info_sp);
@@ -83,6 +87,8 @@ protected:
   bool m_first_run_event; // We want to broadcast only one running event, our
                           // first.
   lldb::BreakpointSP m_next_branch_bp_sp;
+  // The process stop generation in which m_next_branch_bp_sp was created.
+  uint32_t m_next_branch_bp_stop_id = LLDB_INVALID_STOP_ID;
   bool m_use_fast_step;
   bool m_given_ranges_only;
   bool m_found_calls = false; // When we set the next branch breakpoint for
