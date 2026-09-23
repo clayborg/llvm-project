@@ -129,6 +129,55 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         )
         self.assertTrue(lane_zero_thread.IsActive())
 
+    def test_gpu_thread_specific_breakpoint_ignores_inactive_lane(self):
+        """Test that an inactive lane does not claim its breakpoint."""
+        self.build()
+
+        source = "hello_world.hip"
+        target = lldbutil.run_to_breakpoint_make_target(self)
+        launch_info = target.GetLaunchInfo()
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        process = target.Launch(launch_info, error)
+        self.assertTrue(process, "Could not create a valid process")
+        self.assertSuccess(error, "launch process")
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be created")
+
+        divergent_breakpoint_id = self.set_gpu_source_breakpoint(
+            source, "// DIVERGENT STEP"
+        )
+        nonzero_breakpoint_id = self.set_gpu_source_breakpoint(
+            source, "// NONZERO LANE BRANCH"
+        )
+        gpu_threads = self.continue_to_gpu_breakpoint(divergent_breakpoint_id)
+        self.assertTrue(gpu_threads)
+
+        lane_zero_thread = next(
+            thread
+            for thread in gpu_threads
+            if thread.GetFrameAtIndex(0)
+            .FindVariable("idx")
+            .GetValueAsUnsigned()
+            == 0
+        )
+        self.assertTrue(lane_zero_thread.IsActive())
+
+        nonzero_breakpoint = self.gpu_target.FindBreakpointByID(
+            nonzero_breakpoint_id
+        )
+        self.assertTrue(nonzero_breakpoint.IsValid())
+        self.assertGreater(nonzero_breakpoint.GetNumLocations(), 0)
+        nonzero_breakpoint.SetThreadID(lane_zero_thread.GetThreadID())
+        self.assertEqual(
+            lane_zero_thread.GetThreadID(), nonzero_breakpoint.GetThreadID()
+        )
+
+        # Lane 0 is inactive while the wave executes the nonzero branch, so
+        # its thread-specific breakpoint must not interrupt lane 0's step.
+        self.step_over_gpu_thread(
+            lane_zero_thread, line_number(source, "// LANE ZERO BRANCH")
+        )
+
     def _step_lane_zero_to_nonzero_branch_breakpoint(self):
         """Step lane 0 until the active nonzero lanes hit a breakpoint."""
         self.build()
