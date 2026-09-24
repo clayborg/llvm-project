@@ -88,6 +88,15 @@ public:
     return std::nullopt;
   };
 
+  /// Whether this plug-in's own GPU server should include GPUActions from
+  /// NativeProcessIsStopping() in its stop-reply packets.
+  ///
+  /// On the CPU-side lldb-server, GPUActions are always collected by walking
+  /// m_plugins. But when the lldb-server *is* a GPU plug-in instance (i.e.
+  /// m_plugin_instance is set on the GPU-side server), only plug-ins that need
+  /// to piggyback GPUActions onto their own stop replies should report true.
+  virtual bool ReportsGPUActionsOnOwnStop() { return false; }
+
   /// Get the GPU plug-in notified when the native process exits.
   ///
   /// This function will get called when the native process exits. This allows
