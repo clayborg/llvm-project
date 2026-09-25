@@ -52,6 +52,14 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "pid {0}", GetID());
 
+  // A resume attempt abandons the previous all-stop operation, even if
+  // re-enabling wave creation fails.
+  m_stopping_all_waves = false;
+  m_waves_pending_stop.clear();
+
+  if (llvm::Error error = SetWaveCreationStopped(false))
+    return Status::FromError(std::move(error));
+
   NotifyTracersProcessWillResume();
 
   struct WaveResumeAction {
@@ -549,6 +557,7 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
               status);
     return false;
   }
+  m_waves_pending_stop.erase(wave_id);
   amd_dbgapi_wave_stop_reasons_t stop_reason;
   status = amd_dbgapi_wave_get_info(wave_id, AMD_DBGAPI_WAVE_INFO_STOP_REASON,
                                     sizeof(stop_reason), &stop_reason);
@@ -614,7 +623,11 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
   WaveAMDGPU &wave = GetOrCreateWave(wave_id);
   wave.SetExecMask(exec_mask);
   wave.UpdateStopReason(stop_reason);
-  m_pending_notification_wave_id = wave_id;
+  // A real breakpoint, step, or exception takes priority over a wave stopped
+  // only to complete an all-stop operation.
+  if (stop_reason != AMD_DBGAPI_WAVE_STOP_REASON_NONE ||
+      !m_pending_notification_wave_id)
+    m_pending_notification_wave_id = wave_id;
   return true;
 }
 
@@ -640,6 +653,18 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
     // Handle wave stop
     result = handleWaveStop(eventId);
     m_gpu_state = State::GPUStopped;
+    break;
+  }
+
+  case AMD_DBGAPI_EVENT_KIND_WAVE_COMMAND_TERMINATED: {
+    amd_dbgapi_wave_id_t wave_id;
+    amd_dbgapi_status_t status = amd_dbgapi_event_get_info(
+        eventId, AMD_DBGAPI_EVENT_INFO_WAVE, sizeof(wave_id), &wave_id);
+    if (status == AMD_DBGAPI_STATUS_SUCCESS)
+      m_waves_pending_stop.erase(wave_id);
+    else
+      LLDB_LOGF(GetLog(GDBRLog::Plugin), "amd_dbgapi_event_get_info failed: %d",
+                status);
     break;
   }
 
@@ -834,21 +859,16 @@ ProcessAMDGPU::GetWaveInfo(amd_dbgapi_wave_id_t wave_id) {
 
 llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>>
 ProcessAMDGPU::GetWaveList(size_t *count, amd_dbgapi_changed_t *changed) {
-  // Re-enable wave creation on exit from this function.
-  auto ResetWaveCreation = llvm::make_scope_exit([this] {
-    if (auto error = RunAmdDbgApiCommand([this] {
-          return amd_dbgapi_process_set_wave_creation(
-              GetDbgApiProcessID(), AMD_DBGAPI_WAVE_CREATION_NORMAL);
-        }))
-      LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
-                     "Error: Failed to enable wave creation: {0}");
+  const bool restore_wave_creation = !m_wave_creation_stopped;
+  auto ResetWaveCreation = llvm::make_scope_exit([this, restore_wave_creation] {
+    if (restore_wave_creation)
+      if (auto error = SetWaveCreationStopped(false))
+        LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
+                       "Error: Failed to enable wave creation: {0}");
   });
 
   // Stop creating new waves get an accurate count.
-  if (llvm::Error error = RunAmdDbgApiCommand([this] {
-        return amd_dbgapi_process_set_wave_creation(
-            GetDbgApiProcessID(), AMD_DBGAPI_WAVE_CREATION_STOP);
-      }))
+  if (llvm::Error error = SetWaveCreationStopped(true))
     return error;
 
   // Get the list of waves
@@ -860,6 +880,90 @@ ProcessAMDGPU::GetWaveList(size_t *count, amd_dbgapi_changed_t *changed) {
     return error;
 
   return DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>(wave_list);
+}
+
+llvm::Error ProcessAMDGPU::SetWaveCreationStopped(bool stopped) {
+  if (m_wave_creation_stopped == stopped)
+    return llvm::Error::success();
+
+  amd_dbgapi_wave_creation_t mode =
+      stopped ? AMD_DBGAPI_WAVE_CREATION_STOP : AMD_DBGAPI_WAVE_CREATION_NORMAL;
+  if (llvm::Error error = RunAmdDbgApiCommand([this, mode] {
+        return amd_dbgapi_process_set_wave_creation(GetDbgApiProcessID(), mode);
+      }))
+    return error;
+
+  m_wave_creation_stopped = stopped;
+  return llvm::Error::success();
+}
+
+llvm::Expected<bool> ProcessAMDGPU::AdvanceStopAllWaves() {
+  if (!m_stopping_all_waves) {
+    // Freeze wave creation before taking the first snapshot so the operation
+    // can converge on a stable set of waves.
+    if (llvm::Error error = SetWaveCreationStopped(true))
+      return std::move(error);
+    m_stopping_all_waves = true;
+  }
+
+  size_t count = 0;
+  llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>> maybe_wave_list =
+      GetWaveList(&count, nullptr);
+  if (!maybe_wave_list)
+    return maybe_wave_list.takeError();
+
+  for (size_t i = 0; i < count; ++i) {
+    amd_dbgapi_wave_id_t wave_id = maybe_wave_list->get()[i];
+
+    amd_dbgapi_wave_state_t state;
+    amd_dbgapi_status_t status = amd_dbgapi_wave_get_info(
+        wave_id, AMD_DBGAPI_WAVE_INFO_STATE, sizeof(state), &state);
+    if (status == AMD_DBGAPI_STATUS_ERROR_INVALID_WAVE_ID) {
+      // The wave terminated after the snapshot was taken. A pending request,
+      // if any, remains tracked until WAVE_COMMAND_TERMINATED arrives.
+      continue;
+    }
+    if (status != AMD_DBGAPI_STATUS_SUCCESS)
+      return llvm::createStringError(
+          llvm::inconvertibleErrorCode(),
+          "Failed to get state for wave %" PRIu64 ": status=%s", wave_id.handle,
+          AmdDbgApiStatusToString(status));
+
+    if (state == AMD_DBGAPI_WAVE_STATE_STOP) {
+      // This wave needs no stop request.
+      continue;
+    }
+
+    if (m_waves_pending_stop.count(wave_id)) {
+      // A previous stop request is still in flight and the wave continues to
+      // report RUN. Do not send a duplicate request; wait for its event.
+      continue;
+    }
+
+    status = amd_dbgapi_wave_stop(wave_id);
+    if (status == AMD_DBGAPI_STATUS_SUCCESS) {
+      // Track the request until WAVE_STOP or WAVE_COMMAND_TERMINATED arrives.
+      m_waves_pending_stop.insert(wave_id);
+      continue;
+    }
+    if (status == AMD_DBGAPI_STATUS_ERROR_INVALID_WAVE_ID) {
+      // The wave terminated between the state query and stop request.
+      continue;
+    }
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "Failed to stop wave %" PRIu64 ": status=%s",
+                                   wave_id.handle,
+                                   AmdDbgApiStatusToString(status));
+  }
+
+  if (!m_waves_pending_stop.empty()) {
+    // A later notifier callback will advance the operation again.
+    return false;
+  }
+
+  // Every live wave is stopped and every stop request is acknowledged.
+  m_stopping_all_waves = false;
+  return true;
 }
 
 WaveAMDGPU &ProcessAMDGPU::GetOrCreateWave(amd_dbgapi_wave_id_t wave_id) {
