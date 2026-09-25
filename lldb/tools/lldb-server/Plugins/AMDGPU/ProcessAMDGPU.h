@@ -108,6 +108,14 @@ public:
   bool handleDebugEvent(amd_dbgapi_event_id_t eventId,
                         amd_dbgapi_event_kind_t eventKind);
 
+  /// Advance the asynchronous all-stop operation. Each call reconciles the
+  /// live wave list, requests any running waves to stop, and checks whether
+  /// all requested stop events have been processed. Returns false while the
+  /// operation is still pending and true once every live wave is stopped.
+  llvm::Expected<bool> AdvanceStopAllWaves();
+
+  bool IsStoppingAllWaves() const { return m_stopping_all_waves; }
+
   bool HasDyldChangesToReport() const {
     return m_gpu_module_manager.HasChangedCodeObjects();
   }
@@ -151,7 +159,19 @@ private:
   // Physical wave from the latest stop event awaiting current-thread
   // selection after its logical lane threads are refreshed.
   std::optional<amd_dbgapi_wave_id_t> m_pending_notification_wave_id;
+
+  // Waves with an outstanding amd_dbgapi_wave_stop request.
+  WaveIdSet m_waves_pending_stop;
+
+  // True while waiting for every live wave to stop.
+  bool m_stopping_all_waves = false;
+
+  // Tracks whether dbgapi is currently preventing new waves from being
+  // created.
+  bool m_wave_creation_stopped = false;
+
   WaveAMDGPU &GetOrCreateWave(amd_dbgapi_wave_id_t wave_id);
+  llvm::Error SetWaveCreationStopped(bool stopped);
   void UpdateWaveList();
   llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>>
   GetWaveList(size_t *count, amd_dbgapi_changed_t *changed);

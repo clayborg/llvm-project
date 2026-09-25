@@ -31,7 +31,6 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
     def test_sgrp_read_write(self):
         self.do_reg_read_write_test("s", NUM_SCALAR_REGISTERS)
 
-    @expectedFailureAll("Read of initial AGPR register valuee is working yet")
     def test_agrp_read_write(self):
         self.do_reg_read_write_test("a", NUM_ACCUM_REGISTERS)
 
