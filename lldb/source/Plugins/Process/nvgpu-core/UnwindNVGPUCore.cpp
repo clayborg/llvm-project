@@ -118,8 +118,8 @@ BuildBacktracePCs(lldb::SectionSP lane_section_sp, ObjectFile *core) {
 UnwindNVGPUCore::UnwindNVGPUCore(Thread &thread) : Unwind(thread) {}
 
 void UnwindNVGPUCore::DoClear() {
-  m_table_pcs.clear();
-  m_use_backtrace_table = false;
+  m_synthetic_pcs.clear();
+  m_use_synthetic_pcs = false;
   m_initialized = false;
   if (m_dwarf_unwinder_up)
     m_dwarf_unwinder_up->Clear();
@@ -137,14 +137,25 @@ void UnwindNVGPUCore::EnsureInitialized() {
   auto *nvgpu_process = static_cast<ProcessNVGPUCore *>(process_sp.get());
   ObjectFile *core = nvgpu_process->GetCoreObjectFile();
   SectionSP lane_sp = gpu_thread.GetLaneSection();
-  if (!core || !lane_sp)
+
+  // The SM-exception stand-in has no lane and so no call stack at all: its
+  // one frame is the SM's error PC, or 0 when the SM recorded none. Report
+  // the frame either way, so the exception stop reason has somewhere to hang.
+  if (!lane_sp) {
+    m_synthetic_pcs.push_back(gpu_thread.GetErrorPC().value_or(0));
+    m_use_synthetic_pcs = true;
+    m_initialized = true;
+    return;
+  }
+
+  if (!core)
     return;
 
   std::optional<llvm::SmallVector<addr_t, 8>> pcs =
       BuildBacktracePCs(lane_sp, core);
   if (pcs) {
-    m_table_pcs = std::move(*pcs);
-    m_use_backtrace_table = true;
+    m_synthetic_pcs = std::move(*pcs);
+    m_use_synthetic_pcs = true;
   } else {
     // No usable backtrace table for this lane (absent, wrong unwinder, or a
     // decode failure already logged in BuildBacktracePCs): use DWARF-CFI.
@@ -156,8 +167,8 @@ void UnwindNVGPUCore::EnsureInitialized() {
 
 uint32_t UnwindNVGPUCore::DoGetFrameCount() {
   EnsureInitialized();
-  if (m_use_backtrace_table)
-    return m_table_pcs.size();
+  if (m_use_synthetic_pcs)
+    return m_synthetic_pcs.size();
   if (!m_dwarf_unwinder_up)
     return 0;
   return m_dwarf_unwinder_up->GetFrameCount();
@@ -167,15 +178,15 @@ bool UnwindNVGPUCore::DoGetFrameInfoAtIndex(uint32_t frame_idx, addr_t &cfa,
                                             addr_t &pc,
                                             bool &behaves_like_zeroth_frame) {
   EnsureInitialized();
-  if (m_use_backtrace_table) {
-    if (frame_idx >= m_table_pcs.size())
+  if (m_use_synthetic_pcs) {
+    if (frame_idx >= m_synthetic_pcs.size())
       return false;
     // PC-only synthetic unwind: there is no real stack, so no genuine CFA is
     // available. Use the frame index as a unique synthetic CFA (as
     // HistoryUnwind does) so StackID can distinguish recursive or
     // repeated-symbol frames.
     cfa = frame_idx;
-    pc = m_table_pcs[frame_idx];
+    pc = m_synthetic_pcs[frame_idx];
     behaves_like_zeroth_frame = (frame_idx == 0);
     return true;
   }
@@ -200,11 +211,11 @@ UnwindNVGPUCore::DoCreateRegisterContextForFrame(StackFrame *frame) {
   if (idx == 0)
     return std::make_shared<RegisterContextNVGPUCore>(m_thread, core);
 
-  if (m_use_backtrace_table) {
-    if (idx >= m_table_pcs.size())
+  if (m_use_synthetic_pcs) {
+    if (idx >= m_synthetic_pcs.size())
       return {};
     return std::make_shared<RegisterContextNVGPUCore>(m_thread, core, idx,
-                                                      m_table_pcs[idx]);
+                                                      m_synthetic_pcs[idx]);
   }
 
   if (!m_dwarf_unwinder_up)
