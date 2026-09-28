@@ -91,6 +91,12 @@ private:
   /// indexes directly into this buffer, so register reads are a single
   /// `SetFromMemoryData` call -- no per-class dispatch.
   sass::ThreadRegisters m_register_data{};
+
+  /// True for the SM-exception stand-in thread, whose corefile state is an
+  /// error PC and nothing else. Only `PC` and `errorPC` are readable; the
+  /// rest of the buffer is zero because the corefile never recorded it, not
+  /// because the lane held zero, so reads of it are refused.
+  bool m_pc_only = false;
 };
 
 } // namespace lldb_private

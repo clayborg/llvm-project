@@ -16,3 +16,10 @@ std::string lldb_private::nvgpu::FormatThreadName(
       "blockIdx(x={0} y={1} z={2}) threadIdx(x={3} y={4} z={5})", blockIdxX,
       blockIdxY, blockIdxZ, threadIdxX, threadIdxY, threadIdxZ);
 }
+
+std::string
+lldb_private::nvgpu::FormatSMExceptionThreadName(uint32_t device_idx,
+                                                 uint32_t sm_id) {
+  return llvm::formatv("device {0} SM {1} (no kernel context)", device_idx,
+                       sm_id);
+}

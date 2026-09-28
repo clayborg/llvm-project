@@ -303,40 +303,78 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
   ObjectFile *core = GetCoreObjectFile();
 
   uint32_t tid = 0;
+  uint32_t sm_exception_threads = 0;
 
-  for (const SectionSP &warp :
-       nvgpu_core::FindDescendantsByType(*m_root_sp, eSectionTypeNVGPUWarp)) {
-    llvm::Expected<nvgpu_core::WarpEntry> warp_or =
-        nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp, core);
-    if (!warp_or) {
-      LLDB_LOG(log, "ProcessNVGPUCore: skipping warp at {0}: {1}",
-               warp->GetName(), llvm::toString(warp_or.takeError()));
-      continue;
-    }
+  // Walking SMs (rather than warps directly) keeps track of which SMs
+  // contributed no threads at all, so a fault recorded only at SM level can
+  // still be surfaced below. Warps are descendants of SMs, so the resulting
+  // thread order is unchanged.
+  for (const SectionSP &sm :
+       nvgpu_core::FindDescendantsByType(*m_root_sp, eSectionTypeNVGPUSm)) {
+    const uint32_t tid_before_sm = tid;
 
-    for (const SectionSP &lane :
-         nvgpu_core::FindChildrenByType(*warp, eSectionTypeNVGPULane)) {
-      const uint32_t lane_idx = nvgpu::DecodeHwIdx(lane->GetID());
-      if (!warp_or->IsLaneValid(lane_idx))
+    for (const SectionSP &warp :
+         nvgpu_core::FindDescendantsByType(*sm, eSectionTypeNVGPUWarp)) {
+      llvm::Expected<nvgpu_core::WarpEntry> warp_or =
+          nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp, core);
+      if (!warp_or) {
+        LLDB_LOG(log, "ProcessNVGPUCore: skipping warp at {0}: {1}",
+                 warp->GetName(), llvm::toString(warp_or.takeError()));
         continue;
-      ++tid;
-      auto thread_sp =
-          std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
-      new_thread_list.AddThread(thread_sp);
+      }
 
-      // Remember the first thread of each stop kind so an interesting
-      // thread is auto-selected: prefer an exception, fall back to a trap.
-      if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
-          thread_sp->GetAttributedException() != 0) {
-        m_exception_tid = tid;
-      } else if (m_stop_tid == LLDB_INVALID_THREAD_ID &&
-                 thread_sp->IsAtTrap()) {
-        m_stop_tid = tid;
+      for (const SectionSP &lane :
+           nvgpu_core::FindChildrenByType(*warp, eSectionTypeNVGPULane)) {
+        const uint32_t lane_idx = nvgpu::DecodeHwIdx(lane->GetID());
+        if (!warp_or->IsLaneValid(lane_idx))
+          continue;
+        ++tid;
+        auto thread_sp =
+            std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
+        new_thread_list.AddThread(thread_sp);
+
+        // Remember the first thread of each stop kind so an interesting
+        // thread is auto-selected: prefer an exception, fall back to a trap.
+        if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
+            thread_sp->GetAttributedException() != 0) {
+          m_exception_tid = tid;
+        } else if (m_stop_tid == LLDB_INVALID_THREAD_ID &&
+                   thread_sp->IsAtTrap()) {
+          m_stop_tid = tid;
+        }
       }
     }
+
+    if (tid != tid_before_sm)
+      continue;
+
+    // No lane on this SM survived to the dump. If the SM row nonetheless
+    // records a fault -- a kernel that faulted but ran to completion before
+    // the coredump was written -- the exception has no lane to be attributed
+    // to and would otherwise be invisible, so stand in for it with a thread
+    // carrying the SM's error PC as its only frame.
+    llvm::Expected<nvgpu_core::SMEntry> sm_or =
+        nvgpu_core::ReadAndDecode<nvgpu_core::SMEntry>(sm, core);
+    if (!sm_or) {
+      LLDB_LOG(log, "ProcessNVGPUCore: skipping SM at {0}: {1}", sm->GetName(),
+               llvm::toString(sm_or.takeError()));
+      continue;
+    }
+    if (sm_or->exception == 0)
+      continue;
+
+    ++tid;
+    new_thread_list.AddThread(
+        std::make_shared<ThreadNVGPUCore>(*this, tid, sm, *sm_or));
+    ++sm_exception_threads;
+    if (m_sm_exception_tid == LLDB_INVALID_THREAD_ID)
+      m_sm_exception_tid = tid;
   }
 
-  LLDB_LOG(log, "ProcessNVGPUCore: created {0} threads", tid);
+  LLDB_LOG(log,
+           "ProcessNVGPUCore: created {0} threads ({1} standing in for "
+           "SM-level exceptions with no surviving lane)",
+           tid, sm_exception_threads);
   return tid > 0;
 }
 

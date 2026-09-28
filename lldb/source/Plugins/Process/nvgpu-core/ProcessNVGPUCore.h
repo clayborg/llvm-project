@@ -14,7 +14,8 @@
 /// `ObjectFileELF::CreateSections` builds for NVGPU corefiles
 /// (`nvgpucore` root -> `dev0` -> `sm0` -> `cta0` -> `warp0` -> `lane0` ->
 /// per-lane leaves, plus a sibling `dev0` -> `grid0` branch) and creates one
-/// `ThreadNVGPUCore` per active GPU lane.
+/// `ThreadNVGPUCore` per active GPU lane, plus one per faulted SM whose lanes
+/// had all exited before the dump was written.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -57,16 +58,28 @@ public:
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
   void RefreshStateAfterStop() override {
-    // Prefer an exception thread, then a trap thread; otherwise fall
-    // back to the first thread we created.
-    if (m_exception_tid != LLDB_INVALID_THREAD_ID)
-      GetThreadList().SetSelectedThreadByID(m_exception_tid);
-    else if (m_stop_tid != LLDB_INVALID_THREAD_ID)
-      GetThreadList().SetSelectedThreadByID(m_stop_tid);
-    else {
-      if (lldb::ThreadSP first = GetThreadList().GetThreadAtIndex(0))
-        GetThreadList().SetSelectedThreadByID(first->GetID());
+    // Building the thread list is what classifies each thread's stop reason
+    // (`DoUpdateThreadList`), so force it before consulting the candidates
+    // below. On the initial stop the list is still empty, and leaving the
+    // candidates unset hands the choice to `ProcessEventData::DoOnRemoval`,
+    // which keeps whichever thread is already selected as long as it has any
+    // stop reason at all.
+    UpdateThreadListIfNeeded();
+
+    // Prefer a lane that faulted, then a fault recorded only at SM level,
+    // then a trap; otherwise fall back to the first thread we created. The
+    // SM-level fault ranks below a lane-level one because it carries strictly
+    // less information (an error PC but no thread coordinates or registers),
+    // matching cuda-gdb, which only consults SM exception state after finding
+    // no lane exception (`cuda-exceptions.c`).
+    for (lldb::tid_t tid : {m_exception_tid, m_sm_exception_tid, m_stop_tid}) {
+      if (tid != LLDB_INVALID_THREAD_ID) {
+        GetThreadList().SetSelectedThreadByID(tid);
+        return;
+      }
     }
+    if (lldb::ThreadSP first = GetThreadList().GetThreadAtIndex(0))
+      GetThreadList().SetSelectedThreadByID(first->GetID());
   }
 
   lldb_private::Status WillResume() override {
@@ -125,8 +138,11 @@ private:
   /// Driver/toolkit version that produced this coredump (from the metadata
   /// section), or std::nullopt if the coredump has no decodable metadata.
   std::optional<lldb_private::nvgpu_core::ProducerInfo> m_producer;
-  /// First thread with an attributed CUDA exception.
+  /// First lane-backed thread with an attributed CUDA exception.
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
+  /// First thread standing in for an SM-level exception with no surviving
+  /// lane (see `ThreadNVGPUCore`).
+  lldb::tid_t m_sm_exception_tid = LLDB_INVALID_THREAD_ID;
   /// First thread stopped on an inline `trap;` / `__trap()`.
   lldb::tid_t m_stop_tid = LLDB_INVALID_THREAD_ID;
 };
