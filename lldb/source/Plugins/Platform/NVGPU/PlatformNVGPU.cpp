@@ -682,6 +682,11 @@ struct GroupKey {
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
   uint64_t stop_value = 0;
+  /// False for a thread that has no block/thread coordinates: an SM-level
+  /// fault whose warps had all exited before the dump (see
+  /// `ThreadNVGPUCore`). Part of the identity so such a thread never shares
+  /// a row with coordinate-bearing threads that faulted at the same place.
+  bool has_coord = true;
 
   bool operator==(const GroupKey &other) const {
     if (kind != other.kind)
@@ -692,6 +697,8 @@ struct GroupKey {
         kind == GroupKind::Tombstone)
       return true;
     if (stop_reason != other.stop_reason || stop_value != other.stop_value)
+      return false;
+    if (has_coord != other.has_coord)
       return false;
     switch (kind) {
     case GroupKind::LineAndFunction:
@@ -714,17 +721,18 @@ struct GroupKeyHash {
   size_t operator()(const GroupKey &k) const {
     switch (k.kind) {
     case GroupKind::LineAndFunction:
-      return llvm::hash_combine(static_cast<int>(k.kind),
-                                llvm::StringRef(k.file), k.line,
-                                llvm::StringRef(k.function),
-                                static_cast<int>(k.stop_reason), k.stop_value);
+      return llvm::hash_combine(
+          static_cast<int>(k.kind), llvm::StringRef(k.file), k.line,
+          llvm::StringRef(k.function), static_cast<int>(k.stop_reason),
+          k.stop_value, k.has_coord);
     case GroupKind::FunctionOnly:
-      return llvm::hash_combine(static_cast<int>(k.kind),
-                                llvm::StringRef(k.function),
-                                static_cast<int>(k.stop_reason), k.stop_value);
+      return llvm::hash_combine(
+          static_cast<int>(k.kind), llvm::StringRef(k.function),
+          static_cast<int>(k.stop_reason), k.stop_value, k.has_coord);
     case GroupKind::PCOnly:
       return llvm::hash_combine(static_cast<int>(k.kind), k.pc,
-                                static_cast<int>(k.stop_reason), k.stop_value);
+                                static_cast<int>(k.stop_reason), k.stop_value,
+                                k.has_coord);
     case GroupKind::FilteredOut:
     case GroupKind::Empty:
     case GroupKind::Tombstone:
@@ -808,6 +816,9 @@ static void FormatDim3Set(Stream &strm, const char *prefix, const DimSet &x,
 struct ThreadSnapshot {
   ThreadSP thread_sp;
   CUDAThreadCoord coord;
+  /// False when the thread's name carries no block/thread coordinates, in
+  /// which case only `coord.tid` is meaningful. See `GroupKey::has_coord`.
+  bool has_coord = true;
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   /// Per-warp errorPC reported by the NVIDIA debugger backend, or
   /// LLDB_INVALID_ADDRESS when no valid errorPC is available. The backend
@@ -826,6 +837,11 @@ struct ThreadSnapshot {
 static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
                                         const ThreadSnapshot &snap) {
   group.coords.push_back(snap.coord);
+  // A coordinate-less thread still counts towards the row's thread total, but
+  // contributes no dimension values: feeding its zeroed coord into the
+  // DimSets would render as block/thread 0 instead of "no coordinates".
+  if (!snap.has_coord)
+    return;
   group.bx.Insert(snap.coord.block_idx.x);
   group.by.Insert(snap.coord.block_idx.y);
   group.bz.Insert(snap.coord.block_idx.z);
@@ -834,9 +850,12 @@ static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
   group.tz.Insert(snap.coord.thread_idx.z);
 }
 
-/// Collect per-thread snapshots needed to build groups. Threads without CUDA
-/// coordinates, register contexts, or PCs are dropped here so neither group
-/// builder has to special-case them. List-time filters such as
+/// Collect per-thread snapshots needed to build groups. Threads without a
+/// register context or PC are dropped here so neither group builder has to
+/// special-case them. A thread whose name carries no CUDA coordinates is
+/// kept with `has_coord == false` -- an SM-level fault with no surviving
+/// lane is precisely the thread a user must not miss, so it gets a row
+/// labelled by name instead of by coordinates. List-time filters such as
 /// --exceptions are applied later in the group-building phase by routing
 /// non-matching threads to a synthetic FilteredOut group.
 static llvm::SmallVector<ThreadSnapshot, 64>
@@ -877,12 +896,11 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
       continue;
 
     const char *name = thread_sp->GetName();
-    if (!name)
+    if (!name || !name[0])
       continue;
 
     CUDAThreadCoord coord;
-    if (!ParseCUDAThreadName(name, coord))
-      continue;
+    const bool has_coord = ParseCUDAThreadName(name, coord);
     coord.tid = thread_sp->GetID();
 
     RegisterContextSP reg_ctx_sp = thread_sp->GetRegisterContext();
@@ -899,6 +917,7 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
     ThreadSnapshot snap;
     snap.thread_sp = thread_sp;
     snap.coord = coord;
+    snap.has_coord = has_coord;
     snap.pc = pc;
     if (*err_pc_info) {
       RegisterValue val;
@@ -996,6 +1015,7 @@ BuildGroupKey(const ThreadSnapshot &snap, const ResolvedLocation &loc,
 
   key.stop_reason = snap.stop_reason;
   key.stop_value = snap.stop_value;
+  key.has_coord = snap.has_coord;
 
   ConstString fn = loc.sc.GetFunctionName(Mangled::ePreferDemangled);
   llvm::StringRef fn_ref = fn.GetStringRef();
@@ -1039,9 +1059,21 @@ static void RenderAggregatedGroup(Stream &strm,
   }
   strm.PutCString(": ");
 
-  FormatDim3Set(strm, "blockIdx", group.bx, group.by, group.bz);
-  strm.PutChar(' ');
-  FormatDim3Set(strm, "threadIdx", group.tx, group.ty, group.tz);
+  if (group.key.has_coord) {
+    FormatDim3Set(strm, "blockIdx", group.bx, group.by, group.bz);
+    strm.PutChar(' ');
+    FormatDim3Set(strm, "threadIdx", group.tx, group.ty, group.tz);
+  } else {
+    // No coordinates exist for these threads. Rendering wildcard DimSets
+    // would print `blockIdx(x=* y=* z=*)`, which reads as "every block"
+    // rather than "no block", so label the row instead: by the thread's own
+    // name when it is alone, which is how `thread list -v` identifies it,
+    // and generically once several SMs have collapsed onto one location.
+    const char *name = group.coords.size() == 1
+                           ? group.representative_thread->GetName()
+                           : nullptr;
+    strm.PutCString(name ? name : "no kernel context");
+  }
 
   if (group.key.kind == GroupKind::FilteredOut) {
     strm.PutCString(", hidden by --stop-reason filter");

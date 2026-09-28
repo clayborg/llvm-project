@@ -68,6 +68,19 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
     return;
 
   SectionSP lane_sp = gpu_thread.GetLaneSection();
+
+  // The SM-exception stand-in has no lane, so the SM's error PC is the only
+  // register state the corefile holds for it. Report it as the frame PC as
+  // well, so the fault site symbolicates against the loaded cubins. Every
+  // other register stays unreadable rather than reading back as a zero that
+  // callers could mistake for the lane's real value.
+  if (!lane_sp) {
+    m_register_data.PC = gpu_thread.GetErrorPC().value_or(0);
+    m_register_data.errorPC = m_register_data.PC;
+    m_pc_only = true;
+    return;
+  }
+
   SectionSP warp_sp = gpu_thread.GetWarpSection();
   SectionSP dev_sp = gpu_thread.GetDeviceSection();
   SectionSP cta_sp = gpu_thread.GetCTASection();
@@ -97,15 +110,6 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
     if (!cta_or)
       LLDB_LOG(log, "RegisterContextNVGPUCore: cta decode failed: {0}",
                llvm::toString(cta_or.takeError()));
-    return;
-  }
-
-  llvm::Expected<nvgpu_core::GridEntry> grid_or =
-      FindThreadGrid(dev_sp, cta_or->gridId64, core);
-
-  if (!grid_or) {
-    LLDB_LOG(log, "RegisterContextNVGPUCore: grid lookup failed: {0}",
-             llvm::toString(grid_or.takeError()));
     return;
   }
 
@@ -147,12 +151,27 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
              m_register_data.thread_idx);
   llvm::copy(llvm::ArrayRef(&cta_or->blockIdxX, sass::kNumXYZComponents),
              m_register_data.block_idx);
+  // cudacoredump.h reports warp size as uint32_t instead of int32_t
+  m_register_data.warp_size = dev_or->numLanesPerWarp;
+
+  // The launch dimensions are the only registers that come from the grid row,
+  // so resolve it last: a corefile can be missing its grid table (a dump
+  // truncated before it was written) or carry a CTA whose `gridId64` matches
+  // no grid row, and that must cost the caller only blockDim / gridDim.
+  // Giving up any earlier would also discard the lane's PC, and with it any
+  // chance of symbolicating the fault site.
+  llvm::Expected<nvgpu_core::GridEntry> grid_or =
+      FindThreadGrid(dev_sp, cta_or->gridId64, core);
+  if (!grid_or) {
+    LLDB_LOG(log, "RegisterContextNVGPUCore: grid lookup failed: {0}",
+             llvm::toString(grid_or.takeError()));
+    return;
+  }
+
   llvm::copy(llvm::ArrayRef(&grid_or->blockDimX, sass::kNumXYZComponents),
              m_register_data.block_dim);
   llvm::copy(llvm::ArrayRef(&grid_or->gridDimX, sass::kNumXYZComponents),
              m_register_data.grid_dim);
-  // cudacoredump.h reports warp size as uint32_t instead of int32_t
-  m_register_data.warp_size = dev_or->numLanesPerWarp;
 }
 
 RegisterContextNVGPUCore::~RegisterContextNVGPUCore() = default;
@@ -195,6 +214,15 @@ bool RegisterContextNVGPUCore::ReadRegister(const RegisterInfo *reg_info,
       reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_PC)
     return false;
 
+  // The SM-exception stand-in knows only where the fault happened. Refuse
+  // every other register instead of handing back the zero it would read out
+  // of the unfilled buffer, so a register-backed expression fails loudly
+  // rather than quietly computing on a value the corefile never recorded.
+  if (m_pc_only &&
+      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_PC &&
+      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_ERROR_PC)
+    return false;
+
   // Every RegisterInfo from `sass::GetRegisterInfos()` has its `byte_offset`
   // computed against `sass::ThreadRegisters` -- which is exactly the layout
   // of `m_register_data`. So a register read is a `byte_offset + byte_size`
@@ -218,7 +246,10 @@ bool RegisterContextNVGPUCore::WriteRegister(const RegisterInfo *reg_info,
 bool RegisterContextNVGPUCore::ReadAllRegisterValues(
     WritableDataBufferSP &data_sp) {
   // Caller frames only have a valid PC, so don't snapshot stale frame 0 values.
-  if (!BehavesLikeZerothFrame())
+  // The SM-exception stand-in has no lane state to snapshot at all, and
+  // handing out a buffer of zeros here would route around the per-register
+  // refusal above.
+  if (!BehavesLikeZerothFrame() || m_pc_only)
     return false;
 
   // The canonical layout IS our internal representation, so the snapshot is
