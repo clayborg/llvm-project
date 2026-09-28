@@ -18,6 +18,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     CUDBG_SHT_CTA_TABLE,
     CUDBG_SHT_DEV_REGS,
     CUDBG_SHT_GLOBAL_MEM,
+    cudbg_exception,
     SM_ROW_SIZE,
     CTA_ROW_SIZE,
 )
@@ -26,6 +27,10 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
 # BuildNVGPUSectionList installs no nvgpucore root, so DoLoadCore bails.
 NO_ROOT_ERROR = "did not produce a nvgpucore root section"
 
+# Any real fault will do for these scaffolds; take the code from the SDK
+# header rather than writing the number down.
+WARP_ILLEGAL_INSTRUCTION = cudbg_exception("WARP_ILLEGAL_INSTRUCTION")
+
 
 class TestNVGPUArtificialMalformed(NVGPUCoreTestBase):
     NO_DEBUG_INFO_TESTCASE = True
@@ -33,7 +38,9 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestBase):
     def _minimal(self, b):
         """Valid one-thread scaffold; tests bolt malformed sections onto it."""
         dev = b.add_device(num_regs_per_lane=32)
-        sm = b.add_sm(dev, exception=4, error_pc=0x100000)
+        sm = b.add_sm(
+            dev, exception=WARP_ILLEGAL_INSTRUCTION, error_pc=0x100000
+        )
         cta = b.add_cta(sm, block_idx=(0, 0, 0))
         warp = b.add_warp(
             cta, valid_lanes_mask=1, active_lanes_mask=1, error_pc=0x100000
@@ -177,12 +184,65 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestBase):
             substrs=["core file does not contain"],
         )
 
+    def test_missing_grid_row_keeps_lane_registers(self):
+        """A CTA whose gridId64 matches no grid row costs only the two
+        grid-derived registers. Everything the lane, warp, CTA and device rows
+        supply survives -- in particular the PC, without which the fault site
+        could not be symbolicated."""
+        b = NVGPUCoreBuilder()
+        dev = b.add_device(num_regs_per_lane=4)
+        sm = b.add_sm(
+            dev, exception=WARP_ILLEGAL_INSTRUCTION, error_pc=0x100040
+        )
+        # No grid table is emitted at all, so this gridId64 resolves to nothing.
+        cta = b.add_cta(sm, grid_id=7, block_idx=(3, 0, 0))
+        warp = b.add_warp(
+            cta, valid_lanes_mask=1, active_lanes_mask=1, error_pc=0x100040
+        )
+        lane = b.add_lane(warp, lane_id=0, thread_idx=(2, 0, 0), pc=0x100000)
+        b.set_lane_registers(lane, [0xAA00, 0xAA01, 0xAA02, 0xAA03])
+
+        _, gpu_process = self.generate_and_load_artificial_core(
+            b, name="nogridrow.nvcudmp"
+        )
+        thread = gpu_process.GetThreadAtIndex(0)
+        frame = thread.GetFrameAtIndex(0)
+
+        def reg(name):
+            value = frame.FindRegister(name)
+            self.assertTrue(value.IsValid(), f"{name} should be readable")
+            return value.GetValueAsUnsigned()
+
+        self.assertEqual(reg("PC"), 0x100000)
+        self.assertEqual(reg("errorPC"), 0x100040)
+        self.assertEqual(
+            [reg(f"R{i}") for i in range(4)],
+            [0xAA00, 0xAA01, 0xAA02, 0xAA03],
+        )
+        self.assertEqual(reg("warpSize"), 32)
+        self.assertEqual(
+            thread.GetName(),
+            "blockIdx(x=3 y=0 z=0) threadIdx(x=2 y=0 z=0)",
+        )
+
+        # The launch dimensions are the one thing the grid row would have
+        # supplied, so they alone read back as zero.
+        self.expect(
+            "register read blockDim gridDim",
+            substrs=[
+                "blockDim = {0x00000000 0x00000000 0x00000000}",
+                "gridDim = {0x00000000 0x00000000 0x00000000}",
+            ],
+        )
+
     def test_sparse_lanes_materialize_by_leaf(self):
         """Only lanes with a per-lane leaf become threads, even when the warp
         marks many lanes valid."""
         b = NVGPUCoreBuilder()
         dev = b.add_device(num_regs_per_lane=32)
-        sm = b.add_sm(dev, exception=4, error_pc=0x100000)
+        sm = b.add_sm(
+            dev, exception=WARP_ILLEGAL_INSTRUCTION, error_pc=0x100000
+        )
         cta = b.add_cta(sm, block_idx=(1, 0, 0))
         # Lanes 0..7 marked valid/active, but only lane 7 gets a regs leaf.
         warp = b.add_warp(
