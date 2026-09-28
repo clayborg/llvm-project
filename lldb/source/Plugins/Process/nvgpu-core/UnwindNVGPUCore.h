@@ -17,9 +17,10 @@ namespace lldb_private {
 
 class UnwindLLDB;
 
-/// Unwind for NVGPU corefile threads. Uses the driver's per-lane backtrace
-/// table when local memory is absent; otherwise delegates to DWARF-CFI via
-/// `UnwindLLDB`.
+/// Unwind for NVGPU corefile threads. Walks a precomputed list of frame PCs
+/// -- the driver's per-lane backtrace table when local memory is absent, or
+/// the SM's error PC alone for the lane-less SM-exception thread -- and
+/// otherwise delegates to DWARF-CFI via `UnwindLLDB`.
 class UnwindNVGPUCore : public Unwind {
 public:
   UnwindNVGPUCore(Thread &thread);
@@ -41,8 +42,9 @@ private:
   void EnsureInitialized();
 
   std::unique_ptr<UnwindLLDB> m_dwarf_unwinder_up;
-  llvm::SmallVector<lldb::addr_t, 8> m_table_pcs;
-  bool m_use_backtrace_table = false;
+  /// Frame PCs for the PC-only synthetic unwind, frame 0 first.
+  llvm::SmallVector<lldb::addr_t, 8> m_synthetic_pcs;
+  bool m_use_synthetic_pcs = false;
   bool m_initialized = false;
 
   UnwindNVGPUCore(const UnwindNVGPUCore &) = delete;

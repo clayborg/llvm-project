@@ -33,65 +33,317 @@ The section tree, wired up via ``sh_link`` / ``sh_info``::
 """
 
 import binascii
+import functools
+import os
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
-# CUDA debugger section types (SHT_LOUSER + n). Written numerically in YAML.
-SHT_LOUSER            = 0x80000000
-CUDBG_SHT_MANAGED_MEM = SHT_LOUSER + 1
-CUDBG_SHT_GLOBAL_MEM  = SHT_LOUSER + 2
-CUDBG_SHT_LOCAL_MEM   = SHT_LOUSER + 3
-CUDBG_SHT_SHARED_MEM  = SHT_LOUSER + 4
-CUDBG_SHT_DEV_REGS    = SHT_LOUSER + 5
-CUDBG_SHT_ELF_IMG     = SHT_LOUSER + 6
-CUDBG_SHT_RELF_IMG    = SHT_LOUSER + 7
-CUDBG_SHT_BT          = SHT_LOUSER + 8
-CUDBG_SHT_DEV_TABLE   = SHT_LOUSER + 9
-CUDBG_SHT_CTX_TABLE   = SHT_LOUSER + 10
-CUDBG_SHT_SM_TABLE    = SHT_LOUSER + 11
-CUDBG_SHT_GRID_TABLE  = SHT_LOUSER + 12
-CUDBG_SHT_CTA_TABLE   = SHT_LOUSER + 13
-CUDBG_SHT_WP_TABLE    = SHT_LOUSER + 14
-CUDBG_SHT_LN_TABLE    = SHT_LOUSER + 15
-CUDBG_SHT_MOD_TABLE   = SHT_LOUSER + 16
-CUDBG_SHT_DEV_PRED    = SHT_LOUSER + 17
-CUDBG_SHT_PARAM_MEM   = SHT_LOUSER + 18
-CUDBG_SHT_DEV_UREGS   = SHT_LOUSER + 19
-CUDBG_SHT_DEV_UPRED   = SHT_LOUSER + 20
-CUDBG_SHT_CB_TABLE    = SHT_LOUSER + 21
-CUDBG_SHT_META_DATA   = SHT_LOUSER + 22
-CUDBG_SHT_CBU_BAR     = SHT_LOUSER + 23
+import lldbsuite
+
+# CUDA debugger API headers vendored at lldb/third-party/cuda. Every value the
+# SDK owns -- section types, row layouts, field offsets, enumerators, the
+# version stamp -- is read out of them below rather than written down here, so
+# a header update cannot leave the generated cores describing a format the
+# reader no longer expects.
+#
+# A build can compile against a different copy of these headers via
+# NVGPU_DEBUGGER_INCLUDE_DIR, which the test suite has no way to learn. That is
+# safe in practice: these values are stable across in-major revisions, and a
+# test that writes one into a core file also asserts what LLDB makes of it, so
+# an SDK that disagreed would fail an assertion rather than pass quietly.
+_CUDA_HEADER_DIR = os.path.join(lldbsuite.lldb_root, "third-party", "cuda")
+CUDADEBUGGER_H = os.path.join(_CUDA_HEADER_DIR, "cudadebugger.h")
+CUDACOREDUMP_H = os.path.join(_CUDA_HEADER_DIR, "cudacoredump.h")
+
+
+@functools.lru_cache(maxsize=None)
+def _header_text(path):
+    """Header contents with comments removed, so the scans below cannot trip
+    over prose or commented-out declarations."""
+    with open(path) as header:
+        text = header.read()
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _cudbg_constant(table, key, source):
+    """Look ``key`` up in something parsed out of a header, naming the
+    alternatives on a miss so a typo points at the real spelling."""
+    if key not in table:
+        raise KeyError(
+            f"{key} is not defined in {source}; known: "
+            f"{', '.join(sorted(table))}"
+        )
+    return table[key]
+
+
+def _header_define(path, name):
+    """Value of an object-like #define holding an integer literal."""
+    define = re.search(
+        r"^\s*#\s*define\s+%s\s+(0[xX][0-9a-fA-F]+|\d+)" % re.escape(name),
+        _header_text(path),
+        re.M,
+    )
+    if define is None:
+        raise AssertionError(f"no #define {name} found in {path}")
+    return int(define.group(1), 0)
+
+
+def _enumerator_value(expr, path):
+    """Evaluate the initializer of an enumerator.
+
+    Covers the two forms these headers use: an integer literal with optional
+    width suffix, and an offset from a #define such as ``SHT_LOUSER + 11``.
+    """
+    literal = re.fullmatch(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*", expr)
+    if literal:
+        return int(literal.group(1), 0)
+    offset_from_define = re.fullmatch(r"(\w+)\s*\+\s*(\d+)", expr)
+    if offset_from_define:
+        return _header_define(path, offset_from_define.group(1)) + int(
+            offset_from_define.group(2)
+        )
+    raise AssertionError(
+        f"cannot evaluate enumerator initializer '{expr}' from {path}"
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _cudbg_enum(path, enum_name):
+    """Map a named C enum's enumerators to their values.
+
+    Enumerators without an initializer continue from the previous one, as C
+    defines them, so enums that spell out only some values still resolve.
+    """
+    body = re.search(
+        r"typedef enum\s*\{([^{}]*)\}\s*%s\s*;" % re.escape(enum_name),
+        _header_text(path),
+        re.S,
+    )
+    if body is None:
+        raise AssertionError(f"no {enum_name} enum found in {path}")
+    values = {}
+    next_value = 0
+    for enumerator in body.group(1).split(","):
+        name, _, initializer = (part.strip() for part in
+                                enumerator.strip().partition("="))
+        if not name:
+            continue
+        if initializer:
+            next_value = _enumerator_value(initializer, path)
+        values[name] = next_value
+        next_value += 1
+    return values
+
+
+def cudbg_faults():
+    """Names of every CUDBGException_t value that is a real fault.
+
+    Excludes the enumerators that describe the absence of one: no-exception,
+    the reserved holes left by codes the SDK retired, and the catch-all. Lets
+    a test cover whatever faults the SDK defines instead of a numeric range
+    that silently stops short as codes are added.
+    """
+    prefix = "CUDBG_EXCEPTION_"
+    names = (
+        name.removeprefix(prefix)
+        for name in _cudbg_enum(CUDADEBUGGER_H, "CUDBGException_t")
+    )
+    return sorted(
+        name
+        for name in names
+        if name not in ("NONE", "UNKNOWN")
+        and not name.startswith("RESERVED_")
+    )
+
+
+def cudbg_exception(name):
+    """Value of CUDBG_EXCEPTION_<name> from the vendored cudadebugger.h.
+
+    ``name`` is the enumerator without the CUDBG_EXCEPTION_ prefix, e.g.
+    ``cudbg_exception("WARP_ILLEGAL_INSTRUCTION")``.
+    """
+    return _cudbg_constant(
+        _cudbg_enum(CUDADEBUGGER_H, "CUDBGException_t"),
+        "CUDBG_EXCEPTION_" + name,
+        CUDADEBUGGER_H,
+    )
+
+
+# Scalar field widths the Cudbg*TableEntry structs are built from, and the
+# struct-module code that writes each width little-endian. A field of any
+# other kind invalidates the layout computation below, which raises rather
+# than guess.
+_SCALAR_WIDTHS = {"uint64_t": 8, "uint32_t": 4, "uint16_t": 2, "uint8_t": 1}
+_WIDTH_CODES = {8: "<Q", 4: "<I", 2: "<H", 1: "<B"}
+
+
+@functools.lru_cache(maxsize=None)
+def cudbg_struct_layout(struct_name):
+    """C layout of a Cudbg*TableEntry, read from cudacoredump.h.
+
+    Returns ``(fields, size)`` where ``fields`` maps each field name to its
+    ``(offset, width)``. The structs are flat runs of fixed-width scalars with
+    explicit padding fields, so the layout follows from the declaration order
+    alone: each field sits at the next offset aligned to its own width, and
+    the total rounds up to the widest field. That reproduces sizeof exactly
+    for every struct this module emits.
+    """
+    body = re.search(
+        r"typedef struct\s*\{([^{}]*)\}\s*%s\s*;" % re.escape(struct_name),
+        _header_text(CUDACOREDUMP_H),
+        re.S,
+    )
+    if body is None:
+        raise AssertionError(
+            f"no {struct_name} struct found in {CUDACOREDUMP_H}"
+        )
+    fields = {}
+    offset = 0
+    alignment = 1
+    for field_type, field_name, array in re.findall(
+        r"(\w+)\s+(\w+)\s*(\[[^\]]*\])?\s*;", body.group(1)
+    ):
+        width = _SCALAR_WIDTHS.get(field_type)
+        if width is None or array:
+            raise AssertionError(
+                f"{struct_name}.{field_name} is a '{field_type}{array}', "
+                "which cudbg_struct_layout cannot lay out; teach it that "
+                "field kind before relying on this layout"
+            )
+        offset = (offset + width - 1) // width * width
+        fields[field_name] = (offset, width)
+        offset += width
+        alignment = max(alignment, width)
+    return fields, (offset + alignment - 1) // alignment * alignment
+
+
+def cudbg_row_size(struct_name):
+    """sizeof(struct_name), i.e. the row stride of the table that holds it.
+
+    Deriving this rather than hardcoding it keeps generated cores using the
+    same stride as a real dump. A stale stride does not fail a test -- the
+    reader bounds each row decode by the section's own EntSize -- so a struct
+    that grew a field would otherwise leave the synthetic cores quietly
+    unrepresentative.
+    """
+    return cudbg_struct_layout(struct_name)[1]
+
+
+def _cudbg_field(struct_name, field_name):
+    """The ``(offset, width)`` of one field, or KeyError naming the choices."""
+    fields, _ = cudbg_struct_layout(struct_name)
+    return _cudbg_constant(fields, field_name, struct_name)
+
+
+def cudbg_field_offset(struct_name, field_name):
+    """Byte offset of one field within its Cudbg*TableEntry."""
+    return _cudbg_field(struct_name, field_name)[0]
+
+
+def pack_row(struct_name, **values):
+    """Pack one Cudbg*TableEntry from named fields, zeroing the rest.
+
+    Each value lands at the offset the header gives its field, so a struct
+    that reorders or grows cannot silently shift a value into a neighbouring
+    slot the way a positional format string would, and fields a test does not
+    care about need not be spelled out at all.
+    """
+    row = bytearray(cudbg_row_size(struct_name))
+    for field_name, value in values.items():
+        offset, width = _cudbg_field(struct_name, field_name)
+        struct.pack_into(_WIDTH_CODES[width], row, offset, value)
+    return bytes(row)
+
+
+# CUDA coredump section types, read from the header's CudbgSectionHeaderTypes.
+# Written numerically in YAML because yaml2obj has no names for them.
+_SECTION_TYPES = _cudbg_enum(CUDACOREDUMP_H, "CudbgSectionHeaderTypes")
+
+
+def cudbg_section_type(name):
+    """Value of CUDBG_SHT_<name> from the vendored cudacoredump.h."""
+    return _cudbg_constant(
+        _SECTION_TYPES, "CUDBG_SHT_" + name, CUDACOREDUMP_H
+    )
+
+
+CUDBG_SHT_MANAGED_MEM = cudbg_section_type("MANAGED_MEM")
+CUDBG_SHT_GLOBAL_MEM  = cudbg_section_type("GLOBAL_MEM")
+CUDBG_SHT_LOCAL_MEM   = cudbg_section_type("LOCAL_MEM")
+CUDBG_SHT_SHARED_MEM  = cudbg_section_type("SHARED_MEM")
+CUDBG_SHT_DEV_REGS    = cudbg_section_type("DEV_REGS")
+CUDBG_SHT_ELF_IMG     = cudbg_section_type("ELF_IMG")
+CUDBG_SHT_RELF_IMG    = cudbg_section_type("RELF_IMG")
+CUDBG_SHT_BT          = cudbg_section_type("BT")
+CUDBG_SHT_DEV_TABLE   = cudbg_section_type("DEV_TABLE")
+CUDBG_SHT_CTX_TABLE   = cudbg_section_type("CTX_TABLE")
+CUDBG_SHT_SM_TABLE    = cudbg_section_type("SM_TABLE")
+CUDBG_SHT_GRID_TABLE  = cudbg_section_type("GRID_TABLE")
+CUDBG_SHT_CTA_TABLE   = cudbg_section_type("CTA_TABLE")
+CUDBG_SHT_WP_TABLE    = cudbg_section_type("WP_TABLE")
+CUDBG_SHT_LN_TABLE    = cudbg_section_type("LN_TABLE")
+CUDBG_SHT_MOD_TABLE   = cudbg_section_type("MOD_TABLE")
+CUDBG_SHT_DEV_PRED    = cudbg_section_type("DEV_PRED")
+CUDBG_SHT_PARAM_MEM   = cudbg_section_type("PARAM_MEM")
+CUDBG_SHT_DEV_UREGS   = cudbg_section_type("DEV_UREGS")
+CUDBG_SHT_DEV_UPRED   = cudbg_section_type("DEV_UPRED")
+CUDBG_SHT_CB_TABLE    = cudbg_section_type("CB_TABLE")
+CUDBG_SHT_META_DATA   = cudbg_section_type("META_DATA")
+CUDBG_SHT_CBU_BAR     = cudbg_section_type("CBU_BAR")
 
 # Row sizes (bytes), one per Cudbg*TableEntry; also the section EntSize (row
 # stride). Full entries are emitted so the cores read identically across tools.
-DEVICE_ROW_SIZE    = 84
-SM_ROW_SIZE        = 48
-CTA_ROW_SIZE       = 52
-WARP_ROW_SIZE      = 80
-LANE_ROW_SIZE      = 64
-CONSTBANK_ROW_SIZE = 16
-GRID_ROW_SIZE      = 136
-CONTEXT_ROW_SIZE   = 40
-MODULE_ROW_SIZE    = 8
-BT_ROW_SIZE        = 24
-META_ROW_SIZE      = 24
+# Derived from the vendored header rather than hardcoded, so a struct that
+# grows a field cannot leave these behind (see cudbg_row_size).
+DEVICE_ROW_SIZE    = cudbg_row_size("CudbgDeviceTableEntry")
+SM_ROW_SIZE        = cudbg_row_size("CudbgSmTableEntry")
+CTA_ROW_SIZE       = cudbg_row_size("CudbgCTATableEntry")
+WARP_ROW_SIZE      = cudbg_row_size("CudbgWarpTableEntry")
+LANE_ROW_SIZE      = cudbg_row_size("CudbgThreadTableEntry")
+CONSTBANK_ROW_SIZE = cudbg_row_size("CudbgConstBankTableEntry")
+GRID_ROW_SIZE      = cudbg_row_size("CudbgGridTableEntry")
+CONTEXT_ROW_SIZE   = cudbg_row_size("CudbgContextTableEntry")
+MODULE_ROW_SIZE    = cudbg_row_size("CudbgModuleTableEntry")
+BT_ROW_SIZE        = cudbg_row_size("CudbgBacktraceTableEntry")
+META_ROW_SIZE      = cudbg_row_size("CudbgMetaDataEntry")
 
-# Offset of callDepth in the serialized CudbgThreadTableEntry prefix.
-LANE_CALL_DEPTH_OFFSET = struct.calcsize("<QQIIIII")
+# Offset of callDepth within CudbgThreadTableEntry, patched into a lane row
+# after the fact when a backtrace is attached.
+LANE_CALL_DEPTH_OFFSET = cudbg_field_offset(
+    "CudbgThreadTableEntry", "callDepth"
+)
 
-# CUDBGGridStatus value for a running grid (cudadebugger.h).
-CUDBG_GRID_STATUS_ACTIVE = 2
+# CUDBGGridStatus value for a grid running on the hardware.
+CUDBG_GRID_STATUS_ACTIVE = _cudbg_constant(
+    _cudbg_enum(CUDADEBUGGER_H, "CUDBGGridStatus"),
+    "CUDBG_GRID_STATUS_ACTIVE",
+    CUDADEBUGGER_H,
+)
 
-# CUDA coredump ELF identification (cudacoredump.h): EI_OSABI and ABI version,
-# set alongside EM_CUDA + ET_CORE on a real core.
+# CUDA coredump ELF identification, set alongside EM_CUDA + ET_CORE on a real
+# core. cudacoredump.h states these in its overview prose rather than
+# declaring them, and yaml2obj wants a number for OSABI regardless, so they
+# are the one pair of SDK values this module still spells out. Neither affects
+# how the reader identifies a core -- it keys off e_type and e_machine.
 ELFOSABI_CUDA       = 0x33
 CUDA_ELF_ABIVERSION = 7
 
-# Default driver/CUDA toolkit version stamped into generated core files.
+# Version stamped into the metadata section of generated cores. The CUDA
+# version tracks the header the plugin is built against, because
+# ProcessNVGPUCore warns about a core from a different CUDA major release;
+# taking it from the header keeps generated cores from tripping that warning
+# the moment the SDK moves on. The driver branch is not checked by anything,
+# so it stays an arbitrary plausible value.
 DEFAULT_DRIVER_BRANCH = 580
-DEFAULT_CUDA_MAJOR    = 13
-DEFAULT_CUDA_MINOR    = 0
+DEFAULT_CUDA_MAJOR    = _header_define(
+    CUDADEBUGGER_H, "CUDBG_API_VERSION_MAJOR"
+)
+DEFAULT_CUDA_MINOR    = _header_define(
+    CUDADEBUGGER_H, "CUDBG_API_VERSION_MINOR"
+)
 
 
 def _hex(data):
@@ -121,13 +373,11 @@ def pack_metadata_row(
     cuda_major=DEFAULT_CUDA_MAJOR,
     cuda_minor=DEFAULT_CUDA_MINOR,
 ):
-    return struct.pack(
-        "<QIIII",
-        0,  # generatorName
-        driver_branch,
-        0,  # driverVersionMinor
-        cuda_major,
-        cuda_minor,
+    return pack_row(
+        "CudbgMetaDataEntry",
+        driverVersionMajor=driver_branch,
+        cudaDriverVersionMajor=cuda_major,
+        cudaDriverVersionMinor=cuda_minor,
     )
 
 
@@ -287,26 +537,22 @@ class NVGPUCoreBuilder:
         dev_type_off = self._intern_string(dev_type)
         sm_type_off = self._intern_string(sm_type)
         dev_id = len(self.devices)
-        row = struct.pack(
-            "<QQQ" + "I" * 15,
-            dev_name_off,  # devName (string-table index)
-            dev_type_off,  # devType (string-table index)
-            sm_type_off,  # smType (string-table index)
-            dev_id,
-            0,  # pciBusId
-            0,  # pciDevId
-            num_sms,
-            num_warps_per_sm,
-            num_lanes_per_warp,
-            num_regs_per_lane,
-            num_predicates_per_lane,
-            sm_major,
-            sm_minor,
-            instruction_size,
-            0,  # status
-            num_uniform_regs_per_warp,
-            num_uniform_predicates_per_warp,
-            0,  # numConvergenceBarriersPrWarp
+        row = pack_row(
+            "CudbgDeviceTableEntry",
+            devName=dev_name_off,  # string-table index
+            devType=dev_type_off,  # string-table index
+            smType=sm_type_off,  # string-table index
+            devId=dev_id,
+            numSMs=num_sms,
+            numWarpsPerSM=num_warps_per_sm,
+            numLanesPerWarp=num_lanes_per_warp,
+            numRegsPerLane=num_regs_per_lane,
+            numPredicatesPrLane=num_predicates_per_lane,
+            smMajor=sm_major,
+            smMinor=sm_minor,
+            instructionSize=instruction_size,
+            numUniformRegsPrWarp=num_uniform_regs_per_warp,
+            numUniformPredicatesPrWarp=num_uniform_predicates_per_warp,
         )
         # Remember the advertised register count so warp rows can default
         # numRegs to it.
@@ -315,13 +561,12 @@ class NVGPUCoreBuilder:
         return dev
 
     def add_sm(self, device, *, sm_id=0, exception=0, error_pc=None):
-        row = struct.pack(
-            "<IIIIQ",
-            sm_id,
-            0,  # padding0
-            exception,
-            0 if error_pc is None else 1,  # errorPCValid
-            0 if error_pc is None else error_pc,
+        row = pack_row(
+            "CudbgSmTableEntry",
+            smId=sm_id,
+            exception=exception,
+            errorPCValid=0 if error_pc is None else 1,
+            errorPC=0 if error_pc is None else error_pc,
         )
         sm = _SM(device, len(device.sms), row)
         device.sms.append(sm)
@@ -349,29 +594,22 @@ class NVGPUCoreBuilder:
         status = (
             CUDBG_GRID_STATUS_ACTIVE if grid_status is None else grid_status
         )
-        row = struct.pack(
-            "<QQQQQQQ" + "I" * 20,
-            grid_id,
-            context_id,
-            function,
-            function_entry,
-            module_handle,
-            0,  # reserved0
-            params_offset,
-            kernel_type,
-            0,  # origin
-            status,
-            0,  # numRegs
-            grid_dim[0],
-            grid_dim[1],
-            grid_dim[2],
-            block_dim[0],
-            block_dim[1],
-            block_dim[2],
-            0,  # attrLaunchBlocking
-            0,  # attrHostTid
-            0, 0, 0, 0,  # clusterDim + padding0
-            0, 0, 0, 0,  # preferredClusterDim + padding1
+        row = pack_row(
+            "CudbgGridTableEntry",
+            gridId64=grid_id,
+            contextId=context_id,
+            function=function,
+            functionEntry=function_entry,
+            moduleHandle=module_handle,
+            paramsOffset=params_offset,
+            kernelType=kernel_type,
+            gridStatus=status,
+            gridDimX=grid_dim[0],
+            gridDimY=grid_dim[1],
+            gridDimZ=grid_dim[2],
+            blockDimX=block_dim[0],
+            blockDimY=block_dim[1],
+            blockDimZ=block_dim[2],
         )
         grid = _Grid(len(device.grids), row)
         device.grids.append(grid)
@@ -389,14 +627,14 @@ class NVGPUCoreBuilder:
     ):
         """Add a CUDA context to a device (CudbgContextTableEntry). A grid's
         ``contextId`` and a module's owning context resolve through this row."""
-        row = struct.pack(
-            "<QQQQII",
-            context_id,
-            shared_window_base,
-            local_window_base,
-            global_window_base,
-            device.idx,
-            tid,
+        row = pack_row(
+            "CudbgContextTableEntry",
+            contextId=context_id,
+            sharedWindowBase=shared_window_base,
+            localWindowBase=local_window_base,
+            globalWindowBase=global_window_base,
+            deviceIdx=device.idx,
+            tid=tid,
         )
         ctx = _Context(device, len(device.contexts), context_id, row)
         device.contexts.append(ctx)
@@ -411,12 +649,12 @@ class NVGPUCoreBuilder:
         return mod
 
     def add_cta(self, sm, *, grid_id=1, block_idx=(0, 0, 0)):
-        row = struct.pack(
-            "<QIII",
-            grid_id,
-            block_idx[0],
-            block_idx[1],
-            block_idx[2],
+        row = pack_row(
+            "CudbgCTATableEntry",
+            gridId64=grid_id,
+            blockIdxX=block_idx[0],
+            blockIdxY=block_idx[1],
+            blockIdxZ=block_idx[2],
         )
         cta = _CTA(sm, len(sm.ctas), row)
         sm.ctas.append(cta)
@@ -435,16 +673,15 @@ class NVGPUCoreBuilder:
     ):
         if num_regs is None:
             num_regs = cta.sm.device.num_regs_per_lane
-        row = struct.pack(
-            "<QIIIIIII",
-            0 if error_pc is None else error_pc,
-            warp_id,
-            valid_lanes_mask,
-            active_lanes_mask,
-            1 if is_warp_broken else 0,
-            0 if error_pc is None else 1,  # errorPCValid
-            0,  # padding0
-            num_regs,
+        row = pack_row(
+            "CudbgWarpTableEntry",
+            errorPC=0 if error_pc is None else error_pc,
+            warpId=warp_id,
+            validLanesMask=valid_lanes_mask,
+            activeLanesMask=active_lanes_mask,
+            isWarpBroken=1 if is_warp_broken else 0,
+            errorPCValid=0 if error_pc is None else 1,
+            numRegs=num_regs,
         )
         warp = _Warp(cta, len(cta.warps), row)
         cta.warps.append(warp)
@@ -460,16 +697,16 @@ class NVGPUCoreBuilder:
         exception=0,
         call_depth=1,
     ):
-        row = struct.pack(
-            "<QQIIIIII",
-            pc,  # virtualPC
-            pc,  # physPC
-            lane_id,
-            thread_idx[0],
-            thread_idx[1],
-            thread_idx[2],
-            exception,
-            call_depth,
+        row = pack_row(
+            "CudbgThreadTableEntry",
+            virtualPC=pc,
+            physPC=pc,
+            ln=lane_id,
+            threadIdxX=thread_idx[0],
+            threadIdxY=thread_idx[1],
+            threadIdxZ=thread_idx[2],
+            exception=exception,
+            callDepth=call_depth,
         )
         lane = _Lane(row)
         warp.lanes[lane_id] = lane
@@ -497,7 +734,13 @@ class NVGPUCoreBuilder:
         terminate unwinding."""
         frames = tuple(frames)
         backtrace = b"".join(
-            struct.pack("<QQII", ra, vra, level, 0) for ra, vra, level in frames
+            pack_row(
+                "CudbgBacktraceTableEntry",
+                returnAddress=ra,
+                virtualReturnAddress=vra,
+                level=level,
+            )
+            for ra, vra, level in frames
         )
         row = bytearray(lane.row_bytes)
         struct.pack_into("<I", row, LANE_CALL_DEPTH_OFFSET, len(frames))
@@ -524,7 +767,14 @@ class NVGPUCoreBuilder:
     # -- grid constant banks ----------------------------------------------
 
     def add_constbank(self, grid, *, addr, size, bank_id=0):
-        grid.constbanks.append(struct.pack("<QII", addr, size, bank_id))
+        grid.constbanks.append(
+            pack_row(
+                "CudbgConstBankTableEntry",
+                addr=addr,
+                size=size,
+                bankId=bank_id,
+            )
+        )
 
     # -- images ------------------------------------------------------------
 
@@ -665,7 +915,8 @@ class NVGPUCoreBuilder:
                 continue
             modtbl = f".cudbg.modtbl.{ctx.tag}"
             emit(modtbl, CUDBG_SHT_MOD_TABLE,
-                 _table((struct.pack("<Q", m.module_handle)
+                 _table((pack_row("CudbgModuleTableEntry",
+                                  moduleHandle=m.module_handle)
                          for m in ctx.modules), MODULE_ROW_SIZE),
                  link=ctxtbl, info=ctx.row_index, entsize=MODULE_ROW_SIZE)
             for mod in ctx.modules:
