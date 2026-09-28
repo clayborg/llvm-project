@@ -17,6 +17,7 @@
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/CUDAException.h"
+#include "lldb/Utility/NVGPU/NVGPUSectionID.h"
 #include "lldb/Utility/NVGPU/ThreadName.h"
 
 #include <csignal>
@@ -28,6 +29,8 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
                                  SectionSP lane_section_sp, uint32_t lane_idx)
     : Thread(process, tid), m_lane_section_sp(std::move(lane_section_sp)),
       m_lane_idx(lane_idx) {
+  m_sm_section_sp = GetCTASection()->GetParent();
+
   // Decode the CTA and lane rows once so the thread name and stop
   // attribution are cached, instead of re-decoding on every query.
   auto &nvgpu_process = static_cast<ProcessNVGPUCore &>(process);
@@ -55,27 +58,47 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
                    "Failed to decode GPU lane data for thread {1}: {0}", tid);
 }
 
+ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
+                                 SectionSP sm_section_sp,
+                                 const nvgpu_core::SMEntry &sm_entry)
+    : Thread(process, tid), m_sm_section_sp(std::move(sm_section_sp)),
+      m_lane_idx(0) {
+  m_name = nvgpu::FormatSMExceptionThreadName(
+      nvgpu::DecodeHwIdx(GetDeviceSection()->GetID()), sm_entry.smId);
+
+  if (sm_entry.errorPCValid)
+    m_error_pc = sm_entry.errorPC;
+
+  // The SM row is the only record of this fault, so its exception is the stop
+  // reason outright: there is no lane row that could take precedence, and no
+  // surviving warp whose active-lane mask could gate it.
+  m_stop_attribution =
+      nvgpu_core::StopAttribution{sm_entry.exception, /*at_trap=*/false, ""};
+}
+
 ThreadNVGPUCore::~ThreadNVGPUCore() { DestroyThread(); }
 
 // The 5-deep parent chain (lane -> warp -> cta -> sm -> device -> nvgpucore
 // root) is guaranteed intact by `ObjectFileELF::BuildNVGPUSectionList`: a
-// ThreadNVGPUCore can only be constructed from a lane container that the
-// builder produced, and every container the builder produces has all of its
-// ancestors.
+// lane-backed ThreadNVGPUCore can only be constructed from a lane container
+// that the builder produced, and every container the builder produces has all
+// of its ancestors. The SM-exception stand-in enters that chain at the SM, so
+// only the levels below it are absent.
 SectionSP ThreadNVGPUCore::GetWarpSection() const {
+  if (!m_lane_section_sp)
+    return nullptr;
   return m_lane_section_sp->GetParent();
 }
 
 SectionSP ThreadNVGPUCore::GetCTASection() const {
-  return GetWarpSection()->GetParent();
-}
-
-SectionSP ThreadNVGPUCore::GetSMSection() const {
-  return GetCTASection()->GetParent();
+  SectionSP warp_sp = GetWarpSection();
+  if (!warp_sp)
+    return nullptr;
+  return warp_sp->GetParent();
 }
 
 SectionSP ThreadNVGPUCore::GetDeviceSection() const {
-  return GetSMSection()->GetParent();
+  return m_sm_section_sp->GetParent();
 }
 
 RegisterContextSP ThreadNVGPUCore::GetRegisterContext() {

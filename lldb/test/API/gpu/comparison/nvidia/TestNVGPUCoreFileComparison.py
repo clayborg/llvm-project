@@ -28,6 +28,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     CUDBG_GRID_STATUS_ACTIVE,
+    cudbg_exception,
 )
 
 # Put the comparison parent directory on the path to import the shared framework.
@@ -159,7 +160,11 @@ class TestNVGPUCoreFileComparison(NVGPUCoreTestBase):
             sm = b.add_sm(
                 dev,
                 sm_id=block,
-                exception=4 if faulting else 0,
+                exception=(
+                    cudbg_exception("WARP_ILLEGAL_INSTRUCTION")
+                    if faulting
+                    else cudbg_exception("NONE")
+                ),
                 error_pc=error_pc,
             )
             cta = b.add_cta(sm, grid_id=self.GRID_ID, block_idx=(block, 0, 0))

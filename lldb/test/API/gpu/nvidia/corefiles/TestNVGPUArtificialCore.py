@@ -13,7 +13,11 @@ import struct
 import lldb
 
 from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
-from lldbsuite.test.tools.gpu.nvgpu_core_builder import NVGPUCoreBuilder
+from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
+    NVGPUCoreBuilder,
+    cudbg_exception,
+    cudbg_faults,
+)
 
 
 class TestNVGPUArtificialCore(NVGPUCoreTestBase):
@@ -63,26 +67,6 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
 
     PC_T1 = 0x00007FFFCF281000
     ERROR_PC_T1 = 0x00000000ABCD1000
-
-    # Revision-independent exception codes -> exact string; safe to assert
-    # verbatim across CUDBG API revisions.
-    EXACT_EXCEPTIONS = {
-        4: "Warp Illegal Instruction",
-        5: "Warp Out-of-range Address",
-        6: "Warp Misaligned Address",
-        7: "Warp Invalid Address Space",
-        8: "Warp Invalid PC",
-        9: "Warp Hardware Stack Overflow",
-        10: "Device Illegal Address",
-        12: "Warp Assert",
-        14: "Warp Illegal Address",
-        17: "Cluster Out-of-range Address",
-        18: "Cluster Block Not Present",
-        19: "Warp Stack Canary",
-    }
-    # Revision-gated exception codes; only the "CUDA Exception:" prefix is
-    # asserted since older builds map them to "Device Unknown Exception".
-    GATED_EXCEPTIONS = list(range(20, 36))
 
     # Per-thread value formulas; the builder fills leaves and tests assert with
     # the same formula. P7/UP7 are the always-1 constant predicates (PT/UPT).
@@ -142,7 +126,11 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         )
         # SM exception 4 drives the "borrow from SM" stop reason for active
         # lanes on a warp whose errorPC is valid.
-        sm = b.add_sm(dev, exception=4, error_pc=self.PC)
+        sm = b.add_sm(
+            dev,
+            exception=cudbg_exception("WARP_ILLEGAL_INSTRUCTION"),
+            error_pc=self.PC,
+        )
 
         # Primary thread (grid 1): cubin anchor and SM-borrow stop case.
         primary_block = (3, 0, 0)
@@ -199,31 +187,33 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
             }
         )
 
-        exc_lanes = [(code, True) for code in self.EXACT_EXCEPTIONS] + [
-            (code, False) for code in self.GATED_EXCEPTIONS
-        ]
-        num_exc = len(exc_lanes)
-        none_lane_id = num_exc
-        valid_mask = (1 << (num_exc + 1)) - 1
+        # One lane per fault the SDK defines. The description LLDB prints is
+        # only checked for its prefix: the exact wording comes from
+        # CUDAExceptionToString, whose newer cases are gated on the CUDBG API
+        # revision the build compiled against, so a code's spelled-out name is
+        # not predictable from here. The primary thread above pins one down
+        # verbatim, which is enough to catch the prefix losing its suffix.
+        faults = cudbg_faults()
+        none_lane_id = len(faults)
+        valid_mask = (1 << (len(faults) + 1)) - 1
         warp_exc = b.add_warp(
             cta1, valid_lanes_mask=valid_mask, active_lanes_mask=valid_mask
         )
-        for lane_id, (code, exact) in enumerate(exc_lanes):
+        for lane_id, name in enumerate(faults):
             thread_idx = (lane_id, 3, 0)
             lane = b.add_lane(
-                warp_exc, lane_id=lane_id, thread_idx=thread_idx, exception=code
+                warp_exc,
+                lane_id=lane_id,
+                thread_idx=thread_idx,
+                exception=cudbg_exception(name),
             )
             # A lane only materializes a thread if it has a per-lane leaf.
             b.set_lane_registers(lane, [0])
-            if exact:
-                substr = "CUDA Exception: " + self.EXACT_EXCEPTIONS[code]
-            else:
-                substr = "CUDA Exception:"
             self.stop_threads.append(
                 {
                     "name": self._thread_name(t1_block, thread_idx),
                     "reason": lldb.eStopReasonException,
-                    "substr": substr,
+                    "substr": "CUDA Exception:",
                 }
             )
         # No exception, no errorPC, unbroken warp -> no stop reason.
@@ -259,7 +249,7 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         )
         self.grid2_no_local_thread_name = self._thread_name(t1_block, (0, 3, 0))
 
-        self.expected_num_threads = len(self.reg_threads) + num_exc + 2
+        self.expected_num_threads = len(self.reg_threads) + len(faults) + 2
 
         # Each grid resolves through its context row. Grids 1 and 2 have
         # distinct parameter payloads; grid 3 intentionally has none.
