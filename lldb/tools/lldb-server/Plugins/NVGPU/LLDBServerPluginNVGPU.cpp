@@ -38,46 +38,23 @@ using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
 namespace {
-/// Lets ordinary signals pass through the inferior without stopping it for the
-/// duration of a debugger-driven resume, excluding SIGTRAP, SIGKILL, SIGSTOP,
+/// The signals to pass through the inferior without stopping it for the
+/// duration of a debugger-driven resume: all but SIGTRAP, SIGKILL, SIGSTOP,
 /// SIGCHLD and the debug API's SIGURG. Mirrors cuda_gdb_bypass_signals.
-class ScopedInferiorSignalBypass {
-public:
-  explicit ScopedInferiorSignalBypass(NativeProcessProtocol *process)
-      : m_process(process) {
-    if (!m_process)
-      return;
-    m_saved = m_process->GetIgnoredSignals();
-
+llvm::SmallVector<int, 64> GetBypassSignals() {
 #ifdef SIGRTMAX
-    const int max_signal = SIGRTMAX;
+  const int max_signal = SIGRTMAX;
 #else
-    const int max_signal = 64;
+  const int max_signal = 64;
 #endif
-    llvm::SmallVector<int, 64> bypass;
-    for (int signo = 1; signo <= max_signal; ++signo) {
-      if (signo != SIGTRAP && signo != SIGKILL && signo != SIGSTOP &&
-          signo != SIGCHLD && signo != SIGURG)
-        bypass.push_back(signo);
-    }
-    m_process->IgnoreSignals(bypass);
+  llvm::SmallVector<int, 64> bypass;
+  for (int signo = 1; signo <= max_signal; ++signo) {
+    if (signo != SIGTRAP && signo != SIGKILL && signo != SIGSTOP &&
+        signo != SIGCHLD && signo != SIGURG)
+      bypass.push_back(signo);
   }
-
-  ~ScopedInferiorSignalBypass() {
-    if (!m_process)
-      return;
-    llvm::SmallVector<int, 64> restore(m_saved.begin(), m_saved.end());
-    m_process->IgnoreSignals(restore);
-  }
-
-  ScopedInferiorSignalBypass(const ScopedInferiorSignalBypass &) = delete;
-  ScopedInferiorSignalBypass &
-  operator=(const ScopedInferiorSignalBypass &) = delete;
-
-private:
-  NativeProcessProtocol *m_process;
-  llvm::DenseSet<int> m_saved;
-};
+  return bypass;
+}
 
 /// Adapt a resolved symbol map to the SymbolAddressProvider callback shape.
 std::optional<uint64_t> LookupSymbol(const llvm::StringMap<uint64_t> &symbols,
@@ -326,8 +303,10 @@ void LLDBServerPluginNVGPU::ScheduleAttachProbe() {
 }
 
 void LLDBServerPluginNVGPU::ScheduleInjectedPhaseWatchdog() {
-  // One-shot, so the warning cannot repeat.
-  m_main_loop.AddCallback(
+  // One-shot, so the warning cannot repeat. Like the probe, this has to run on
+  // the native MainLoop: the GPU MainLoop only starts once the attach it is
+  // watching has completed.
+  m_native_process.GetMainLoop().AddCallback(
       [this](MainLoopBase &) {
         std::lock_guard<std::mutex> guard(m_attach_mutex);
         if (m_attach_state != AttachState::eInjected ||
@@ -346,15 +325,14 @@ void LLDBServerPluginNVGPU::OnAttachComplete() {
   Log *log = GetLog(GDBRLog::Plugin);
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
-    if (m_attach_state == AttachState::eComplete)
+    if (m_attach_state == AttachState::eComplete ||
+        m_attach_state == AttachState::eDetaching)
       return;
     m_attach_state = AttachState::eComplete;
   }
   LLDB_LOG(log, "LLDBServerPluginNVGPU::OnAttachComplete(). Refreshing device "
                 "state so CUDA threads are enumerated.");
-  auto log_to_client_callback = [](llvm::StringRef message) {};
-  m_gpu->SuspendAllDevicesAndRefresh(log_to_client_callback,
-                                     "attached to running CUDA application");
+  m_gpu->SuspendAllDevicesAndRefresh("attached to running CUDA application");
   if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
     bool was_halted = false;
     HaltNativeProcessIfNeeded(was_halted);
@@ -635,10 +613,11 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions(
 void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGV(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
-  DrainSyncEventsOnce();
+  if (Expected<int> handled = DrainSyncEventsOnce(); !handled)
+    logAndReportFatalError(llvm::toString(handled.takeError()));
 }
 
-int LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
+Expected<int> LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
   Log *log = GetLog(GDBRLog::Plugin);
   CUDADebuggerAPI &cuda_api = *m_cuda_api;
 
@@ -656,8 +635,8 @@ int LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
     if (res == CUDBGResult::CUDBG_ERROR_NO_EVENT_AVAILABLE)
       break; // queue drained
     if (res != CUDBG_SUCCESS)
-      logAndReportFatalError(
-          "Failed to get the next CUDA Debugger API event. {}",
+      return createStringErrorFmt(
+          "Failed to get the next CUDA Debugger API event. {0}",
           cudbgGetErrorString(res));
     // The API also signals "no more events" with this sentinel kind.
     if (event.kind == CUDBG_EVENT_INVALID)
@@ -686,10 +665,10 @@ int LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
       break;
     }
     case CUDBG_EVENT_DETACH_COMPLETE: {
-      // eNone is how the drain loop tells a finished detach from an attach.
+      // Leaving eDetaching is what ends DrainUntilDetachComplete.
       std::lock_guard<std::mutex> guard(m_attach_mutex);
-      m_detach_complete = true;
-      m_attach_state = AttachState::eNone;
+      if (m_attach_state == AttachState::eDetaching)
+        m_attach_state = AttachState::eNone;
       break;
     }
     case CUDBG_EVENT_ALL_DEVICES_SUSPENDED: {
@@ -729,10 +708,10 @@ int LLDBServerPluginNVGPU::DrainSyncEventsOnce() {
   }
 
   CUDBGResult res = cuda_api->acknowledgeSyncEvents();
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("Failed to acknowledge CUDA Debugger API events. {}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to acknowledge CUDA Debugger API events. {0}",
+        cudbgGetErrorString(res));
   return events_handled;
 }
 
@@ -774,22 +753,21 @@ void LLDBServerPluginNVGPU::HandleInternalError(CUDBGResult error_type) {
   }
 
   // Stop with an exception-class reason so the client keeps the GPU stopped and
-  // shows the error, preserving the session rather than aborting lldb-server.
-  auto log_to_client_callback = [](llvm::StringRef message) {};
-  m_gpu->SuspendAllDevicesAndRefresh(log_to_client_callback, description);
+  // shows the error. Refreshing device state would go through the poisoned API,
+  // and the decoding treats a failed read as fatal.
+  m_gpu->ReportFallbackStop(description);
   if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
     bool was_halted = false;
     HaltNativeProcessIfNeeded(was_halted);
   }
 }
 
-llvm::Error
-LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work,
-                                           std::chrono::milliseconds timeout) {
+llvm::Error LLDBServerPluginNVGPU::RunOnNativeMainLoop(
+    std::function<llvm::Error(NativeProcessProtocol &)> work) {
   // Held by both this frame and the callback, so a timeout here cannot leave
   // the native thread writing into a destroyed promise.
   struct SharedWork {
-    std::function<llvm::Error()> work;
+    std::function<llvm::Error(NativeProcessProtocol &)> work;
     /// An empty string means success; otherwise the rendered error.
     std::promise<std::string> result;
   };
@@ -797,15 +775,19 @@ LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work,
   shared->work = std::move(work);
   std::future<std::string> future = shared->result.get_future();
 
-  if (!m_native_process.GetMainLoop().AddPendingCallback(
-          [shared](MainLoopBase &) {
-            std::string message;
-            if (Error err = shared->work())
-              message = llvm::toString(std::move(err));
-            shared->result.set_value(std::move(message));
-          }))
+  auto run = [this, shared](MainLoopBase &) {
+    std::string message;
+    NativeProcessProtocol *process = m_native_process.GetCurrentProcess();
+    if (!process)
+      message = "the native process has exited";
+    else if (Error err = shared->work(*process))
+      message = llvm::toString(std::move(err));
+    shared->result.set_value(std::move(message));
+  };
+  if (!m_native_process.GetMainLoop().AddPendingCallback(run))
     return createStringError("the native MainLoop is no longer accepting work");
 
+  const std::chrono::milliseconds timeout(kNativeWorkTimeoutMs);
   if (future.wait_for(timeout) != std::future_status::ready)
     return createStringErrorFmt(
         "timed out after {0}ms waiting for the native MainLoop to run the "
@@ -818,16 +800,9 @@ LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work,
   return createStringError(message);
 }
 
-llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
+void LLDBServerPluginNVGPU::DetachCleanup() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "LLDBServerPluginNVGPU::DetachCleanup()");
-
-  // 1. Tear the device breakpoints down first, while the API and devices are
-  // still valid. The debug API otherwise leaves them set on the device.
-  if (m_gpu)
-    m_gpu->TeardownDeviceBreakpoints();
-
-  CUDBGAPI api = m_gpu ? m_gpu->GetDebuggerAPI() : nullptr;
 
   // A faulted API must not be called again; the steps below skip it.
   bool faulted = false;
@@ -835,9 +810,17 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     faulted = m_api_faulted;
     m_attach_state = AttachState::eDetaching;
-    m_detach_complete = false;
   }
 
+  // 1. Tear the device breakpoints down first, while the API and devices are
+  // still valid. The debug API otherwise leaves them set on the device.
+  if (m_gpu && !faulted)
+    m_gpu->TeardownDeviceBreakpoints();
+
+  CUDBGAPI api = m_gpu ? m_gpu->GetDebuggerAPI() : nullptr;
+
+  // Only read before step 3 resumes the application: once it runs it can exit,
+  // and the native thread then destroys this process.
   NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess();
 
   std::optional<llvm::StringMap<uint64_t>> symbols;
@@ -862,19 +845,15 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
             CUDADebuggerAPI::ReadResumeForAttachDetach(get_addr, *cpu))
       resume_for_detach = *resume;
     else
-      llvm::consumeError(resume.takeError());
+      LLDB_LOG(log, "DetachCleanup: could not read the resume flag: {0}",
+               llvm::toString(resume.takeError()));
   }
   LLDB_LOG(log, "DetachCleanup: resume_for_detach={0}, api_faulted={1}",
            resume_for_detach, faulted);
 
   // 3. Let the driver clean up, which it can only do while the app runs.
-  if (resume_for_detach && api && !faulted) {
-    ResumeForDriverCleanup(api, cpu, resume_for_detach);
-  } else {
-    std::lock_guard<std::mutex> guard(m_attach_mutex);
-    m_detach_complete = true;
-    m_attach_state = AttachState::eNone;
-  }
+  if (resume_for_detach && api && !faulted)
+    ResumeForDriverCleanup(api, resume_for_detach);
 
   // 4. Clear the attach-specific driver state.
   if (api && !faulted) {
@@ -889,8 +868,8 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
   // it before step 3 cuts off the mechanism that cleanup runs on and leaves the
   // driver believing a debugger is still attached, which in turn stops it
   // re-running its attach procedure for a later re-attach.
-  if (cpu && symbols)
-    ResetDriverHandshakeFlags(*cpu, *symbols);
+  if (symbols)
+    ResetDriverHandshakeFlags(*symbols);
 
   // 6. Drop the API and everything pointing into it.
   ReleaseDebuggerAPI();
@@ -902,17 +881,11 @@ llvm::Error LLDBServerPluginNVGPU::DetachCleanup() {
   }
 
   LLDB_LOG(log, "DetachCleanup: complete");
-  return Error::success();
 }
 
 void LLDBServerPluginNVGPU::ResumeForDriverCleanup(CUDBGAPI api,
-                                                   NativeProcessProtocol *cpu,
                                                    uint32_t resume_flags) {
   Log *log = GetLog(GDBRLog::Plugin);
-
-  // Keeps an ordinary signal from derailing the resume window, and stays in
-  // scope across the drain below.
-  ScopedInferiorSignalBypass bypass(cpu);
 
   // A flag word, not a boolean: cuda-gdb passes it through too, and is seen
   // passing 3 when it requests more capabilities than we do.
@@ -930,38 +903,55 @@ void LLDBServerPluginNVGPU::ResumeForDriverCleanup(CUDBGAPI api,
     }
   }
 
-  // PTRACE_CONT, so it has the same thread affinity requirement as the flag
-  // writes in ResetDriverHandshakeFlags.
-  if (cpu) {
-    if (Error err = RunOnNativeMainLoop(
-            [cpu]() -> Error {
-              ResumeActionList resume_actions(lldb::eStateRunning,
-                                              LLDB_INVALID_SIGNAL_NUMBER);
-              return cpu->Resume(resume_actions).ToError();
-            },
-            std::chrono::milliseconds(kNativeWorkTimeoutMs)))
-      LLDB_LOG(log, "DetachCleanup: failed to resume the CPU process: {0}",
-               llvm::toString(std::move(err)));
-  }
+  // Resuming is PTRACE_CONT, so it has to happen on the native thread. So does
+  // changing the ignored signals, which that thread reads whenever the inferior
+  // gets one; passing them through keeps an ordinary signal from stopping the
+  // application before the driver has finished.
+  std::shared_ptr<llvm::DenseSet<int>> saved_signals =
+      std::make_shared<llvm::DenseSet<int>>();
+  auto resume = [saved_signals](NativeProcessProtocol &cpu) -> Error {
+    *saved_signals = cpu.GetIgnoredSignals();
+    cpu.IgnoreSignals(GetBypassSignals());
+    // Still running if the GPU stop did not stop the CPU; see
+    // NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP.
+    if (cpu.IsRunning())
+      return Error::success();
+    ResumeActionList resume_actions(lldb::eStateRunning,
+                                    LLDB_INVALID_SIGNAL_NUMBER);
+    return cpu.Resume(resume_actions).ToError();
+  };
+  if (Error err = RunOnNativeMainLoop(resume))
+    LLDB_LOG(log, "DetachCleanup: failed to resume the CPU process: {0}",
+             llvm::toString(std::move(err)));
 
-  DrainUntilDetachComplete(cpu);
+  DrainUntilDetachComplete();
+
+  auto restore_signals = [saved_signals](NativeProcessProtocol &cpu) -> Error {
+    cpu.IgnoreSignals(llvm::to_vector(*saved_signals));
+    return Error::success();
+  };
+  if (Error err = RunOnNativeMainLoop(restore_signals))
+    LLDB_LOG(log, "DetachCleanup: failed to restore the ignored signals: {0}",
+             llvm::toString(std::move(err)));
 }
 
-void LLDBServerPluginNVGPU::DrainUntilDetachComplete(
-    NativeProcessProtocol *cpu) {
+void LLDBServerPluginNVGPU::DrainUntilDetachComplete() {
   Log *log = GetLog(GDBRLog::Plugin);
 
   auto finished = [this]() {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
-    return m_detach_complete || m_api_faulted;
+    return m_attach_state != AttachState::eDetaching || m_api_faulted ||
+           m_native_process_exited;
   };
 
   for (int i = 0; i < kDetachMaxIterations && !finished(); ++i) {
-    if (cpu && cpu->GetState() == lldb::eStateExited) {
-      LLDB_LOG(log, "DetachCleanup: CPU process exited during detach");
+    Expected<int> handled = DrainSyncEventsOnce();
+    if (!handled) {
+      LLDB_LOG(log, "DetachCleanup: stopped waiting for the driver: {0}",
+               llvm::toString(handled.takeError()));
       return;
     }
-    if (DrainSyncEventsOnce() == 0)
+    if (*handled == 0)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -973,7 +963,7 @@ void LLDBServerPluginNVGPU::DrainUntilDetachComplete(
 }
 
 void LLDBServerPluginNVGPU::ResetDriverHandshakeFlags(
-    NativeProcessProtocol &cpu, const llvm::StringMap<uint64_t> &symbols) {
+    const llvm::StringMap<uint64_t> &symbols) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   // Step 3 left the application running, and ptrace refuses to write to a
@@ -983,16 +973,12 @@ void LLDBServerPluginNVGPU::ResetDriverHandshakeFlags(
   LLDB_LOG(log, "DetachCleanup: halted the app for the flag reset (state {0})",
            StateToString(state));
 
-  NativeProcessProtocol *cpu_ptr = &cpu;
-  if (Error err = RunOnNativeMainLoop(
-          [cpu_ptr, symbols]() -> Error {
-            return CUDADebuggerAPI::ResetDetachSymbols(
-                [&symbols](StringRef name) {
-                  return LookupSymbol(symbols, name);
-                },
-                *cpu_ptr);
-          },
-          std::chrono::milliseconds(kNativeWorkTimeoutMs)))
+  auto reset = [symbols](NativeProcessProtocol &cpu) -> Error {
+    return CUDADebuggerAPI::ResetDetachSymbols(
+        [&symbols](StringRef name) { return LookupSymbol(symbols, name); },
+        cpu);
+  };
+  if (Error err = RunOnNativeMainLoop(reset))
     LLDB_LOG(log, "DetachCleanup: failed to reset detach symbols: {0}",
              llvm::toString(std::move(err)));
   else
@@ -1018,6 +1004,10 @@ void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
 
 void LLDBServerPluginNVGPU::NativeProcessDidExit(
     const WaitStatus &exit_status) {
+  {
+    std::lock_guard<std::mutex> guard(m_attach_mutex);
+    m_native_process_exited = true;
+  }
   if (m_gpu)
     m_gpu->OnNativeProcessExit(exit_status);
 }

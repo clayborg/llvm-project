@@ -140,17 +140,8 @@ Status ProcessNVGPU::Detach() {
   LLDB_LOG(log, "NVGPU::Detach()");
   // The plugin owns the debugger API and the native process, so the cleanup
   // sequence lives there.
-  if (m_plugin) {
-    if (llvm::Error err = m_plugin->DetachCleanup())
-      LLDB_LOG(log, "NVGPU::Detach(). Detach cleanup reported: {0}",
-               llvm::toString(std::move(err)));
-  } else if (m_api) {
-    // The back-pointer was never wired; at least clear the attach state.
-    CUDBGResult res = m_api->clearAttachState();
-    if (res != CUDBG_SUCCESS)
-      LLDB_LOG(log, "NVGPU::Detach(). clearAttachState failed: {0}",
-               cudbgGetErrorString(res));
-  }
+  if (m_plugin)
+    m_plugin->DetachCleanup();
   SetState(StateType::eStateDetached, true);
   return Status();
 }
@@ -166,17 +157,10 @@ Status ProcessNVGPU::Interrupt() {
 
   // A stop must be reported either way: the lldb-server interrupt handler does
   // not synthesize a stop reply, so the client would hang waiting for one.
-  if (!m_api) {
-    LLDB_LOG(log, "NVGPU::Interrupt(). No debugger API; reporting a stop "
-                  "without suspending any device.");
-    m_fallback_thread.SetStopped(lldb::eStopReasonException, "interrupted");
-    SetCurrentThreadID(m_fallback_thread.GetID());
-    ChangeStateToStopped();
-    return Status();
-  }
-
-  auto log_to_client_callback = [](llvm::StringRef message) {};
-  SuspendAllDevicesAndRefresh(log_to_client_callback, "interrupted");
+  if (m_api)
+    SuspendAllDevicesAndRefresh("interrupted");
+  else
+    ReportFallbackStop("interrupted");
   return Status();
 }
 
@@ -301,11 +285,7 @@ ProcessNVGPU::Manager::Launch(
 llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
 ProcessNVGPU::Manager::Attach(
     lldb::pid_t pid, NativeProcessProtocol::NativeDelegate &native_delegate) {
-  // There is no OS process to attach to, so this mirrors Launch and creates the
-  // same fake stopped process. LLDBServerPluginNVGPU drives the real late
-  // attach on the CPU side.
-  auto gpu_up = std::make_unique<ProcessNVGPU>(pid, native_delegate);
-  return gpu_up;
+  return llvm::createStringError("Unimplemented function");
 }
 
 /// Parse ELF sections from a cubin and extract load address information.
@@ -498,8 +478,19 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   ChangeStateToStopped();
 }
 
+void ProcessNVGPU::ReportFallbackStop(llvm::StringRef description) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::ReportFallbackStop(). {0}", description);
+
+  ReleaseAndClearThreads(m_threads);
+  m_fallback_thread.SetStopped(lldb::eStopReasonException, description);
+  m_threads.push_back(
+      std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
+  SetCurrentThreadID(m_fallback_thread.GetID());
+  ChangeStateToStopped();
+}
+
 void ProcessNVGPU::SuspendAllDevicesAndRefresh(
-    std::function<void(llvm::StringRef message)> log_to_client_callback,
     llvm::StringRef stop_description) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::SuspendAllDevicesAndRefresh(). {0}", stop_description);
@@ -518,7 +509,7 @@ void ProcessNVGPU::SuspendAllDevicesAndRefresh(
   // The same path the driver's own suspend event takes, but with a stop
   // description so the client keeps the freely-running kernel stopped.
   CUDBGEvent::cases_st::allDevicesSuspended_st event = {};
-  OnAllDevicesSuspended(event, log_to_client_callback, stop_description);
+  OnAllDevicesSuspended(event, [](llvm::StringRef) {}, stop_description);
 }
 
 ProcessNVGPU::Extension ProcessNVGPU::Manager::GetSupportedExtensions() const {

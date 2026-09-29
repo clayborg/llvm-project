@@ -344,15 +344,15 @@ public:
   /// CUDBG_EVENT_ALL_DEVICES_SUSPENDED of its own for: completing a late attach
   /// and interrupting a running kernel.
   ///
-  /// \param[in] log_to_client_callback
-  ///     Function to log messages to the client.
-  ///
   /// \param[in] stop_description
   ///     Why the GPU stopped, e.g. "interrupted", reported to the client so it
   ///     keeps the GPU stopped and the user sees the reason.
-  void SuspendAllDevicesAndRefresh(
-      std::function<void(llvm::StringRef message)> log_to_client_callback,
-      llvm::StringRef stop_description);
+  void SuspendAllDevicesAndRefresh(llvm::StringRef stop_description);
+
+  /// Report an exception-class stop on the fallback thread alone, without
+  /// calling into the debugger API, for when there is none or it can no longer
+  /// be trusted.
+  void ReportFallbackStop(llvm::StringRef description);
 
   /// Handle the ElfImageLoaded event.
   ///

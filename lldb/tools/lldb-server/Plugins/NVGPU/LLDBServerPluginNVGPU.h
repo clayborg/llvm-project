@@ -61,7 +61,7 @@ private:
   /// Drain the event queue until empty, then acknowledge once, returning how
   /// many events were handled. One notification can cover several events, so
   /// draining one at a time would strand the rest.
-  int DrainSyncEventsOnce();
+  llvm::Expected<int> DrainSyncEventsOnce();
 
   /// Run \a work on the native (CPU) MainLoop thread and block until done.
   ///
@@ -69,29 +69,29 @@ private:
   /// here is the native MainLoop thread, so writing inferior memory or resuming
   /// the process from the GPU MainLoop thread fails with ESRCH. Reads go
   /// through process_vm_readv and have no such restriction, which makes this
-  /// easy to miss. The caller must not hold m_attach_mutex.
-  llvm::Error RunOnNativeMainLoop(std::function<llvm::Error()> work,
-                                  std::chrono::milliseconds timeout);
+  /// easy to miss. \a work gets the process as looked up on that thread, which
+  /// is also the one that destroys it when the inferior exits. The caller must
+  /// not hold m_attach_mutex.
+  llvm::Error
+  RunOnNativeMainLoop(std::function<llvm::Error(NativeProcessProtocol &)> work);
 
-  llvm::Error DetachCleanup();
+  void DetachCleanup();
 
   /// Step 3 of DetachCleanup: ask the driver to clean up, resume the devices
   /// and the application so it can, and drain until it reports completion.
   /// Best effort; every failure is logged and detach continues.
-  void ResumeForDriverCleanup(CUDBGAPI api, NativeProcessProtocol *cpu,
-                              uint32_t resume_flags);
+  void ResumeForDriverCleanup(CUDBGAPI api, uint32_t resume_flags);
 
   /// Drain events until CUDBG_EVENT_DETACH_COMPLETE, the API faults, the
   /// inferior exits, or kDetachMaxIterations is reached. We occupy the GPU
   /// MainLoop thread the notifier would dispatch on, so the event has to be
   /// drained here rather than awaited.
-  void DrainUntilDetachComplete(NativeProcessProtocol *cpu);
+  void DrainUntilDetachComplete();
 
   /// Step 5 of DetachCleanup: clear the driver's handshake globals so a later
   /// debugger re-negotiates. Only valid once the driver has finished its own
   /// cleanup, which needs the IPC flag still set.
-  void ResetDriverHandshakeFlags(NativeProcessProtocol &cpu,
-                                 const llvm::StringMap<uint64_t> &symbols);
+  void ResetDriverHandshakeFlags(const llvm::StringMap<uint64_t> &symbols);
 
   /// Step 6 of DetachCleanup: finalize and drop the debugger API along with
   /// everything holding a pointer into it.
@@ -130,7 +130,7 @@ private:
   /// Set by CUDBG_EVENT_INTERNAL_ERROR; acking or resuming on a poisoned API
   /// can wedge or crash the session.
   bool m_api_faulted = false;
-  bool m_detach_complete = false;
+  bool m_native_process_exited = false;
 
   static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
   static constexpr unsigned kAttachInjectTimeoutSeconds = 60;
