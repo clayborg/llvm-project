@@ -119,23 +119,20 @@ ObjectFile *ProcessNVGPUCore::GetCoreObjectFile() const {
 
 Status ProcessNVGPUCore::DoLoadCore() {
   Target &target = GetTarget();
-  // Hardcoded because `ObjectFileELF::GetArchitecture()` currently returns
-  // the wrong arch for EM_CUDA: the ArchSpec table rows have no
-  // distinguishing `sub`, so the lookup silently picks the first row
-  // (32-bit `nvptx`), and `SetArchitecture`'s OS switch has no CUDA case,
-  // so vendor/OS stay unset.
-  ArchSpec arch("nvptx64-nvidia-cuda");
-  target.SetArchitecture(arch);
+  ObjectFile *core = GetCoreObjectFile();
+  if (!core)
+    return Status::FromErrorString("core module is not an ELF object file");
 
+  ArchSpec arch = core->GetArchitecture();
+  if (!arch.IsValid())
+    return Status::FromErrorString(
+        "core file has an unrecognized architecture");
+  target.SetArchitecture(arch);
   target.SetIsGPUTarget(true);
 
   if (PlatformSP nvgpu_platform =
           target.GetDebugger().GetPlatformList().GetOrCreate("nvgpu"))
     target.SetPlatform(nvgpu_platform);
-
-  ObjectFile *core = GetCoreObjectFile();
-  if (!core)
-    return Status::FromErrorString("core module is not an ELF object file");
 
   // Find the synthetic nvgpucore root container that ObjectFileELF built.
   SectionList *section_list = core->GetSectionList();
