@@ -122,6 +122,12 @@ public:
     eLoongArchSubType_loongarch64,
   };
 
+  // [NVIDIA] Only 64-bit EM_CUDA ELFs match the ELF arch table.
+  enum NVPTXSubType {
+    eNVPTXSubType_unknown,
+    eNVPTXSubType_nvptx64,
+  };
+
   enum Core {
     eCore_arm_generic,
     eCore_arm_armv4,
@@ -307,8 +313,7 @@ public:
     eCore_amd_gpu_gcn_GFX12_GENERIC,
     eCore_amd_gpu_gcn_unknown,
 
-    // NVPTX and NVPTX64 are interchangeable for lldb.
-    eCore_nvidia_nvptx,
+    // [NVIDIA] No 32-bit nvptx: 32-bit CUDA device code is unsupported.
     eCore_nvidia_nvptx64,
 
     kNumCores,
@@ -362,7 +367,7 @@ public:
     kCore_amd_gpu_first = eCore_amd_gpu_r600_R600,
     kCore_amd_gpu_last = eCore_amd_gpu_gcn_unknown,
 
-    kCore_nvidia_gpu_first = eCore_nvidia_nvptx,
+    kCore_nvidia_gpu_first = eCore_nvidia_nvptx64,
     kCore_nvidia_gpu_last = eCore_nvidia_nvptx64
 
   };

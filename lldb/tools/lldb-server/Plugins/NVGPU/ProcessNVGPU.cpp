@@ -30,10 +30,9 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
 ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate)
-    : NativeProcessProtocol(pid, -1, delegate),
-      m_arch(ArchSpec("nvptx64-nvidia-cuda")), m_api(nullptr),
-      m_fallback_thread(*this,
-                        /*thread_state=*/nullptr, /*tid=*/1) {
+    : NativeProcessProtocol(pid, -1, delegate), m_arch(GetNVPTXArchitecture()),
+      m_api(nullptr), m_fallback_thread(*this,
+                                        /*thread_state=*/nullptr, /*tid=*/1) {
   // A tid like -1 would be better, but that would make the first real thread to
   // have a thread id of #2 in the client because the fallback thread would have
   // a different internal id. Therefore, we keep tid=1 for the first HW thread
@@ -156,6 +155,11 @@ size_t ProcessNVGPU::UpdateThreads() {
 }
 
 const ArchSpec &ProcessNVGPU::GetArchitecture() const { return m_arch; }
+
+ArchSpec ProcessNVGPU::GetNVPTXArchitecture() {
+  return ArchSpec(eArchTypeELF, llvm::ELF::EM_CUDA,
+                  ArchSpec::eNVPTXSubType_nvptx64);
+}
 
 Status ProcessNVGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                    bool hardware) {
