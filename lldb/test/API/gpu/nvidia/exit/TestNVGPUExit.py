@@ -25,13 +25,17 @@ class TestNVGPUExit(NVGPUTestCaseBase):
         lldbutil.expect_state_changes(self, listener, self.gpu_process, [lldb.eStateRunning, lldb.eStateExited])
         lldbutil.expect_state_changes(self, listener, self.cpu_process, [lldb.eStateRunning, lldb.eStateExited])
 
-        while self.gpu_process.GetExitStatus() == -1:
-            time.sleep(1)
-        while self.cpu_process.GetExitStatus() == -1:
-            time.sleep(1)
+        # Process::SetExitStatus records the status before it raises the
+        # eStateExited event, and the public state (which GetExitStatus checks)
+        # is updated when the listener hands the event over, so the status is
+        # readable as soon as expect_state_changes returns. No polling needed.
+        gpu_status = self.gpu_process.GetExitStatus()
+        cpu_status = self.cpu_process.GetExitStatus()
+        self.assertNotEqual(gpu_status, -1, "GPU process reported no exit status")
+        self.assertNotEqual(cpu_status, -1, "CPU process reported no exit status")
 
-        self.assertEqual(self.cpu_process.GetExitStatus(), exit_code)
-        self.assertEqual(self.gpu_process.GetExitStatus(), exit_code)
+        self.assertEqual(cpu_status, exit_code)
+        self.assertEqual(gpu_status, exit_code)
 
     def test_gpu_exit_0(self):
         """Test that both CPU and GPU exit with exit code 0."""

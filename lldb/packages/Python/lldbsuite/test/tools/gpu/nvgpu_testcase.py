@@ -31,14 +31,55 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
 
-    def find_some_thread(self, condition: Callable[[lldb.SBThread], bool]) -> lldb.SBThread:
-        """Find some thread that satisfies the given condition. It raises if no threads satisfy the condition."""
-        return next(filter(condition, self.gpu_process.threads))
+    def _describe_gpu_threads(self, limit: int = 8) -> str:
+        """A short listing of GPU threads for assertion messages, one per line.
+
+        Threads that stopped for a reason are listed first, since they are almost
+        always the ones a failed lookup is about; a kernel can have thousands of
+        idle lanes, so the listing is capped at `limit`.
+        """
+        stopped = []
+        idle = []
+        for thread in self.gpu_process.threads:
+            if thread.GetStopReason() == lldb.eStopReasonNone:
+                idle.append(f"  #{thread.idx} {thread.GetName()}")
+            else:
+                stopped.append(
+                    f"  #{thread.idx} {thread.GetName()}  [{thread.GetStopDescription(256)}]"
+                )
+        lines = (stopped + idle)[:limit]
+        total = len(stopped) + len(idle)
+        if total > limit:
+            lines.append(f"  ... ({total} total, {len(stopped)} with a stop reason)")
+        return "\n".join(lines)
+
+    def find_some_thread(
+        self,
+        condition: Callable[[lldb.SBThread], bool],
+        description: str = "matching the condition",
+    ) -> lldb.SBThread:
+        """Return the first GPU thread satisfying `condition`.
+
+        Fails the test with a message listing the threads when none matches, instead
+        of raising StopIteration from inside the test body.
+        """
+        thread = next(filter(condition, self.gpu_process.threads), None)
+        if thread is None:
+            self.fail(
+                f"no GPU thread {description}; GPU threads:\n{self._describe_gpu_threads()}"
+            )
+        return thread
 
     def find_thread_by_name(self, name: str) -> lldb.SBThread:
-        """Find a thread by name. It raises if no threads have the given name."""
-        return next(filter(lambda thread: name in thread.GetName(), self.gpu_process.threads))
+        """Return the first GPU thread whose name contains `name`; fail if none does."""
+        return self.find_some_thread(
+            lambda thread: name in thread.GetName(),
+            description=f"with {name!r} in its name",
+        )
 
     def find_thread_by_stop_reason(self, stop_reason: int) -> lldb.SBThread:
-        """Find a thread by stop reason. It raises if no threads have the given stop reason."""
-        return next(filter(lambda thread: thread.GetStopReason() == stop_reason, self.gpu_process.threads))
+        """Return the first GPU thread with the given stop reason; fail if none has."""
+        return self.find_some_thread(
+            lambda thread: thread.GetStopReason() == stop_reason,
+            description=f"with stop reason {lldbutil.stop_reason_to_str(stop_reason)}",
+        )
