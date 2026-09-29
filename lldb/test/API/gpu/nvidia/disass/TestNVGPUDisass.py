@@ -42,7 +42,10 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
-        self.assertIn("CUDA Exception(12): Warp Assert", str(self.gpu_process.thread[0]))
+        # Look the asserting lane up by its stop reason rather than assuming it is
+        # thread 0: faulting-lane selection is not guaranteed (DTCLLDB-236).
+        thread = self.find_thread_by_stop_reason(lldb.eStopReasonException)
+        self.assertIn("CUDA Exception(12): Warp Assert", str(thread))
 
         # Now let's test that the disass can print at least one entry
         self.expect("disassemble", patterns=[".*cuda_elf.*\\.cubin`.*:.*"])

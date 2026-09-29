@@ -8,6 +8,8 @@ class TestNVGPUAssert(NVGPUTestCaseBase):
 
     def test_gpu_asserting(self):
         """Test that we know when the GPU has asserted."""
+        self.killCPUOnTeardown()
+
         self.build()
         source = "assert.cu"
         cpu_bp_line: int = line_number(source, "// breakpoint1")
@@ -19,12 +21,15 @@ class TestNVGPUAssert(NVGPUTestCaseBase):
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
-        self.assertIn("CUDA Exception(12): Warp Assert", str(self.gpu_process.thread[0]))
+        # Look the asserting lane up by its stop reason rather than assuming it is
+        # thread 0: faulting-lane selection is not guaranteed (DTCLLDB-236).
+        thread = self.find_thread_by_stop_reason(lldb.eStopReasonException)
+        self.assertIn("CUDA Exception(12): Warp Assert", str(thread))
 
-        frame = self.gpu_process.thread[0].frame[0]
+        frame = thread.frame[0]
 
         # We don't expect to see an errorpc set
-        self.assertNotIn("CUDA Exception(12): Warp Assert at 0x", str(self.gpu_process.thread[0]))
+        self.assertNotIn("CUDA Exception(12): Warp Assert at 0x", str(thread))
         errorpc = frame.FindRegister("errorpc").GetValueAsAddress()
         self.assertEqual(errorpc, lldb.LLDB_INVALID_ADDRESS)
 
