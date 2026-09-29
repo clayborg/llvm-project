@@ -19,8 +19,6 @@
 #include "llvm/ADT/StringMap.h"
 
 #include <memory>
-#include <string>
-#include <vector>
 
 namespace lldb_private::lldb_server {
 
@@ -41,14 +39,6 @@ public:
   static constexpr const char *LIBCUDA_LIBRARY_NAME = "libcuda.so";
   static constexpr const char *LIBCUDA_LIBRARY_NAME_ALT = "libcuda.so.1";
 
-  /// Written to the attach-procedure FD to ask the driver to inject the debug
-  /// engine. Any value will do; this is the one cuda-gdb uses.
-  static constexpr uint8_t ATTACH_PROCEDURE_MAGIC_BYTE = 0xAB;
-
-  /// Assumed size of the driver's fixed CUDBG_INJECTION_PATH buffer, including
-  /// the trailing NUL. Longer paths are rejected rather than truncated.
-  static constexpr size_t CUDBG_INJECTION_PATH_MAX_SIZE = 4096;
-
   /// Which path is bringing the API up. They differ only in when the driver's
   /// IPC flag is published; see SetIpcFlag.
   enum class InitContext { eLaunch, eLateAttach };
@@ -58,16 +48,13 @@ public:
              llvm::StringRef libcuda_library_name,
              NativeProcessProtocol &linux_process, InitContext init_context);
 
-  /// Publish (or clear) CUDBG_IPC_FLAG_NAME, the master "an API client is
-  /// ready, emit callbacks" flag. Written last during initialization so the
-  /// driver never sees a ready client whose PID, revision, session and
-  /// capabilities have not landed; the attach path additionally holds it back
-  /// until the attach procedure has finished and the event callback exists.
+  /// Publish CUDBG_IPC_FLAG_NAME, the master "an API client is ready, emit
+  /// callbacks" flag. Written last during initialization so the driver never
+  /// sees a ready client whose PID, revision, session and capabilities have not
+  /// landed; the attach path additionally holds it back until the attach
+  /// procedure has finished and the event callback exists.
   static llvm::Error SetIpcFlag(SymbolAddressProvider get_symbol_address,
-                                NativeProcessProtocol &linux_process,
-                                bool enabled);
-
-  static std::vector<std::string> GetAttachSymbolNames();
+                                NativeProcessProtocol &linux_process);
 
   /// Resolve the handshake symbols by parsing libcuda out of the inferior.
   ///

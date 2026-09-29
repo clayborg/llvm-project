@@ -501,8 +501,7 @@ llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
     return createStringError(
         "No native process available to complete the late attach handshake");
 
-  if (Error err = CUDADebuggerAPI::SetIpcFlag(get_symbol_address, *cpu_process,
-                                              /*enabled=*/true))
+  if (Error err = CUDADebuggerAPI::SetIpcFlag(get_symbol_address, *cpu_process))
     return err;
 
   Expected<uint32_t> resume_for_attach =
