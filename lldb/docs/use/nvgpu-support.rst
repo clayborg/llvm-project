@@ -132,6 +132,16 @@ target. Select it to inspect device state:
   > target select <gpu-target-index>
   > thread list
 
+.. note::
+
+  The plugin does not yet request the driver's lazy loading capabilities, and
+  the driver refuses a late attach without them. Until it does, start the
+  application with lazy loading disabled:
+
+  .. code-block:: bash
+
+    CUDA_MODULE_LOADING=EAGER CUDA_DISABLE_FUNCTION_LAZY_FINALIZATION=1 ./app
+
 How it works
 """"""""""""
 
@@ -143,10 +153,10 @@ uses the driver's safe attach mechanism:
    that this is an attach. The NVGPU plugin then sets a breakpoint on
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``.
 #. On the first stop after attaching, ``lldb-server`` resolves the driver's
-   attach handshake symbols itself -- it locates ``libcuda`` in the inferior via
-   ``/proc/<pid>/maps`` and reads its dynamic symbol table -- so no extra
-   gdb-remote round-trip is needed during attach. If the running process
-   advertises a usable safe-attach handler (``CUDBG_ATTACH_HANDLER_AVAILABLE``),
+   attach handshake symbols itself: it locates ``libcuda`` in the inferior via
+   ``/proc/<pid>/maps`` and reads its dynamic symbol table. If the running
+   process advertises a usable safe-attach handler
+   (``CUDBG_ATTACH_HANDLER_AVAILABLE``),
    the plugin writes the client handshake globals and a magic byte to the file
    descriptor exported in ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD``. This
    asks the driver to inject the debug engine at a point it determines is safe,

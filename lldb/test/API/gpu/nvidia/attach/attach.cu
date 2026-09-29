@@ -5,10 +5,10 @@
 #include <cuda_runtime.h>
 
 // A resident kernel that spins until the host clears keep_running (which it
-// never does for the lifetime of the test). It sets *started to 1 once it is
-// actually executing on an SM, so the host can confirm the kernel is resident
-// (rather than merely launched) before signalling readiness. This keeps GPU
-// work executing so a debugger can attach to an already-running CUDA
+// never does; the kernel ends when the process exits). It sets *started to 1
+// once it is actually executing on an SM, so the host can confirm the kernel
+// is resident (rather than merely launched) before signalling readiness. This
+// keeps GPU work executing so a debugger can attach to an already-running CUDA
 // application and enumerate the threads of the in-flight kernel.
 __global__ void spinKernel(volatile int *keep_running, volatile int *started) {
   *started = 1;
@@ -77,10 +77,10 @@ int main(int argc, char **argv) {
   fflush(stdout);
 
   // Keep the host process alive (and the kernel resident) so a debugger can
-  // attach. The test kills this process during teardown.
-  while (true) {
-    sleep(1); // host spin
-  }
+  // attach. The test kills this process during teardown; the time limit only
+  // stops an orphan from occupying the GPU indefinitely if that never happens.
+  for (int i = 0; i < 600; ++i)
+    sleep(1);
 
   return 0;
 }

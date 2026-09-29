@@ -1,8 +1,5 @@
-import glob
 import math
 import os
-import shutil
-import subprocess
 import time
 from typing import Any, Callable, List, Optional
 
@@ -315,32 +312,6 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             )
         return vals
 
-    def cuda_device_available(self):
-        """Best-effort check for a usable NVIDIA GPU on this host.
-
-        NVGPU tests need real CUDA hardware; on a GPU-less CI machine the
-        inferior's first CUDA call fails and there is nothing to debug. Probing
-        for a device up front lets a test skip cleanly instead of waiting out
-        long timeouts on a host that can never satisfy it.
-        """
-        # The driver exposes a control node plus one device node per GPU.
-        if os.path.exists("/dev/nvidiactl") and glob.glob("/dev/nvidia[0-9]*"):
-            return True
-        # Fall back to nvidia-smi if the device nodes are not where we expect.
-        smi = shutil.which("nvidia-smi")
-        if smi is None:
-            return False
-        try:
-            result = subprocess.run([smi, "-L"], capture_output=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return False
-        return result.returncode == 0 and b"GPU 0" in result.stdout
-
-    def skip_if_no_cuda_device(self):
-        """Skip the current test unless a usable NVIDIA CUDA device is present."""
-        if not self.cuda_device_available():
-            self.skipTest("no usable NVIDIA CUDA device available on this host")
-
     def wait_for(self, predicate, timeout_seconds=60):
         """Poll predicate() until it is truthy or the timeout elapses."""
         deadline = time.time() + timeout_seconds
@@ -379,6 +350,41 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 )
             time.sleep(0.5)
         self.fail("CUDA inferior did not report a resident kernel before attach")
+
+    def attach_to_running_cuda_app(self, pid):
+        """Attach to a running CUDA process and return once its GPU target is up
+        and stopped."""
+        # `process attach` builds its target from the debugger's selected
+        # platform, which is independent of the selected target. Once a GPU
+        # target exists that platform is PlatformNVGPU, whose Attach() is
+        # intentionally unimplemented, so pin the host platform first.
+        self.runCmd("platform select host")
+        self.runCmd("process attach -p %d" % pid)
+
+        cpu_target = self.cpu_target
+        self.assertTrue(
+            cpu_target and cpu_target.IsValid(), "no CPU target after attach"
+        )
+
+        # The driver needs the application running to inject the debug engine
+        # and call CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. This has to be async:
+        # the CPU host of a resident kernel never stops on its own, so a
+        # synchronous Continue() would block forever.
+        self.setAsync(True)
+        cpu_process = cpu_target.GetProcess()
+        self.assertTrue(
+            cpu_process and cpu_process.IsValid(), "no CPU process after attach"
+        )
+        cpu_process.Continue()
+
+        self.assertTrue(
+            self.wait_for(lambda: self.gpu_target is not None),
+            "GPU target was not created after attaching to the running CUDA app",
+        )
+        self.assertTrue(
+            self.wait_for_gpu_process_stopped(),
+            "GPU process did not stop after attach",
+        )
 
     def wait_for_no_tracer(self, pid, timeout_seconds=30):
         """Wait until nothing is ptrace-attached to the given pid.

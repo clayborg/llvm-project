@@ -1,4 +1,3 @@
-import lldb
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -18,35 +17,12 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
     def test_attach_to_running_cuda_app(self):
         """Attach to a process whose CUDA kernel is already executing and verify
         that a GPU target comes up with the kernel's threads."""
-        self.skip_if_no_cuda_device()
-
         self.build()
         exe = self.getBuildArtifact("a.out")
         ready_marker = self.getBuildArtifact("kernel_ready.marker")
         popen = self.start_resident_kernel(exe, ready_marker)
 
-        self.runCmd("process attach -p %d" % popen.pid)
-
-        cpu_target = self.cpu_target
-        self.assertTrue(cpu_target and cpu_target.IsValid(), "no CPU target after attach")
-
-        # The driver needs the application running to inject the debug engine
-        # and call CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. This has to be async:
-        # the CPU host of a resident kernel never stops on its own, so a
-        # synchronous Continue() would block forever.
-        self.setAsync(True)
-        cpu_process = cpu_target.GetProcess()
-        self.assertTrue(cpu_process and cpu_process.IsValid(), "no CPU process after attach")
-        cpu_process.Continue()
-
-        self.assertTrue(
-            self.wait_for(lambda: self.gpu_target is not None),
-            "GPU target was not created after attaching to the running CUDA app",
-        )
-        self.assertTrue(
-            self.wait_for_gpu_process_stopped(),
-            "GPU process did not stop after attach",
-        )
+        self.attach_to_running_cuda_app(popen.pid)
 
         self.select_gpu()
         self.assertGreater(
