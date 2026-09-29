@@ -66,6 +66,26 @@ std::optional<uint64_t> LookupSymbol(const llvm::StringMap<uint64_t> &symbols,
   return it->second;
 }
 
+/// How long the client may keep the process running for the late attach to
+/// finish. NVGPU_ATTACH_WAIT_TIMEOUT_MS overrides \a default_timeout so tests
+/// can force the timeout, which the driver otherwise never comes close to.
+std::chrono::milliseconds
+GetAttachWaitTimeout(std::chrono::milliseconds default_timeout) {
+  std::optional<std::string> value =
+      sys::Process::GetEnv("NVGPU_ATTACH_WAIT_TIMEOUT_MS");
+  if (!value)
+    return default_timeout;
+  unsigned ms = 0;
+  if (StringRef(*value).getAsInteger(10, ms)) {
+    LLDB_LOG(GetLog(GDBRLog::Plugin),
+             "ignoring NVGPU_ATTACH_WAIT_TIMEOUT_MS={0}, which is not a number "
+             "of milliseconds",
+             *value);
+    return default_timeout;
+  }
+  return std::chrono::milliseconds(ms);
+}
+
 const char *EventKindName(CUDBGEventKind kind) {
   switch (kind) {
   case CUDBG_EVENT_INVALID:
@@ -325,21 +345,23 @@ bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
   // Stop the process if the attach takes too long, so the client's attach
   // cannot hang. If the client is briefly holding the process at a breakpoint,
   // the SIGSTOP stays pending and stops it as soon as the client resumes it.
+  const std::chrono::milliseconds timeout =
+      GetAttachWaitTimeout(std::chrono::seconds(kAttachWaitTimeoutSeconds));
   m_native_process.GetMainLoop().AddCallback(
-      [this](MainLoopBase &) {
+      [this, timeout](MainLoopBase &) {
         {
           std::lock_guard<std::mutex> guard(m_attach_mutex);
           if (!std::exchange(m_client_waiting_for_attach, false))
             return;
         }
         LLDB_LOG(GetLog(GDBRLog::Plugin),
-                 "NVGPU late attach: not finished after {0}s; stopping the "
+                 "NVGPU late attach: not finished after {0}ms; stopping the "
                  "process so the attach completes without the GPU for now.",
-                 kAttachWaitTimeoutSeconds);
+                 timeout.count());
         if (NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess())
           cpu->Halt();
       },
-      std::chrono::seconds(kAttachWaitTimeoutSeconds));
+      timeout);
   return true;
 }
 

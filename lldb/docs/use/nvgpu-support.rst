@@ -104,6 +104,10 @@ behavior when lldb-server starts:
 - `NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP`: when set to "1", disables the automatic
   suspension of the CPU process when the GPU is stopped.
 
+- `NVGPU_ATTACH_WAIT_TIMEOUT_MS`: how long, in milliseconds, ``process attach``
+  keeps the application running for the GPU attach to finish, instead of the
+  default 10 seconds. Mainly useful for testing the timeout.
+
 These environment variables can be set in the shell environment before
 starting lldb-server.
 
