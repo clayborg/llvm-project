@@ -358,29 +358,20 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         # target exists that platform is PlatformNVGPU, whose Attach() is
         # intentionally unimplemented, so pin the host platform first.
         self.runCmd("platform select host")
+        # With plugin.process.gdb-remote.wait-for-gpu-attach on, the default,
+        # lldb keeps the process running until the driver has finished the
+        # attach, so the command returns with the GPU target already created.
         self.runCmd("process attach -p %d" % pid)
 
         cpu_target = self.cpu_target
         self.assertTrue(
             cpu_target and cpu_target.IsValid(), "no CPU target after attach"
         )
-
-        # The driver needs the application running to inject the debug engine
-        # and call CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. This has to be async:
-        # the CPU host of a resident kernel never stops on its own, so a
-        # synchronous Continue() would block forever.
-        self.setAsync(True)
-        cpu_process = cpu_target.GetProcess()
-        self.assertTrue(
-            cpu_process and cpu_process.IsValid(), "no CPU process after attach"
-        )
-        cpu_process.Continue()
-
-        self.assertTrue(
-            self.wait_for(lambda: self.gpu_target is not None),
-            "GPU target was not created after attaching to the running CUDA app",
+        self.assertIsNotNone(
+            self.gpu_target, "process attach returned without a GPU target"
         )
         self.wait_for_gpu_to_stop()
+        self.setAsync(True)
 
     def wait_for_no_tracer(self, pid, timeout_seconds=30):
         """Wait until nothing is ptrace-attached to the given pid.

@@ -33,6 +33,31 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
             "expected the attached kernel's threads to appear in the thread list",
         )
 
+    def test_attach_without_waiting_for_the_gpu(self):
+        """With wait-for-gpu-attach off, process attach returns as soon as the
+        CPU is attached, and the GPU target comes up once the process runs."""
+        self.runCmd("settings set plugin.process.gdb-remote.wait-for-gpu-attach false")
+        self.addTearDownHook(
+            lambda: self.runCmd(
+                "settings clear plugin.process.gdb-remote.wait-for-gpu-attach"
+            )
+        )
+        self.build()
+        exe = self.getBuildArtifact("a.out")
+        ready_marker = self.getBuildArtifact("kernel_ready.marker")
+        popen = self.start_resident_kernel(exe, ready_marker)
+
+        self.runCmd("process attach -p %d" % popen.pid)
+        self.assertIsNone(self.gpu_target, "the GPU target came up before the run")
+
+        self.setAsync(True)
+        self.cpu_target.GetProcess().Continue()
+        self.assertTrue(
+            self.wait_for(lambda: self.gpu_target is not None),
+            "GPU target was not created once the process ran",
+        )
+        self.wait_for_gpu_to_stop()
+
     def test_attach_before_cuda_is_initialized(self):
         """Attach while libcuda is not loaded yet. There is nothing to hand off
         then, so the plugin skips the safe attach handshake and the GPU target

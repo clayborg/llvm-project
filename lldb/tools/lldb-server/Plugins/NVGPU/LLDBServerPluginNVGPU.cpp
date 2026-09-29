@@ -30,6 +30,7 @@
 #include <sys/uio.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -317,6 +318,40 @@ void LLDBServerPluginNVGPU::SymbolLookedUp(StringRef name,
     TryInitiateAttachServerSide();
 }
 
+bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
+  {
+    std::lock_guard<std::mutex> guard(m_attach_mutex);
+    // Until the driver has the request, running the process will not finish
+    // the attach. cuda-gdb does not continue in that case either.
+    if (m_attach_state != AttachState::eInjected)
+      return false;
+    m_client_waiting_for_attach = true;
+  }
+  LLDB_LOG(GetLog(GDBRLog::Plugin),
+           "ShouldResumeToFinishAttach: the client will run the process until "
+           "the attach completes");
+
+  // Stop the process if the attach takes too long, so the client's attach
+  // cannot hang. If the client is briefly holding the process at a breakpoint,
+  // the SIGSTOP stays pending and stops it as soon as the client resumes it.
+  m_native_process.GetMainLoop().AddCallback(
+      [this](MainLoopBase &) {
+        {
+          std::lock_guard<std::mutex> guard(m_attach_mutex);
+          if (!std::exchange(m_client_waiting_for_attach, false))
+            return;
+        }
+        LLDB_LOG(GetLog(GDBRLog::Plugin),
+                 "NVGPU late attach: not finished after {0}s; stopping the "
+                 "process so the attach completes without the GPU for now.",
+                 kAttachWaitTimeoutSeconds);
+        if (NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess())
+          cpu->Halt();
+      },
+      std::chrono::seconds(kAttachWaitTimeoutSeconds));
+  return true;
+}
+
 void LLDBServerPluginNVGPU::ScheduleInjectedPhaseWatchdog() {
   // One-shot, so the warning cannot repeat. This has to run on the native
   // MainLoop: the GPU MainLoop only starts once the attach it is watching has
@@ -338,17 +373,22 @@ void LLDBServerPluginNVGPU::ScheduleInjectedPhaseWatchdog() {
 
 void LLDBServerPluginNVGPU::OnAttachComplete() {
   Log *log = GetLog(GDBRLog::Plugin);
+  bool client_waiting = false;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     if (m_attach_state == AttachState::eComplete ||
         m_attach_state == AttachState::eDetaching)
       return;
     m_attach_state = AttachState::eComplete;
+    client_waiting = std::exchange(m_client_waiting_for_attach, false);
   }
   LLDB_LOG(log, "LLDBServerPluginNVGPU::OnAttachComplete(). Refreshing device "
                 "state so CUDA threads are enumerated.");
   m_gpu->SuspendAllDevicesAndRefresh("attached to running CUDA application");
-  if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
+  // A waiting client needs this stop to end its attach, even when a GPU stop
+  // otherwise leaves the CPU running.
+  if (client_waiting ||
+      sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
     bool was_halted = false;
     HaltNativeProcessIfNeeded(was_halted);
   }
@@ -1022,6 +1062,7 @@ void LLDBServerPluginNVGPU::NativeProcessDidExit(
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     m_native_process_exited = true;
+    m_client_waiting_for_attach = false;
   }
   if (m_gpu)
     m_gpu->OnNativeProcessExit(exit_status);

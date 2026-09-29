@@ -20,10 +20,10 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.select_gpu()
         self.runCmd("detach")
 
-        # The CPU was resumed for the attach handshake and the server has
-        # since halted it, but its public state only advances as that stop
-        # event is drained. Detaching while LLDB still believes it is
-        # running makes Process::Detach interrupt and then wait out
+        # The GPU detach resumes the CPU so the driver can clean up, then halts
+        # it again, and LLDB's view of the CPU only catches up as that stop
+        # event is drained. Detaching while LLDB still believes it is running
+        # makes Process::Detach interrupt and then wait out
         # target.process.interrupt-timeout for a stop that already happened.
         self.assertTrue(
             self.wait_for_cpu_process_stopped(),

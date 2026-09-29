@@ -38,6 +38,7 @@ public:
   std::vector<std::string> GetSymbolsToLookUp() override;
   void SymbolLookedUp(llvm::StringRef name,
                       std::optional<uint64_t> value) override;
+  bool ShouldResumeToFinishAttach() override;
 
 private:
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
@@ -140,8 +141,13 @@ private:
   bool m_api_faulted = false;
   bool m_native_process_exited = false;
 
+  /// The client resumed the process for us and is waiting for the stop that
+  /// ends its attach, which we owe it once ours has finished or timed out.
+  bool m_client_waiting_for_attach = false;
+
   static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
   static constexpr unsigned kAttachInjectTimeoutSeconds = 60;
+  static constexpr unsigned kAttachWaitTimeoutSeconds = 10;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;
 };

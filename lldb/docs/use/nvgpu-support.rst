@@ -120,11 +120,17 @@ and exposes the in-flight kernel's threads in the ``thread list`` command.
 
   lldb
   > process attach -p <pid>
-  # Resume so the driver can complete the attach procedure.
-  > continue
 
-Once the attach completes, a second (GPU) target appears alongside the CPU
-target. Select it to inspect device state:
+The driver can only finish its part of the attach while the application runs,
+so LLDB keeps the process running until it has, then stops it. When
+``process attach`` returns, a second (GPU) target is already there alongside
+the CPU target. If the driver has not finished within 10 seconds, the attach
+completes without it, and the GPU target appears once the application runs
+again. Set ``plugin.process.gdb-remote.wait-for-gpu-attach`` to ``false`` to
+have ``process attach`` return as soon as the CPU is attached instead; the GPU
+target then appears once you continue.
+
+Select the GPU target to inspect device state:
 
 .. code-block:: bash
 
@@ -164,6 +170,10 @@ uses the driver's safe attach mechanism:
    and a byte to that descriptor. This asks the driver to inject the debug
    engine at a point it determines is safe, avoiding the unsafe forced function
    call used by the deprecated mechanism.
+#. Once LLDB has finished attaching to the CPU process, it asks the GPU
+   plug-ins (via ``jGPUPluginFinishAttach``) whether one of them needs the
+   process to keep running. The NVGPU plugin answers yes when it has written
+   that byte, and stops the process again once its attach has finished.
 #. When the driver finishes injecting the debug engine it calls
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
    it initializes the CUDA debugger API exactly like the launch path.
