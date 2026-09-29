@@ -323,12 +323,8 @@ static constexpr const CoreDefinition g_core_definitions[] = {
     AMD_GPU_CORE_DEF_GCN(GFX11_GENERIC),
     AMD_GPU_CORE_DEF_GCN(GFX12_GENERIC),
     AMD_GPU_CORE_DEF_GCN(unknown),
-    // NVPTX is always 64-bit during execution as SASS, which makes NVPTX and
-    // NVPTX64 interchangeable for lldb.
     // [NVIDIA] SASS instructions are a fixed 16 bytes on every architecture
     // CUDA 13 supports (Turing and newer).
-    {eByteOrderLittle, 8, 16, 16, llvm::Triple::nvptx,
-     ArchSpec::eCore_nvidia_nvptx, "nvptx"},
     {eByteOrderLittle, 8, 16, 16, llvm::Triple::nvptx64,
      ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
 };
@@ -572,8 +568,8 @@ static const ArchDefinitionEntry g_elf_arch_entries[] = {
     // Unknown ADM GCN GPU
     {ArchSpec::eCore_amd_gpu_gcn_unknown, llvm::ELF::EM_AMDGPU},
 
-    {ArchSpec::eCore_nvidia_nvptx,    llvm::ELF::EM_CUDA        }, // NVidia GPU
-    {ArchSpec::eCore_nvidia_nvptx64,  llvm::ELF::EM_CUDA        },
+    // [NVIDIA] ObjectFileELF gives only 64-bit CUDA ELFs this subtype.
+    {ArchSpec::eCore_nvidia_nvptx64,  llvm::ELF::EM_CUDA,       ArchSpec::eNVPTXSubType_nvptx64}, // NVidia GPU
 };
 // clang-format on
 
@@ -1237,6 +1233,13 @@ bool ArchSpec::SetArchitecture(ArchitectureType arch_type, uint32_t cpu,
             m_triple.setOS(llvm::Triple::OSType::AMDHSA);
             break;            
           }
+          // [NVIDIA] EM_CUDA code always runs under CUDA. Don't key on the
+          // OSABI byte: CUDA 13 cubins carry 0x41, which is not
+          // llvm::ELF::ELFOSABI_CUDA_V2 (decimal 41).
+          if (cpu == llvm::ELF::EM_CUDA) {
+            m_triple.setVendor(llvm::Triple::VendorType::NVIDIA);
+            m_triple.setOS(llvm::Triple::OSType::CUDA);
+          }
         } else if (arch_type == eArchTypeCOFF && os == llvm::Triple::Win32) {
           m_triple.setVendor(llvm::Triple::PC);
           m_triple.setOS(llvm::Triple::Win32);
@@ -1635,22 +1638,6 @@ static bool cores_match(const ArchSpec::Core core1, const ArchSpec::Core core2,
   case ArchSpec::eCore_arm_arm64_32:
     if (!enforce_exact_match) {
       if (core2 == ArchSpec::eCore_arm_generic)
-        return true;
-      try_inverse = false;
-    }
-    break;
-
-  case ArchSpec::eCore_nvidia_nvptx:
-    if (!enforce_exact_match) {
-      if (core2 == ArchSpec::eCore_nvidia_nvptx64)
-        return true;
-      try_inverse = false;
-    }
-    break;
-
-  case ArchSpec::eCore_nvidia_nvptx64:
-    if (!enforce_exact_match) {
-      if (core2 == ArchSpec::eCore_nvidia_nvptx)
         return true;
       try_inverse = false;
     }

@@ -42,8 +42,7 @@ namespace json = llvm::json;
 LLDB_PLUGIN_DEFINE(DisassemblerSASS)
 
 static bool IsNvptxArch(const ArchSpec &arch) {
-  return arch.GetTriple().getArch() == llvm::Triple::nvptx ||
-         arch.GetTriple().getArch() == llvm::Triple::nvptx64;
+  return arch.GetTriple().getArch() == llvm::Triple::nvptx64;
 }
 
 DisassemblerSASS::DisassemblerSASS(const ArchSpec &arch, const char *flavor,

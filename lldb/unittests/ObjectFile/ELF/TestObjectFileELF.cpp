@@ -19,6 +19,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
@@ -388,4 +389,53 @@ TEST_F(ObjectFileELFTest, SkipsLocalMappingAndDotLSymbols) {
   const Symbol *global_obj = module_sp->FindFirstSymbolWithNameAndType(
       ConstString("global_obj"), eSymbolTypeAny);
   ASSERT_NE(nullptr, global_obj);
+}
+
+TEST_F(ObjectFileELFTest, GetArchitecture_CUDA) {
+  // CUDA 13 cubins carry OSABI 0x41; GPU coredumps and older cubins carry
+  // ELFOSABI_CUDA (0x33). Both must decode as nvidia-cuda.
+  for (const char *osabi : {"0x41", "0x33"}) {
+    std::string yaml = llvm::formatv(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  OSABI:           {0}
+  Type:            ET_EXEC
+  Machine:         EM_CUDA
+...
+)",
+                                     osabi)
+                           .str();
+    SCOPED_TRACE(yaml);
+    llvm::Expected<TestFile> file = TestFile::fromYaml(yaml);
+    ASSERT_THAT_EXPECTED(file, llvm::Succeeded());
+
+    auto module_sp = std::make_shared<Module>(file->moduleSpec());
+    const ArchSpec &module_arch = module_sp->GetArchitecture();
+    EXPECT_EQ(module_arch.GetTriple().getTriple(), "nvptx64-nvidia-cuda");
+    EXPECT_EQ(module_arch.GetCore(), ArchSpec::eCore_nvidia_nvptx64);
+
+    ObjectFile *objfile = module_sp->GetObjectFile();
+    ASSERT_NE(nullptr, objfile);
+    EXPECT_EQ(objfile->GetArchitecture().GetTriple().getTriple(),
+              "nvptx64-nvidia-cuda");
+  }
+}
+
+TEST_F(ObjectFileELFTest, GetArchitecture_CUDA32BitIsUnsupported) {
+  auto ExpectedFile = TestFile::fromYaml(R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS32
+  Data:            ELFDATA2LSB
+  OSABI:           0x33
+  Type:            ET_EXEC
+  Machine:         EM_CUDA
+...
+)");
+  ASSERT_THAT_EXPECTED(ExpectedFile, llvm::Succeeded());
+
+  auto module_sp = std::make_shared<Module>(ExpectedFile->moduleSpec());
+  EXPECT_FALSE(module_sp->GetArchitecture().IsValid());
 }
