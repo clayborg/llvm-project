@@ -325,9 +325,11 @@ static constexpr const CoreDefinition g_core_definitions[] = {
     AMD_GPU_CORE_DEF_GCN(unknown),
     // NVPTX is always 64-bit during execution as SASS, which makes NVPTX and
     // NVPTX64 interchangeable for lldb.
-    {eByteOrderLittle, 8, 4, 8, llvm::Triple::nvptx,
+    // [NVIDIA] SASS instructions are a fixed 16 bytes on every architecture
+    // CUDA 13 supports (Turing and newer).
+    {eByteOrderLittle, 8, 16, 16, llvm::Triple::nvptx,
      ArchSpec::eCore_nvidia_nvptx, "nvptx"},
-    {eByteOrderLittle, 8, 4, 8, llvm::Triple::nvptx64,
+    {eByteOrderLittle, 8, 16, 16, llvm::Triple::nvptx64,
      ArchSpec::eCore_nvidia_nvptx64, "nvptx64"},
 };
 
