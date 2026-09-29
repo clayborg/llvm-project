@@ -69,15 +69,26 @@ private:
                           const lldb_private::Address &base_addr,
                           size_t max_instructions);
 
-  /// Parse nvdisasm JSON output and create instructions
-  /// \param[in] json_output JSON output from nvdisasm
-  /// \param[in] base_addr Base address for calculating instruction addresses
-  /// \param[in] max_instructions Maximum number of instructions to parse
-  /// \return Number of instructions successfully parsed, or error
-  llvm::Expected<size_t>
-  ParseNvdisasmJsonOutput(const std::string &json_output,
-                          const lldb_private::Address &base_addr,
-                          size_t max_instructions);
+  /// Parse nvdisasm JSON output and create instructions.
+  ///
+  /// \param[in] json_output
+  ///     JSON output from nvdisasm.
+  ///
+  /// \param[in] data
+  ///     The binary data nvdisasm disassembled. Each instruction's opcode
+  ///     bytes are read from it.
+  ///
+  /// \param[in] base_addr
+  ///     Base address for calculating instruction addresses.
+  ///
+  /// \param[in] max_instructions
+  ///     Maximum number of instructions to parse.
+  ///
+  /// \return
+  ///     The number of bytes spanned by the parsed instructions, or an error.
+  llvm::Expected<size_t> ParseNvdisasmJsonOutput(
+      const std::string &json_output, const lldb_private::DataExtractor &data,
+      const lldb_private::Address &base_addr, size_t max_instructions);
 
   /// Extract CUDA SM architecture from the module's .note.nv.cuinfo section
   /// \param[in] base_addr Address to get the module from
