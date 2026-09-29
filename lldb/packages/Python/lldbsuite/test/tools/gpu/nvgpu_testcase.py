@@ -340,13 +340,12 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             if os.path.exists(ready_marker):
                 return popen
             # On a host with no usable GPU the inferior dies on its first CUDA
-            # call, so bail out instead of waiting out the whole timeout.
+            # call, so fail now instead of waiting out the whole timeout.
             exit_code = popen.poll()
             if exit_code is not None:
-                self.skipTest(
+                self.fail(
                     "CUDA inferior exited (code %s) before signalling a "
-                    "resident kernel; the host likely lacks a usable CUDA "
-                    "device or driver (see the inferior's stderr)" % exit_code
+                    "resident kernel; its stderr above says why" % exit_code
                 )
             time.sleep(0.5)
         self.fail("CUDA inferior did not report a resident kernel before attach")
@@ -381,10 +380,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             self.wait_for(lambda: self.gpu_target is not None),
             "GPU target was not created after attaching to the running CUDA app",
         )
-        self.assertTrue(
-            self.wait_for_gpu_process_stopped(),
-            "GPU process did not stop after attach",
-        )
+        self.wait_for_gpu_to_stop()
 
     def wait_for_no_tracer(self, pid, timeout_seconds=30):
         """Wait until nothing is ptrace-attached to the given pid.
@@ -409,8 +405,8 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             time.sleep(0.2)
         return False
 
-    def wait_for_process_stopped(self, get_process, timeout_seconds=60):
-        """Pump the debugger's listener until get_process() reports stopped.
+    def wait_for_cpu_process_stopped(self, timeout_seconds=60):
+        """Pump the debugger's listener until the CPU process reports stopped.
 
         In async mode a process's *public* state -- what SBProcess.GetState()
         returns -- only advances when its state-changed event is pulled off a
@@ -418,12 +414,13 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         ProcessEventData::DoOnRemoval as the event leaves the queue. Polling
         GetState() while never draining the debugger's listener therefore keeps
         reporting "running" long after the process has stopped, so this has to
-        pump events rather than just sleep. An interactive `continue` works
-        precisely because its event loop drains these events.
+        pump events rather than just sleep. Unlike wait_for_gpu_to_stop, this
+        does not need a stop event still to be queued, because the server may
+        have stopped the CPU while nothing was waiting on it.
         """
 
         def stopped():
-            proc = get_process()
+            proc = self.cpu_process
             return (
                 proc is not None
                 and proc.IsValid()
@@ -436,13 +433,3 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         while time.time() < deadline and not stopped():
             listener.WaitForEvent(1, event)
         return stopped()
-
-    def wait_for_gpu_process_stopped(self, timeout_seconds=60):
-        return self.wait_for_process_stopped(
-            lambda: self.gpu_process, timeout_seconds
-        )
-
-    def wait_for_cpu_process_stopped(self, timeout_seconds=60):
-        return self.wait_for_process_stopped(
-            lambda: self.cpu_process, timeout_seconds
-        )
