@@ -157,12 +157,13 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
         self.assertIn("CUDA Exception(12): Warp Assert", str(thread))
 
         self.select_gpu()
+        self.gpu_process.SetSelectedThread(thread)
         # Now let's test that the disass can print at least one entry
         self.expect("disassemble", patterns=[".*cuda_elf.*\\.cubin`.*:.*"])
 
         target = self.gpu_target
         size = self.SASS_INSTRUCTION_SIZE
-        frame = self.gpu_process.GetSelectedThread().GetFrameAtIndex(0)
+        frame = thread.GetFrameAtIndex(0)
         pc = frame.GetPC()
         self.assertFalse(
             frame.GetLineEntry().IsValid(),
