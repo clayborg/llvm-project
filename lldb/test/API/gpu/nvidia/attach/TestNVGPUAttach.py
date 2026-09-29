@@ -1,3 +1,5 @@
+import os
+
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -29,4 +31,36 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
             len(self.gpu_process.threads),
             0,
             "expected the attached kernel's threads to appear in the thread list",
+        )
+
+    def test_attach_before_cuda_is_initialized(self):
+        """Attach while libcuda is not loaded yet. There is nothing to hand off
+        then, so the plugin skips the safe attach handshake and the GPU target
+        comes up through the launch-style initialization breakpoints once the
+        application initializes CUDA."""
+        self.build()
+        exe = self.getBuildArtifact("a.out")
+        ready_marker = self.getBuildArtifact("ready.marker")
+        go_marker = self.getBuildArtifact("go.marker")
+        for marker in (ready_marker, go_marker):
+            if os.path.exists(marker):
+                os.remove(marker)
+        popen = self.spawnSubprocess(
+            exe,
+            args=[ready_marker, go_marker],
+            extra_env=self.LATE_ATTACH_INFERIOR_ENV,
+        )
+        self.assertTrue(
+            self.wait_for(lambda: os.path.exists(ready_marker)),
+            "the inferior never reported that it was waiting to initialize CUDA",
+        )
+
+        self.runCmd("process attach -p %d" % popen.pid)
+        self.setAsync(True)
+        open(go_marker, "w").close()
+        self.cpu_target.GetProcess().Continue()
+
+        self.assertTrue(
+            self.wait_for(lambda: self.gpu_target is not None),
+            "GPU target was not created once the application initialized CUDA",
         )

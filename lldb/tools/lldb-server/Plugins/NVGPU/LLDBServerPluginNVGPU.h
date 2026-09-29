@@ -35,6 +35,9 @@ public:
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
   std::optional<GPUActions> NativeProcessIsStopping() override;
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
+  std::vector<std::string> GetSymbolsToLookUp() override;
+  void SymbolLookedUp(llvm::StringRef name,
+                      std::optional<uint64_t> value) override;
 
 private:
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
@@ -53,9 +56,9 @@ private:
   void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
   void OnDebuggerAPIEvent();
   void HandleInternalError(CUDBGResult error_type);
-  void ScheduleAttachProbe();
   void ScheduleInjectedPhaseWatchdog();
   void TryInitiateAttachServerSide();
+  void SetAttachStateIfProbing(AttachState state);
   void OnAttachComplete();
 
   /// Drain the event queue until empty, then acknowledge once, returning how
@@ -123,6 +126,11 @@ private:
   AttachState m_attach_state = AttachState::eNone;
   std::chrono::steady_clock::time_point m_attach_deadline{};
 
+  /// libcuda symbol addresses the client has resolved, from qSymbol for the
+  /// safe attach handshake and from the initialization breakpoints. Detach
+  /// uses them too.
+  llvm::StringMap<uint64_t> m_libcuda_symbols;
+
   /// Not derivable from m_attach_state, which reaches eInjected when the magic
   /// byte is written -- before the API is brought up.
   bool m_api_initialized = false;
@@ -134,7 +142,6 @@ private:
 
   static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
   static constexpr unsigned kAttachInjectTimeoutSeconds = 60;
-  static constexpr unsigned kAttachProbeIntervalSeconds = 1;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;
 };

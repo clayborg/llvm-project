@@ -152,15 +152,18 @@ uses the driver's safe attach mechanism:
 #. When LLDB attaches, it tells the GPU plug-ins (via ``jGPUPluginInitialize``)
    that this is an attach. The NVGPU plugin then sets a breakpoint on
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``.
-#. On the first stop after attaching, ``lldb-server`` resolves the driver's
-   attach handshake symbols itself: it locates ``libcuda`` in the inferior via
-   ``/proc/<pid>/maps`` and reads its dynamic symbol table. If the running
-   process advertises a usable safe-attach handler
-   (``CUDBG_ATTACH_HANDLER_AVAILABLE``),
-   the plugin writes the client handshake globals and a magic byte to the file
-   descriptor exported in ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD``. This
-   asks the driver to inject the debug engine at a point it determines is safe,
-   avoiding the unsafe forced function call used by the deprecated mechanism.
+#. At the attach stop, if ``libcuda`` is not loaded in the process, CUDA cannot
+   have been initialized yet. The plugin skips the rest of this procedure, and
+   the ``cuInit``-style breakpoint initializes the debugger API as on launch
+   once the application initializes CUDA.
+#. Otherwise, while LLDB loads the process's modules, ``lldb-server`` asks it
+   for the addresses of the driver's handshake symbols through the standard
+   ``qSymbol`` exchange. Once the driver has published the file descriptor in
+   ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD`` (it stays -1 until the driver
+   has finished initializing), the plugin writes the client handshake globals
+   and a byte to that descriptor. This asks the driver to inject the debug
+   engine at a point it determines is safe, avoiding the unsafe forced function
+   call used by the deprecated mechanism.
 #. When the driver finishes injecting the debug engine it calls
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
    it initializes the CUDA debugger API exactly like the launch path.

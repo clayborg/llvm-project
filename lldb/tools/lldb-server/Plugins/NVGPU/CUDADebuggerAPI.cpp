@@ -10,30 +10,20 @@
 #include "../Utils/Utils.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
-#include "lldb/Host/posix/Support.h"
 #include "lldb/Utility/Log.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/BinaryFormat/ELF.h"
-#include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Regex.h"
 
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
-#include <limits>
 #include <string>
-#include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include <thread>
 #include <type_traits>
 #include <unistd.h>
@@ -55,7 +45,7 @@ static constexpr unsigned kInitMaxRetryDelayMs = 1000;
 static constexpr unsigned kInitTimeoutMs = 5000;
 
 // Written to the attach-procedure FD to ask the driver to inject the debug
-// engine. Any value will do; this is the one cuda-gdb uses.
+// engine. The driver accepts any byte.
 static constexpr uint8_t kAttachProcedureMagicByte = 0xAB;
 
 // Assumed size of the driver's fixed CUDBG_INJECTION_PATH buffer, including the
@@ -70,8 +60,8 @@ static std::string CUDBG_APICLIENT_REVISION =
 static std::string CUDBG_SESSION_ID = STRINGIFY_SYMBOL(CUDBG_SESSION_ID);
 static std::string CUDBG_DEBUGGER_CAPABILITIES =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_CAPABILITIES);
-// Set by the debug engine once initialized, cleared on detach. Resolved
-// optionally: a libcuda that does not export it must not regress attach.
+// Set by the debug engine once initialized, cleared on detach. Optional: a
+// libcuda that does not export it must not break detach.
 static std::string CUDBG_DEBUGGER_INITIALIZED =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_INITIALIZED);
 static std::string CUDBG_INJECTION_PATH = "cudbgInjectionPath";
@@ -81,8 +71,6 @@ static std::string CUDA_INITIALIZATION_SYMBOL =
     CMAKE_NVGPU_INITIALIZATION_SYMBOL;
 // Late-attach handshake symbols exported by the driver into the running
 // process. See the "Attaching and Detaching" section of cudadebugger.h.
-static std::string CUDBG_ATTACH_HANDLER_AVAILABLE =
-    STRINGIFY_SYMBOL(CUDBG_ATTACH_HANDLER_AVAILABLE);
 static std::string CUDBG_RESUME_FOR_ATTACH_DETACH =
     STRINGIFY_SYMBOL(CUDBG_RESUME_FOR_ATTACH_DETACH);
 static std::string CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD =
@@ -455,13 +443,9 @@ Expected<CUDADebuggerAPI> CUDADebuggerAPI::Initialize(
   return api;
 }
 
-/// The symbols the late attach handshake reads and writes in the inferior.
-static std::vector<std::string> GetAttachSymbolNames() {
+std::vector<std::string> CUDADebuggerAPI::GetSafeAttachSymbolNames() {
   return {
-      Symbols::CUDBG_ATTACH_HANDLER_AVAILABLE,
-      Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH,
       Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD,
-      Symbols::CUDBG_IPC_FLAG_NAME,
       Symbols::CUDBG_APICLIENT_PID,
       Symbols::CUDBG_APICLIENT_REVISION,
       Symbols::CUDBG_SESSION_ID,
@@ -469,26 +453,6 @@ static std::vector<std::string> GetAttachSymbolNames() {
       Symbols::CUDBG_INJECTION_PATH,
   };
 }
-
-namespace {
-/// The location of libcuda in the inferior: how it is mapped and enough
-/// identity to open the *exact* file backing the mapping (not just a pathname
-/// that might resolve to a different file in our mount namespace).
-struct InferiorLibrary {
-  /// Pathname as it appears in /proc/<pid>/maps.
-  std::string path;
-  /// Start address of the mapping with file offset 0 (the ELF header), i.e. the
-  /// library's load base.
-  uint64_t load_base = 0;
-  /// The "start-end" token from the maps line, used to address the mapping via
-  /// /proc/<pid>/map_files/<start>-<end>.
-  std::string map_range;
-  /// Device and inode of the backing file, as reported by maps, used to verify
-  /// that any file we open really is the mapped image.
-  dev_t dev = 0;
-  ino_t inode = 0;
-};
-} // namespace
 
 /// \return true if \a filename is libcuda's soname, "libcuda.so" optionally
 /// followed by numeric version components (libcuda.so.1, libcuda.so.550.54.15),
@@ -498,323 +462,15 @@ static bool IsLibcudaSoname(llvm::StringRef filename) {
   return g_soname_regex.match(filename);
 }
 
-/// Parse /proc/<pid>/maps to locate libcuda in the inferior.
-static Expected<InferiorLibrary> FindInferiorLibcuda(lldb::pid_t pid) {
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> maps =
-      getProcFile(pid, "maps");
-  if (!maps)
-    return createStringErrorFmt("Failed to read /proc/{0}/maps: {1}", pid,
-                                maps.getError().message());
-
-  // "start-end perms offset dev inode pathname", where the pathname is the
-  // remainder of the line and may contain spaces, so it must not be split. The
-  // mapping at file offset 0 holds the ELF header, so its start is the load
-  // base.
-  llvm::StringRef remaining = (*maps)->getBuffer();
-  while (!remaining.empty()) {
-    std::pair<llvm::StringRef, llvm::StringRef> split = remaining.split('\n');
-    llvm::StringRef line = split.first;
-    remaining = split.second;
-
-    llvm::StringRef cursor = line;
-    auto next_field = [&cursor]() -> llvm::StringRef {
-      cursor = cursor.ltrim(' ');
-      size_t space = cursor.find(' ');
-      llvm::StringRef field = cursor.substr(0, space);
-      cursor = (space == llvm::StringRef::npos) ? llvm::StringRef()
-                                                : cursor.substr(space);
-      return field;
-    };
-
-    llvm::StringRef address_range = next_field();
-    llvm::StringRef perms = next_field();
-    (void)perms;
-    llvm::StringRef offset_str = next_field();
-    llvm::StringRef dev_str = next_field();
-    llvm::StringRef inode_str = next_field();
-    llvm::StringRef pathname = cursor.ltrim(' ');
-    if (address_range.empty() || pathname.empty())
-      continue;
-
-    // Linux appends " (deleted)" once the backing file is unlinked or replaced,
-    // which would stop the soname ever matching. The map_files symlink is keyed
-    // by address range, so stripping the suffix costs nothing.
-    llvm::StringRef map_pathname = pathname;
-    map_pathname.consume_back(" (deleted)");
-
-    if (!IsLibcudaSoname(llvm::sys::path::filename(map_pathname)))
-      continue;
-
-    uint64_t file_offset = 0;
-    if (offset_str.getAsInteger(16, file_offset) || file_offset != 0)
-      continue; // the ELF header (and the load base) lives at file offset 0
-
-    uint64_t start = 0;
-    if (address_range.split('-').first.getAsInteger(16, start))
-      continue;
-
-    // dev is "major:minor" in hex; inode is decimal. Parse best-effort; the
-    // values are used to verify the file we later open is the mapped image.
-    uint64_t dev_major = 0, dev_minor = 0, inode = 0;
-    std::pair<llvm::StringRef, llvm::StringRef> dev_parts = dev_str.split(':');
-    dev_parts.first.getAsInteger(16, dev_major);
-    dev_parts.second.getAsInteger(16, dev_minor);
-    inode_str.getAsInteger(10, inode);
-
-    InferiorLibrary result;
-    result.path = map_pathname.str();
-    result.load_base = start;
-    result.map_range = address_range.str();
-    result.dev = ::makedev(static_cast<unsigned>(dev_major),
-                           static_cast<unsigned>(dev_minor));
-    result.inode = static_cast<ino_t>(inode);
-    return result;
-  }
-
-  return createStringError(
-      "libcuda is not mapped in the inferior yet (no libcuda.so mapping "
-      "with file offset 0 found in the process maps).");
-}
-
-/// Open libcuda's on-disk image for the inferior, preferring handles tied to
-/// the mapping's identity over a pathname, which can resolve to a different
-/// file under another mount namespace or after the file is replaced. The
-/// device and inode are verified against /proc/<pid>/maps before it is trusted.
-static Expected<std::unique_ptr<llvm::MemoryBuffer>>
-OpenInferiorLibcuda(lldb::pid_t pid, const InferiorLibrary &libcuda) {
-  // In order of trustworthiness: a kernel symlink to the exact backing file
-  // object, the pathname resolved in the inferior's own mount view, then the
-  // raw pathname.
-  llvm::SmallVector<std::string, 3> candidates;
-  candidates.push_back(
-      llvm::formatv("/proc/{0}/map_files/{1}", pid, libcuda.map_range).str());
-  candidates.push_back(
-      llvm::formatv("/proc/{0}/root{1}", pid, libcuda.path).str());
-  candidates.push_back(libcuda.path);
-
-  std::string errors;
-  for (const std::string &candidate : candidates) {
-    // Verify the identity of this open file description with fstat on the same
-    // fd, and build the buffer from that fd. Checking with ::stat() and then
-    // reopening by path would leave a window for the file to be swapped.
-    int fd = ::open(candidate.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-      errors +=
-          llvm::formatv("  {0}: {1}\n", candidate, ::strerror(errno)).str();
-      continue;
-    }
-    struct stat st;
-    if (::fstat(fd, &st) != 0) {
-      errors += llvm::formatv("  {0}: fstat failed: {1}\n", candidate,
-                              ::strerror(errno))
-                    .str();
-      ::close(fd);
-      continue;
-    }
-    // Verify the opened file's identity against what the kernel reported for
-    // the mapping. (inode 0 means maps did not report a backing file; skip the
-    // check in that unusual case rather than rejecting outright.)
-    if (libcuda.inode != 0 &&
-        (st.st_ino != libcuda.inode || st.st_dev != libcuda.dev)) {
-      errors += llvm::formatv("  {0}: device/inode mismatch with the mapped "
-                              "image; skipping\n",
-                              candidate)
-                    .str();
-      ::close(fd);
-      continue;
-    }
-    // Map the already-open, already-verified fd. getOpenFile does not take
-    // ownership of the fd (it mmaps or reads eagerly), so close it afterward on
-    // every path.
-    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> buffer_or =
-        llvm::MemoryBuffer::getOpenFile(
-            llvm::sys::fs::convertFDToNativeFile(fd), candidate,
-            static_cast<uint64_t>(st.st_size),
-            /*RequiresNullTerminator=*/false);
-    ::close(fd);
-    if (!buffer_or) {
-      errors += llvm::formatv("  {0}: {1}\n", candidate,
-                              buffer_or.getError().message())
-                    .str();
-      continue;
-    }
-    return std::move(*buffer_or);
-  }
-  return createStringErrorFmt(
-      "Failed to open a verified libcuda image for the inferior; tried:\n{0}",
-      errors);
-}
-
-/// Reject anything we cannot parse as a 64-bit little-endian ELF, so a wrongly
-/// resolved file produces a targeted diagnostic rather than garbage addresses.
-static Error ValidateElf64LE(llvm::StringRef raw, llvm::StringRef path) {
-  if (raw.size() <= llvm::ELF::EI_DATA ||
-      raw.take_front(4) != llvm::StringRef(llvm::ELF::ElfMagic, 4))
-    return createStringErrorFmt("{0} is not an ELF object file", path);
-
-  const unsigned char ei_class =
-      static_cast<unsigned char>(raw[llvm::ELF::EI_CLASS]);
-  const unsigned char ei_data =
-      static_cast<unsigned char>(raw[llvm::ELF::EI_DATA]);
-  if (ei_class != llvm::ELF::ELFCLASS64 || ei_data != llvm::ELF::ELFDATA2LSB)
-    return createStringErrorFmt(
-        "{0} is not a 64-bit little-endian ELF image (EI_CLASS={1}, "
-        "EI_DATA={2}); the NVGPU late attach path only supports "
-        "ELFCLASS64/ELFDATA2LSB libcuda images",
-        path, static_cast<unsigned>(ei_class), static_cast<unsigned>(ei_data));
-  return Error::success();
-}
-
-/// \return how far the image moved from its link-time address, which is what a
-/// symbol's st_value has to be adjusted by. st_value is relative to the p_vaddr
-/// of the PT_LOAD mapping file offset 0, and load_base is where that segment
-/// actually landed; without such a segment there is no anchor at all.
-static Expected<uint64_t>
-ComputeLoadBias(const llvm::object::ELF64LEObjectFile &elf,
-                const InferiorLibrary &libcuda) {
-  Expected<llvm::object::ELF64LE::PhdrRange> phdrs_or =
-      elf.getELFFile().program_headers();
-  if (!phdrs_or)
-    return phdrs_or.takeError();
-
-  for (const llvm::object::ELF64LE::Phdr &phdr : *phdrs_or) {
-    if (phdr.p_type != llvm::ELF::PT_LOAD || phdr.p_offset != 0)
-      continue;
-    // A load base below the link-time base would underflow into a huge
-    // positive bias, so reject it rather than computing bogus addresses.
-    if (libcuda.load_base < phdr.p_vaddr)
-      return createStringErrorFmt(
-          "libcuda load base {0:x} is below its link-time base {1:x}; refusing "
-          "to compute a negative load bias",
-          libcuda.load_base, phdr.p_vaddr);
-    return libcuda.load_base - phdr.p_vaddr;
-  }
-
-  return createStringErrorFmt(
-      "{0} has no PT_LOAD segment mapping file offset 0; cannot compute the "
-      "load bias for the late-attach symbols",
-      libcuda.path);
-}
-
-/// Resolve the inferior load addresses of symbols from libcuda's dynamic symbol
-/// table. Every symbol in \a required must resolve or an error is returned;
-/// symbols in \a optional are simply absent from the result when libcuda does
-/// not export them.
-static Expected<llvm::StringMap<uint64_t>>
-ResolveInferiorSymbols(NativeProcessProtocol &linux_process,
-                       llvm::ArrayRef<std::string> required,
-                       llvm::ArrayRef<std::string> optional) {
-  Log *log = GetLog(GDBRLog::Plugin);
-
-  Expected<InferiorLibrary> libcuda_or =
-      FindInferiorLibcuda(linux_process.GetID());
-  if (!libcuda_or)
-    return libcuda_or.takeError();
-  const InferiorLibrary &libcuda = *libcuda_or;
-  LLDB_LOG(log,
-           "CUDADebuggerAPI::ResolveInferiorSymbols(). libcuda at {0} "
-           "base {1:x}",
-           libcuda.path, libcuda.load_base);
-
-  // Open the exact file backing the mapping (verified by device/inode) rather
-  // than trusting the bare pathname, then parse its dynamic symbol table. We
-  // only read the section headers and dynsym/dynstr lazily through the mmap.
-  Expected<std::unique_ptr<llvm::MemoryBuffer>> buffer_or =
-      OpenInferiorLibcuda(linux_process.GetID(), libcuda);
-  if (!buffer_or)
-    return buffer_or.takeError();
-  std::unique_ptr<llvm::MemoryBuffer> buffer = std::move(*buffer_or);
-
-  if (Error err = ValidateElf64LE(buffer->getBuffer(), libcuda.path))
-    return err;
-
-  Expected<llvm::object::ELF64LEObjectFile> object_or =
-      llvm::object::ELF64LEObjectFile::create(buffer->getMemBufferRef());
-  if (!object_or)
-    return object_or.takeError();
-  const llvm::object::ELF64LEObjectFile &elf = *object_or;
-
-  Expected<uint64_t> load_bias_or = ComputeLoadBias(elf, libcuda);
-  if (!load_bias_or)
-    return load_bias_or.takeError();
-  const uint64_t load_bias = *load_bias_or;
-
-  // Track which required symbols remain so a missing one produces an error
-  // naming it instead of a partial map (which would make the caller probe
-  // forever).
-  llvm::StringSet<> remaining;
-  for (const std::string &name : required)
-    remaining.insert(name);
-
-  llvm::StringMap<uint64_t> result;
-  for (const llvm::object::ELFSymbolRef &symbol :
-       elf.getDynamicSymbolIterators()) {
-    Expected<llvm::StringRef> name_or = symbol.getName();
-    if (!name_or) {
-      llvm::consumeError(name_or.takeError());
-      continue;
-    }
-    llvm::StringRef name = *name_or;
-    if (!llvm::is_contained(required, name) &&
-        !llvm::is_contained(optional, name))
-      continue;
-
-    // Skip undefined symbols: they carry no usable address (the definition
-    // lives elsewhere), so accepting their st_value would be wrong.
-    Expected<uint32_t> flags_or = symbol.getFlags();
-    if (!flags_or) {
-      llvm::consumeError(flags_or.takeError());
-      continue;
-    }
-    if (*flags_or & llvm::object::SymbolRef::SF_Undefined)
-      continue;
-
-    Expected<uint64_t> value_or = symbol.getValue();
-    if (!value_or) {
-      llvm::consumeError(value_or.takeError());
-      continue;
-    }
-    const uint64_t st_value = *value_or;
-    // Checked add: load_bias + st_value must not wrap around the address space.
-    if (load_bias > std::numeric_limits<uint64_t>::max() - st_value)
-      return createStringErrorFmt(
-          "address overflow resolving symbol {0} in {1} (load bias {2:x} + "
-          "st_value {3:x})",
-          name, libcuda.path, load_bias, st_value);
-
-    result[name] = load_bias + st_value;
-    remaining.erase(name);
-  }
-
-  if (!remaining.empty()) {
-    llvm::SmallVector<llvm::StringRef, 8> missing;
-    for (const auto &entry : remaining)
-      missing.push_back(entry.getKey());
-    llvm::sort(missing);
-    return createStringErrorFmt(
-        "libcuda image {0} is missing required late-attach symbols: {1}. The "
-        "running process may not be a debuggable CUDA application, or libcuda "
-        "is too old to support late attach.",
-        libcuda.path, llvm::join(missing, ", "));
-  }
-
-  return result;
-}
-
-Expected<llvm::StringMap<uint64_t>>
-CUDADebuggerAPI::ResolveInferiorAttachSymbols(
-    NativeProcessProtocol &linux_process) {
-  return ResolveInferiorSymbols(linux_process, GetAttachSymbolNames(),
-                                /*optional=*/{});
-}
-
-Expected<llvm::StringMap<uint64_t>>
-CUDADebuggerAPI::ResolveInferiorDetachSymbols(
-    NativeProcessProtocol &linux_process) {
-  // CUDBG_DEBUGGER_INITIALIZED is reset when present, but its absence must not
-  // regress detach.
-  return ResolveInferiorSymbols(linux_process, GetAttachSymbolNames(),
-                                {Symbols::CUDBG_DEBUGGER_INITIALIZED});
+Expected<bool>
+CUDADebuggerAPI::IsLibcudaLoaded(NativeProcessProtocol &linux_process) {
+  Expected<std::vector<SVR4LibraryInfo>> libraries =
+      linux_process.GetLoadedSVR4Libraries();
+  if (!libraries)
+    return libraries.takeError();
+  return llvm::any_of(*libraries, [](const SVR4LibraryInfo &library) {
+    return IsLibcudaSoname(llvm::sys::path::filename(library.name));
+  });
 }
 
 Error CUDADebuggerAPI::ResetDetachSymbols(
@@ -841,20 +497,6 @@ Error CUDADebuggerAPI::ResetDetachSymbols(
   return Error::success();
 }
 
-Expected<bool>
-CUDADebuggerAPI::IsLateAttachSupported(SymbolAddressProvider get_symbol_address,
-                                       NativeProcessProtocol &linux_process) {
-  // The driver sets CUDBG_ATTACH_HANDLER_AVAILABLE once it can service an
-  // attach request. If the symbol cannot be resolved at all the running process
-  // is not a (debuggable) CUDA process.
-  Expected<uint32_t> available =
-      ReadUInt32FromHost(get_symbol_address, linux_process,
-                         Symbols::CUDBG_ATTACH_HANDLER_AVAILABLE);
-  if (!available)
-    return available.takeError();
-  return *available != 0;
-}
-
 Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,
                                   NativeProcessProtocol &linux_process) {
   const uint32_t enabled = 1;
@@ -869,10 +511,30 @@ Expected<uint32_t> CUDADebuggerAPI::ReadResumeForAttachDetach(
                             Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
 }
 
-Error CUDADebuggerAPI::InitiateSafeAttach(
-    SymbolAddressProvider get_symbol_address,
-    NativeProcessProtocol &linux_process) {
+Expected<bool>
+CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
+                                    NativeProcessProtocol &linux_process) {
   Log *log = GetLog(GDBRLog::Plugin);
+
+  // The attach-procedure file descriptor exported by the driver: an int in the
+  // inferior's address space referring to a pipe in the inferior's fd table.
+  std::optional<uint64_t> fd_symbol_address =
+      get_symbol_address(Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
+  if (!fd_symbol_address)
+    return createStringErrorFmt(
+        "Couldn't find address for symbol {0}",
+        Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
+
+  int32_t attach_fd = -1;
+  size_t bytes_read = 0;
+  Status status = linux_process.ReadMemory(*fd_symbol_address, &attach_fd,
+                                           sizeof(attach_fd), bytes_read);
+  if (status.Fail() || bytes_read != sizeof(attach_fd))
+    return createStringErrorFmt("Failed to read the attach procedure FD: {0}",
+                                status.AsCString());
+  if (attach_fd < 0)
+    return false;
+
   const uint32_t pid = getpid();
   // The version cannot be negotiated yet, since the debug engine only loads
   // once the procedure runs, so use the compiled revision. Initialize rewrites
@@ -894,31 +556,6 @@ Error CUDADebuggerAPI::InitiateSafeAttach(
             get_symbol_address, linux_process, llvm::StringRef(injection_path)))
       return err;
   }
-
-  // Read the attach-procedure file descriptor exported by the driver. This is
-  // an int that lives in the inferior's address space and refers to a pipe in
-  // the inferior's fd table.
-  std::optional<uint64_t> fd_symbol_address =
-      get_symbol_address(Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
-  if (!fd_symbol_address)
-    return createStringErrorFmt(
-        "Couldn't find address for symbol {0}",
-        Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
-
-  int32_t attach_fd = -1;
-  size_t bytes_read = 0;
-  Status status = linux_process.ReadMemory(*fd_symbol_address, &attach_fd,
-                                           sizeof(attach_fd), bytes_read);
-  if (status.Fail() || bytes_read != sizeof(attach_fd))
-    return createStringErrorFmt("Failed to read the attach procedure FD: {0}",
-                                status.AsCString());
-
-  if (attach_fd < 0)
-    return createStringError(
-        "The driver did not publish a safe attach procedure FD "
-        "(cudbgInitiateDebuggerAttachProcedureFd is -1): it is either not "
-        "ready yet or too old to support safe attach. The legacy "
-        "cudbgApiAttach() injection path is not supported.");
 
   // The fd belongs to the inferior's fd table; reach it through procfs and
   // write the magic byte to wake the driver's interrupt handler so it can
@@ -945,7 +582,7 @@ Error CUDADebuggerAPI::InitiateSafeAttach(
         "Failed to write the magic byte to {0}: {1}", fd_path,
         written < 0 ? ::strerror(write_errno) : "short write");
 
-  return Error::success();
+  return true;
 }
 
 GPUBreakpointInfo
@@ -958,6 +595,10 @@ CUDADebuggerAPI::GetInitializationBreakpointInfo(StringRef library_name) {
   bp.symbol_names.push_back(Symbols::CUDBG_SESSION_ID);
   bp.symbol_names.push_back(Symbols::CUDBG_DEBUGGER_CAPABILITIES);
   bp.symbol_names.push_back(Symbols::CUDBG_INJECTION_PATH);
+  // Only needed at detach, which has no breakpoint of its own to carry them.
+  // CUDBG_DEBUGGER_INITIALIZED is optional; older drivers do not export it.
+  bp.symbol_names.push_back(Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
+  bp.symbol_names.push_back(Symbols::CUDBG_DEBUGGER_INITIALIZED);
   return bp;
 }
 
@@ -967,10 +608,7 @@ bool CUDADebuggerAPI::IsAttachFinishedBreakpoint(StringRef function_name) {
 
 GPUBreakpointInfo
 CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(StringRef library_name) {
-  // The same symbols the launch path initializes from, plus
-  // CUDBG_RESUME_FOR_ATTACH_DETACH, which decides how the attach finishes.
   GPUBreakpointInfo bp = GetInitializationBreakpointInfo(library_name);
   bp.name_info->function_name = Symbols::CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED;
-  bp.symbol_names.push_back(Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
   return bp;
 }

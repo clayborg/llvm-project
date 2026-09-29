@@ -19,6 +19,8 @@
 #include "llvm/ADT/StringMap.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace lldb_private::lldb_server {
 
@@ -26,8 +28,8 @@ namespace lldb_private::lldb_server {
 void CUDBGAPIDeleter(CUDBGAPI api);
 
 /// Resolves the load address of a named symbol in the native (CPU) process,
-/// returning std::nullopt when it could not be resolved. The launch path takes
-/// these from a breakpoint hit; late attach resolves them server-side.
+/// returning std::nullopt when it could not be resolved. The values come from
+/// the client, either with a breakpoint hit or through qSymbol.
 using SymbolAddressProvider =
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>;
 
@@ -56,20 +58,16 @@ public:
   static llvm::Error SetIpcFlag(SymbolAddressProvider get_symbol_address,
                                 NativeProcessProtocol &linux_process);
 
-  /// Resolve the handshake symbols by parsing libcuda out of the inferior.
-  ///
-  /// Everywhere else the LLDB client resolves symbols for us, by way of
-  /// GPUBreakpointInfo::symbol_names, and hands the values back on a
-  /// breakpoint hit. That is unavailable here: we need these addresses before
-  /// injection, on the initial attach stop, when no breakpoint has been hit --
-  /// and the GPU protocol is client-initiated, so lldb-server cannot ask for
-  /// them. Resolving from the inferior's own view also keeps the answer
-  /// correct when the client is on a different machine.
-  static llvm::Expected<llvm::StringMap<uint64_t>>
-  ResolveInferiorAttachSymbols(NativeProcessProtocol &linux_process);
+  /// The symbols InitiateSafeAttach needs. They are needed before any
+  /// breakpoint has been hit, so they are requested from the client through
+  /// qSymbol instead.
+  static std::vector<std::string> GetSafeAttachSymbolNames();
 
-  static llvm::Expected<llvm::StringMap<uint64_t>>
-  ResolveInferiorDetachSymbols(NativeProcessProtocol &linux_process);
+  /// \return true if libcuda is in the inferior's loaded library list. Without
+  /// it CUDA cannot have been initialized yet, so the launch-style
+  /// initialization breakpoints cover the attach.
+  static llvm::Expected<bool>
+  IsLibcudaLoaded(NativeProcessProtocol &linux_process);
 
   /// Clear the requested capabilities, CUDBG_DEBUGGER_INITIALIZED and the IPC
   /// flag, so a later debugger re-negotiates. Valid only after the driver has
@@ -77,12 +75,6 @@ public:
   static llvm::Error
   ResetDetachSymbols(SymbolAddressProvider get_symbol_address,
                      NativeProcessProtocol &linux_process);
-
-  /// \return true if CUDBG_ATTACH_HANDLER_AVAILABLE is set. False means CUDA is
-  /// present but cannot service an attach.
-  static llvm::Expected<bool>
-  IsLateAttachSupported(SymbolAddressProvider get_symbol_address,
-                        NativeProcessProtocol &linux_process);
 
   /// Read CUDBG_RESUME_FOR_ATTACH_DETACH, non-zero meaning the application must
   /// keep running for the driver to finish. Returned raw because it is a flag
@@ -94,8 +86,12 @@ public:
   /// Publish the client handshake globals and write the magic byte to the
   /// driver's attach-procedure FD, asking it to inject the debug engine at a
   /// point of its choosing. It reports completion by calling
-  /// CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED.
-  static llvm::Error
+  /// CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. The globals are written with
+  /// ptrace, so the process must be stopped.
+  ///
+  /// \return false, having written nothing, if the driver has not published
+  /// the FD yet (it is still -1 until the driver finishes initializing).
+  static llvm::Expected<bool>
   InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
                      NativeProcessProtocol &linux_process);
 

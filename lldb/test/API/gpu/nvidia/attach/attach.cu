@@ -26,12 +26,33 @@ __global__ void spinKernel(volatile int *keep_running, volatile int *started) {
     }                                                                          \
   } while (0)
 
+static bool WriteMarker(const char *path) {
+  FILE *marker = fopen(path, "w");
+  if (!marker) {
+    fprintf(stderr, "failed to open marker '%s'\n", path);
+    return false;
+  }
+  fputs("ready\n", marker);
+  fclose(marker);
+  return true;
+}
+
 int main(int argc, char **argv) {
   // Optional path to a readiness marker file. The test passes this and waits
   // for the file to appear before attaching, so the attach happens only after
   // a kernel is confirmed resident (exercising true late attach rather than the
   // cuInit initialization path).
   const char *ready_marker_path = (argc > 1) ? argv[1] : nullptr;
+  // With a second path, report ready before touching CUDA instead, and wait for
+  // that file to appear before initializing it, so a debugger can attach while
+  // libcuda is not loaded yet.
+  const char *go_marker_path = (argc > 2) ? argv[2] : nullptr;
+  if (go_marker_path) {
+    if (!WriteMarker(ready_marker_path))
+      return 1;
+    while (access(go_marker_path, F_OK) != 0)
+      usleep(10000);
+  }
 
   int *d_keep_running = nullptr;
   CHECK_CUDA(cudaMalloc((void **)&d_keep_running, sizeof(int)));
@@ -63,16 +84,8 @@ int main(int argc, char **argv) {
 
   // The kernel is confirmed resident. Write the readiness marker (if requested)
   // and also print a marker for humans, flushing so it is observable promptly.
-  if (ready_marker_path) {
-    FILE *marker = fopen(ready_marker_path, "w");
-    if (!marker) {
-      fprintf(stderr, "failed to open readiness marker '%s'\n",
-              ready_marker_path);
-      return 1;
-    }
-    fputs("ready\n", marker);
-    fclose(marker);
-  }
+  if (ready_marker_path && !go_marker_path && !WriteMarker(ready_marker_path))
+    return 1;
   printf("CUDA_KERNEL_RESIDENT\n");
   fflush(stdout);
 
