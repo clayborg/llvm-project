@@ -283,6 +283,9 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
       StringExtractorGDBRemote::eServerPacketType_jGPUPluginBreakpointHit,
       &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginBreakpointHit);
   RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_qSymbol,
+      &GDBRemoteCommunicationServerLLGS::Handle_qSymbol);
+  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::
           eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
       &GDBRemoteCommunicationServerLLGS::
@@ -3979,6 +3982,46 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginBreakpointHit(
     }
   }
   return SendErrorResponse(Status::FromErrorString("Invalid plugin name."));
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_qSymbol(
+    StringExtractorGDBRemote &packet) {
+  // The client sends "qSymbol::" when it is ready to look up symbols, then
+  // answers each request with "qSymbol:<value>:<hex name>", leaving the value
+  // empty when it could not resolve the name.
+  llvm::StringRef rest = packet.GetStringRef();
+  rest.consume_front("qSymbol:");
+  std::pair<llvm::StringRef, llvm::StringRef> value_and_name = rest.split(':');
+  if (value_and_name.second.empty()) {
+    m_symbol_lookups_requested.clear();
+  } else {
+    StringExtractor name_extractor(value_and_name.second);
+    std::string name;
+    name_extractor.GetHexByteString(name);
+    std::optional<uint64_t> value;
+    uint64_t address = 0;
+    if (!value_and_name.first.getAsInteger(16, address))
+      value = address;
+    for (auto &plugin_up : m_plugins)
+      plugin_up->SymbolLookedUp(name, value);
+    // The client offers again on its next module load only if its last lookup
+    // failed, so a miss has to end the round.
+    if (!value)
+      return SendOKResponse();
+  }
+
+  for (auto &plugin_up : m_plugins) {
+    for (const std::string &name : plugin_up->GetSymbolsToLookUp()) {
+      if (!m_symbol_lookups_requested.insert(name).second)
+        continue;
+      StreamGDBRemote response;
+      response.PutCString("qSymbol:");
+      response.PutStringAsRawHex8(name);
+      return SendPacketNoLock(response.GetString());
+    }
+  }
+  return SendOKResponse();
 }
 
 GDBRemoteCommunication::PacketResult

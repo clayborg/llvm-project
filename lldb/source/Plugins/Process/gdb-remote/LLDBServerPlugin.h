@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 namespace lldb_private {
 
@@ -146,6 +147,23 @@ public:
   /// way with the native process.
   virtual llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) = 0;
+
+  /// Get the symbols this plug-in still needs the client to look up.
+  ///
+  /// These are requested through qSymbol, which the client offers each time it
+  /// loads modules. Unlike the symbol values delivered with BreakpointWasHit,
+  /// this does not wait for a breakpoint to be hit.
+  virtual std::vector<std::string> GetSymbolsToLookUp() { return {}; }
+
+  /// Receive the client's answer for a name from GetSymbolsToLookUp().
+  ///
+  /// \param[in] name
+  ///     The symbol that was looked up.
+  ///
+  /// \param[in] value
+  ///     Its load address, or std::nullopt if the client could not resolve it.
+  virtual void SymbolLookedUp(llvm::StringRef name,
+                              std::optional<uint64_t> value) {}
 
   /// Get the GPU dynamic libraries from the GPU plug-in.
   ///

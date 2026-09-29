@@ -18,6 +18,7 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/lldb-private-forward.h"
+#include "llvm/ADT/StringSet.h"
 
 #include "GDBRemoteCommunicationServerCommon.h"
 
@@ -105,9 +106,8 @@ public:
   }
 
   /// \return the MainLoop driving this server. GPU server plugins use this to
-  /// schedule timers on the CPU event loop (e.g. the late-attach probe
-  /// cadence), which is the loop running while the attach handshake is still in
-  /// progress.
+  /// run work on the CPU event loop, which is the loop running while the attach
+  /// handshake is still in progress and the thread ptrace requests must use.
   MainLoop &GetMainLoop() { return m_mainloop; }
 
   struct DebuggedProcess {
@@ -158,6 +158,10 @@ protected:
   /// If this GDB server has LLDBServerPlugins, then this will list all 
   /// installed LLDBServerPlugin instances.
   std::vector<std::unique_ptr<lldb_server::LLDBServerPlugin>> m_plugins;
+
+  /// Symbols already requested from the client in the current qSymbol round,
+  /// so one it cannot resolve is not requested again.
+  llvm::StringSet<> m_symbol_lookups_requested;
 
   /// If this GDB server is a LLDBServerPlugin, then this will point to the 
   /// LLDBServerPlugin instance.
@@ -319,6 +323,8 @@ protected:
   PacketResult Handle_jGPUPluginInitialize(StringExtractorGDBRemote &packet);
   
   PacketResult Handle_jGPUPluginBreakpointHit(StringExtractorGDBRemote &packet);
+
+  PacketResult Handle_qSymbol(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
       StringExtractorGDBRemote &packet);

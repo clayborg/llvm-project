@@ -123,6 +123,7 @@ public:
     eServerPacketType_qStepPacketSupported,
     eServerPacketType_qStructuredDataPlugins,
     eServerPacketType_qSupported,
+    eServerPacketType_qSymbol,
     eServerPacketType_qSyncThreadStateSupported,
     eServerPacketType_qThreadExtraInfo,
     eServerPacketType_qThreadStopInfo,
