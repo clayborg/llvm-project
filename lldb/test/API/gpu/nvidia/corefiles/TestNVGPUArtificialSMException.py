@@ -14,6 +14,7 @@ reproduces the resulting state deterministically and without a GPU.
 """
 
 import pathlib
+import re
 import struct
 
 import lldb
@@ -39,6 +40,7 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
     SYMBOL_NAME = "acosf"
     LANE_PC = 0x00007FFFCF280300
     ERROR_PC = 0x00007FFFCF280340
+    SASS_INSTRUCTION_SIZE = 16
 
     # Two faults, so a core can tell one SM's exception from another's. Both
     # predate every revision gate in CUDAExceptionToString, so the tests below
@@ -104,6 +106,14 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
     @staticmethod
     def _thread_names(process):
         return [thread.GetName() for thread in process]
+
+    @staticmethod
+    def _disassembled_pcs(output):
+        """The address of each instruction in disassembly output."""
+        return [
+            int(pc, 16)
+            for pc in re.findall(r"(0x[0-9a-f]+) <\+\d+>:", output)
+        ]
 
     def test_stands_in_for_exception_after_warps_exit(self):
         """A faulted SM whose warps have all exited still names the exception
@@ -177,6 +187,36 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
                 frame.FindRegister(name).GetValueAsUnsigned(0xDEAD), 0xDEAD,
                 f"{name} should be unreadable on the SM-exception stand-in",
             )
+
+    def test_fault_site_disassembles_by_count(self):
+        """The faulting instruction is on screen. The cubin carries no debug
+        info, so selecting the frame shows `stop-disassembly-count`
+        instructions from the error PC; and disassembling the faulting
+        function by count reaches the error PC, four instructions in."""
+        b, dev = self._builder()
+        b.add_sm(
+            dev, sm_id=0, exception=self.DEVICE_ILLEGAL_ADDRESS,
+            error_pc=self.ERROR_PC,
+        )
+        target, process = self.generate_and_load_artificial_core(
+            b, name="disassembly.nvcudmp"
+        )
+        symbol = process.GetThreadAtIndex(0).GetFrameAtIndex(0).GetSymbol()
+        function_start = symbol.GetStartAddress().GetLoadAddress(target)
+
+        self.runCmd("settings set stop-disassembly-display no-debuginfo")
+        self.runCmd("settings set stop-disassembly-count 4")
+        self.runCmd("frame select 0")
+        self.assertEqual(
+            self._disassembled_pcs(self.res.GetOutput()),
+            [self.ERROR_PC + i * self.SASS_INSTRUCTION_SIZE for i in range(4)],
+        )
+
+        self.runCmd(f"disassemble -a {self.ERROR_PC:#x} -c 8")
+        self.assertEqual(
+            self._disassembled_pcs(self.res.GetOutput()),
+            [function_start + i * self.SASS_INSTRUCTION_SIZE for i in range(8)],
+        )
 
     def test_matches_a_real_exited_kernel_core(self):
         """Reproduce the section shape of a real dump -- the one the cuda-gdb
