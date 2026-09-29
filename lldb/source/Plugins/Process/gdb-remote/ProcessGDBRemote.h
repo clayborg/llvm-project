@@ -137,6 +137,8 @@ public:
 
   void DidAttach(ArchSpec &process_arch) override;
 
+  bool ShouldResumeAfterAttach() override;
+
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 

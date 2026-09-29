@@ -165,6 +165,15 @@ public:
   virtual void SymbolLookedUp(llvm::StringRef name,
                               std::optional<uint64_t> value) {}
 
+  /// Called when the client has finished attaching to the native process, if
+  /// it is willing to keep the process running for GPU plug-ins.
+  ///
+  /// \return true if this plug-in needs the native process to run to finish
+  ///     its own attach. The client then resumes the process and waits for the
+  ///     next stop, which this plug-in has to cause once it has finished,
+  ///     failed, or given up.
+  virtual bool ShouldResumeToFinishAttach() { return false; }
+
   /// Get the GPU dynamic libraries from the GPU plug-in.
   ///
   /// If a GPU plug-in decides to launch a stand alone GDB server binary that

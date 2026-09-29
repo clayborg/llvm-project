@@ -190,6 +190,7 @@ public:
     // GPU plug-in packets.
     eServerPacketType_jGPUPluginInitialize,
     eServerPacketType_jGPUPluginBreakpointHit,
+    eServerPacketType_jGPUPluginFinishAttach,
     eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
     eServerPacketType_jGPUGetKernelInfos,
 

@@ -178,6 +178,12 @@ public:
     const uint32_t idx = ePropertyUseGPacketForReading;
     return GetPropertyAtIndexAs<bool>(idx, true);
   }
+
+  bool GetWaitForGPUAttach() const {
+    const uint32_t idx = ePropertyWaitForGPUAttach;
+    return GetPropertyAtIndexAs<bool>(
+        idx, g_processgdbremote_properties[idx].default_uint_value != 0);
+  }
 };
 
 std::chrono::seconds ResumeTimeout() { return std::chrono::seconds(5); }
@@ -1557,6 +1563,14 @@ void ProcessGDBRemote::DidAttach(ArchSpec &process_arch) {
   // If you can figure out what the architecture is, fill it in here.
   process_arch.Clear();
   DidLaunchOrAttach(process_arch);
+}
+
+bool ProcessGDBRemote::ShouldResumeAfterAttach() {
+  // A plug-in that asks for the resume then has to stop the process again, so
+  // only ask when the user is willing to wait for it.
+  if (!GetGlobalPluginProperties().GetWaitForGPUAttach())
+    return false;
+  return m_gdb_comm.FinishGPUPluginAttach();
 }
 
 Status ProcessGDBRemote::WillResume() {

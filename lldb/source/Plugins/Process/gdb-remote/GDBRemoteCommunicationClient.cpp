@@ -695,6 +695,28 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
   return std::nullopt;
 }
 
+bool GDBRemoteCommunicationClient::FinishGPUPluginAttach() {
+  if (m_supports_gpu_plugins != eLazyBoolYes)
+    return false;
+
+  StringExtractorGDBRemote response;
+  response.SetResponseValidatorToJSON();
+  if (SendPacketAndWaitForResponse("jGPUPluginFinishAttach", response) !=
+          PacketResult::Success ||
+      response.IsUnsupportedResponse() || response.IsErrorResponse())
+    return false;
+
+  llvm::Expected<GPUPluginFinishAttachResponse> reply =
+      llvm::json::parse<GPUPluginFinishAttachResponse>(
+          response.Peek(), "GPUPluginFinishAttachResponse");
+  if (!reply) {
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Process), reply.takeError(),
+                   "malformed jGPUPluginFinishAttach response: {0}");
+    return false;
+  }
+  return reply->resume;
+}
+
 std::optional<LLDBSettings>
 GDBRemoteCommunicationClient::GetLLDBSettings() {
   // Get JSON information containing GPU process settings required by a GDB

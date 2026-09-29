@@ -2996,6 +2996,9 @@ Process::AttachCompletionHandler::PerformAction(lldb::EventSP &event_sp) {
                 __FUNCTION__, StateAsCString(state));
 
       m_process->CompleteAttach();
+      // [NVIDIA] The attach then ends at the next stop instead of this one.
+      if (m_process->ShouldResumeAfterAttach())
+        RequestResume();
       return eEventActionSuccess;
     }
     break;

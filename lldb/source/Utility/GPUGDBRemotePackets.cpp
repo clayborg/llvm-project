@@ -224,6 +224,21 @@ llvm::json::Value toJSON(const GPUPluginInitializeArgs &data) {
 }
 
 //------------------------------------------------------------------------------
+// GPUPluginFinishAttachResponse
+//------------------------------------------------------------------------------
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginFinishAttachResponse &data, llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.map("resume", data.resume);
+}
+
+llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data) {
+  return json::Value(Object{
+      {"resume", data.resume},
+  });
+}
+
+//------------------------------------------------------------------------------
 // GPUPluginBreakpointHitResponse
 //------------------------------------------------------------------------------
 

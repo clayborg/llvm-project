@@ -326,6 +326,8 @@ protected:
 
   PacketResult Handle_qSymbol(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_jGPUPluginFinishAttach(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
       StringExtractorGDBRemote &packet);
 

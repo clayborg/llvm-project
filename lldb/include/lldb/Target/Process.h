@@ -1031,6 +1031,14 @@ public:
   /// process.
   virtual void DidAttach(ArchSpec &process_arch) { process_arch.Clear(); }
 
+  /// [NVIDIA] Called once an attach has completed, before the stop that ended
+  /// it is reported.
+  ///
+  /// \return true to resume the process instead of reporting that stop, when
+  ///     something still needs the process to run before the attach is useful.
+  ///     The attach then ends at the next stop.
+  virtual bool ShouldResumeAfterAttach() { return false; }
+
   /// Called after a process re-execs itself.
   ///
   /// Allow Process plug-ins to execute some code after a process has exec'ed

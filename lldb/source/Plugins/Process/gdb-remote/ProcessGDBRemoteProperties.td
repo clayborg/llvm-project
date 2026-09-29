@@ -21,4 +21,11 @@ let Definition = "processgdbremote" in {
     Global,
     DefaultFalse,
     Desc<"Specify if the server should use 'g' packets to read registers.">;
+  def WaitForGPUAttach
+      : Property<"wait-for-gpu-attach", "Boolean">,
+        Global,
+        DefaultTrue,
+        Desc<"When attaching, let GPU plug-ins keep the process running until "
+             "they have finished attaching, so the GPU targets are ready when "
+             "the attach completes.">;
 }

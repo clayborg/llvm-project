@@ -286,6 +286,9 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
       StringExtractorGDBRemote::eServerPacketType_qSymbol,
       &GDBRemoteCommunicationServerLLGS::Handle_qSymbol);
   RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jGPUPluginFinishAttach,
+      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach);
+  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::
           eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
       &GDBRemoteCommunicationServerLLGS::
@@ -4022,6 +4025,19 @@ GDBRemoteCommunicationServerLLGS::Handle_qSymbol(
     }
   }
   return SendOKResponse();
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach(
+    StringExtractorGDBRemote &) {
+  // Every plug-in is asked, since each one that answers yes then owes the
+  // client a stop.
+  GPUPluginFinishAttachResponse finish;
+  for (auto &plugin_up : m_plugins)
+    finish.resume |= plugin_up->ShouldResumeToFinishAttach();
+  StreamGDBRemote response;
+  response.PutAsJSON(finish, /*hex_ascii=*/false);
+  return SendPacketNoLock(response.GetString());
 }
 
 GDBRemoteCommunication::PacketResult

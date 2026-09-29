@@ -446,6 +446,13 @@ public:
   std::optional<std::vector<GPUActions>>
   GetGPUInitializeActions(const GPUPluginInitializeArgs &args);
 
+  /// Tell the GPU plug-ins, with "jGPUPluginFinishAttach", that the attach to
+  /// the native process has finished.
+  ///
+  /// \return true if a plug-in needs the process to keep running to finish its
+  ///     own attach. That plug-in stops the process again once it has.
+  bool FinishGPUPluginAttach();
+
   std::optional<LLDBSettings> GetLLDBSettings();
 
   std::optional<GPUPluginBreakpointHitResponse> 

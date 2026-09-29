@@ -284,6 +284,24 @@ bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
 
 llvm::json::Value toJSON(const GPUPluginInitializeArgs &data);
 
+///-----------------------------------------------------------------------------
+/// GPUPluginFinishAttachResponse
+///
+/// The reply to "jGPUPluginFinishAttach", which the LLDB client sends once it
+/// has finished attaching to the native process.
+///-----------------------------------------------------------------------------
+struct GPUPluginFinishAttachResponse {
+  /// True if a plug-in needs the native process to keep running to finish its
+  /// own attach. The client then resumes it, and the plug-in stops it again
+  /// once it has finished, which ends the attach.
+  bool resume = false;
+};
+
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginFinishAttachResponse &data, llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data);
+
 struct GPUSectionInfo {
   /// Name of the section to load. If there are multiple sections, each section
   /// will be looked up and then a child section within the previous section

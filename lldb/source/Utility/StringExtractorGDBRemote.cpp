@@ -329,6 +329,8 @@ StringExtractorGDBRemote::GetServerPacketType() const {
       return eServerPacketType_jGPUPluginInitialize;
     if (PACKET_STARTS_WITH("jGPUPluginBreakpointHit:"))
       return eServerPacketType_jGPUPluginBreakpointHit;
+    if (PACKET_MATCHES("jGPUPluginFinishAttach"))
+      return eServerPacketType_jGPUPluginFinishAttach;
     if (PACKET_STARTS_WITH("jGPUPluginGetDynamicLoaderLibraryInfo:"))
       return eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo;
     if (PACKET_MATCHES("jGPUGetKernelInfos"))
