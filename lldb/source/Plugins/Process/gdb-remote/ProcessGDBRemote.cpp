@@ -667,10 +667,6 @@ Status ProcessGDBRemote::DoLaunch(lldb_private::Module *exe_module,
 
   LLDB_LOGF(log, "ProcessGDBRemote::%s() entered", __FUNCTION__);
 
-  // Clear any arming left over from a prior attach on a reused object, so a
-  // launch never reports is_attach to the GPU plug-ins.
-  m_gpu_is_attaching = false;
-
   uint32_t launch_flags = launch_info.GetFlags().Get();
   FileSpec stdin_file_spec{};
   FileSpec stdout_file_spec{};

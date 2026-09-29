@@ -214,8 +214,6 @@ llvm::json::Value toJSON(const GPUActions &data) {
 bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
               llvm::json::Path path) {
   ObjectMapper o(value, path);
-  // is_attach is optional: it has a sensible default (false), and older clients
-  // may omit it. mapOptional leaves the default in place when it is absent.
   return o && o.mapOptional("is_attach", data.is_attach);
 }
 

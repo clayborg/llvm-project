@@ -661,38 +661,37 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
   // breakpoints get hit. The arguments tell the plug-ins about the context,
   // such as whether the native process is being attached to versus launched.
 
-  if (m_supports_gpu_plugins != eLazyBoolYes)
-    return std::nullopt;
-
-  StreamGDBRemote packet;
-  packet.PutCString("jGPUPluginInitialize:");
-  packet.PutAsJSON(args, /*hex_ascii=*/false);
-  StringExtractorGDBRemote response;
-  response.SetResponseValidatorToJSON();
-  if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
-      PacketResult::Success)
-    return std::nullopt;
-
-  if (response.IsUnsupportedResponse()) {
-    m_supports_gpu_plugins = eLazyBoolNo;
-    return std::nullopt;
+  if (m_supports_gpu_plugins == eLazyBoolYes) {
+    StreamGDBRemote packet;
+    packet.PutCString("jGPUPluginInitialize:");
+    packet.PutAsJSON(args, /*hex_ascii=*/false);
+    StringExtractorGDBRemote response;
+    response.SetResponseValidatorToJSON();
+    if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
+        PacketResult::Success) {
+      if (response.IsUnsupportedResponse()) {
+        m_supports_gpu_plugins = eLazyBoolNo;
+        return std::nullopt;
+      }
+      if (response.IsErrorResponse()) {
+        Debugger::ReportError(response.GetStatus().AsCString());
+        return std::nullopt;
+      }
+      if (llvm::Expected<std::vector<GPUActions>> info =
+              llvm::json::parse<std::vector<GPUActions>>(response.Peek(),
+                                                         "GPUActions")) {
+        return std::move(*info);
+      } else {
+        // We don't show JSON parsing errors to the user because they won't
+        // make sense to them.
+        llvm::consumeError(info.takeError());
+        Debugger::ReportError(
+            llvm::formatv("malformed jGPUPluginInitialize response packet. {0}",
+                          response.GetStringRef()));
+      }
+    }
   }
-  if (response.IsErrorResponse()) {
-    Debugger::ReportError(response.GetStatus().AsCString());
-    return std::nullopt;
-  }
 
-  llvm::Expected<std::vector<GPUActions>> info =
-      llvm::json::parse<std::vector<GPUActions>>(response.Peek(), "GPUActions");
-  if (info)
-    return std::move(*info);
-
-  // We don't show JSON parsing errors to the user because they won't make
-  // sense to them.
-  llvm::consumeError(info.takeError());
-  Debugger::ReportError(
-      llvm::formatv("malformed jGPUPluginInitialize response packet. {0}",
-                    response.GetStringRef()));
   return std::nullopt;
 }
 
