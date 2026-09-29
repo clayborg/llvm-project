@@ -22,6 +22,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
@@ -277,6 +278,34 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
     return llvm::createStringError("nvdisasm not available");
   }
 
+  const size_t instruction_size = InstructionSASS::GetInstructionByteSize();
+  const addr_t start = base_addr.GetFileAddress();
+  if (start % instruction_size != 0) {
+    LLDB_LOG(log, "Start address {0:x} is not {1}-byte aligned", start,
+             instruction_size);
+    return llvm::createStringError(llvm::formatv(
+        "cannot disassemble at {0:x}: SASS instructions are {1}-byte aligned",
+        start, instruction_size));
+  }
+
+  // nvdisasm rejects input that ends partway through an instruction.
+  const lldb::offset_t whole_size =
+      llvm::alignDown(data.GetByteSize(), instruction_size);
+  if (whole_size == 0) {
+    LLDB_LOG(log, "Only {0} bytes at {1:x}, less than one instruction",
+             data.GetByteSize(), start);
+    return llvm::createStringError(llvm::formatv(
+        "cannot disassemble {0} bytes at {1:x}: SASS instructions are {2} "
+        "bytes",
+        data.GetByteSize(), start, instruction_size));
+  }
+  if (whole_size < data.GetByteSize())
+    LLDB_LOG(log,
+             "Dropping the trailing {0} bytes at {1:x}, which are not a whole "
+             "instruction",
+             data.GetByteSize() - whole_size, start + whole_size);
+  const DataExtractor whole_instructions(data, 0, whole_size);
+
   std::string sm_arch;
   if (llvm::Expected<std::string> sm_arch_or =
           ExtractSmArchFromModule(base_addr)) {
@@ -291,14 +320,14 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
 
   std::string json_output;
   if (llvm::Expected<std::string> json_output_or =
-          InvokeNVDisasm(data, sm_arch, m_nvdisasm_path)) {
+          InvokeNVDisasm(whole_instructions, sm_arch, m_nvdisasm_path)) {
     json_output = std::move(*json_output_or);
   } else {
     return json_output_or.takeError();
   }
 
-  if (llvm::Expected<size_t> parse_result_or =
-          ParseNvdisasmJsonOutput(json_output, base_addr, max_instructions)) {
+  if (llvm::Expected<size_t> parse_result_or = ParseNvdisasmJsonOutput(
+          json_output, whole_instructions, base_addr, max_instructions)) {
     LLDB_LOG(log, "Parsed {0} instructions", *parse_result_or);
     return *parse_result_or;
   } else {
@@ -306,10 +335,9 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
   }
 }
 
-llvm::Expected<size_t>
-DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
-                                          const Address &base_addr,
-                                          size_t max_instructions) {
+llvm::Expected<size_t> DisassemblerSASS::ParseNvdisasmJsonOutput(
+    const std::string &json_output, const DataExtractor &data,
+    const Address &base_addr, size_t max_instructions) {
   Log *log = GetLog(LLDBLog::Disassembler);
   const size_t instruction_size = InstructionSASS::GetInstructionByteSize();
 
@@ -424,6 +452,16 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
 
       inst_addr.Slide(calculated_offset);
 
+      const uint8_t *opcode_bytes =
+          data.PeekData(calculated_offset, instruction_size);
+      if (!opcode_bytes) {
+        LLDB_LOG(log,
+                 "nvdisasm returned an instruction at offset {0:x}, outside "
+                 "the {1} bytes it was given. Stopping disassembly.",
+                 calculated_offset, data.GetByteSize());
+        break;
+      }
+
       // Get optional fields
       std::string operands = operands_val ? operands_val->str() : "";
       std::string predicate = predicate_val ? predicate_val->str() : "";
@@ -454,11 +492,7 @@ DisassemblerSASS::ParseNvdisasmJsonOutput(const std::string &json_output,
       auto inst_sp = std::make_shared<InstructionSASS>(
           inst_addr, opcode_val->str(), operands, predicate, extra,
           other_attributes, other_flags, AddressClass::eCode);
-
-      // Set dummy opcode bytes (we don't have the actual bytes from nvdisasm)
-      // SASS instructions are 8 bytes each
-      uint64_t dummy_opcode = 0;
-      inst_sp->SetOpcode(&dummy_opcode, sizeof(dummy_opcode));
+      inst_sp->SetOpcode(opcode_bytes, instruction_size);
 
       lldb::InstructionSP instruction_sp =
           std::static_pointer_cast<lldb_private::Instruction>(inst_sp);
