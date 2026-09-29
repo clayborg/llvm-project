@@ -383,6 +383,15 @@ static uint32_t AMDGPUVariantFromElfFlags(const elf::ELFHeader &header) {
   return LLDB_INVALID_CPUTYPE; // No subtype.
 }
 
+// [NVIDIA] Only 64-bit CUDA ELFs are supported. The ELF class gives the
+// pointer width for both CUDA e_flags layouts; EF_CUDA_64BIT_ADDRESS exists
+// only in the ELFOSABI_CUDA layout.
+static uint32_t nvptxVariantFromElfFlags(const elf::ELFHeader &header) {
+  if (header.e_ident[EI_CLASS] == llvm::ELF::ELFCLASS64)
+    return ArchSpec::eNVPTXSubType_nvptx64;
+  return ArchSpec::eNVPTXSubType_unknown;
+}
+
 static uint32_t subTypeFromElfHeader(const elf::ELFHeader &header) {
   if (header.e_machine == llvm::ELF::EM_MIPS)
     return mipsVariantFromElfFlags(header);
@@ -394,6 +403,8 @@ static uint32_t subTypeFromElfHeader(const elf::ELFHeader &header) {
     return loongarchVariantFromElfFlags(header);
   else if (header.e_machine == llvm::ELF::EM_AMDGPU)
     return AMDGPUVariantFromElfFlags(header);
+  else if (header.e_machine == llvm::ELF::EM_CUDA) // [NVIDIA]
+    return nvptxVariantFromElfFlags(header);
 
   return LLDB_INVALID_CPUTYPE;
 }

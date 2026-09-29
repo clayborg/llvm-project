@@ -83,7 +83,11 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         self.assertEqual(gpu_process.GetState(), lldb.eStateStopped)
 
         gpu_target = gpu_process.GetTarget()
-        self.assertIn("nvptx", gpu_target.GetTriple(), "GPU target not found in core")
+        self.assertEqual(
+            gpu_target.GetTriple(),
+            "nvptx64-nvidia-cuda",
+            "GPU target should take its triple from the core file",
+        )
 
         self.assertEqual(
             gpu_process.GetPluginName(),

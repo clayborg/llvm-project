@@ -181,6 +181,15 @@ public:
   ///     Reference to the ArchSpec describing the GPU architecture.
   const ArchSpec &GetArchitecture() const override;
 
+  /// Get the architecture of the GPU code this plugin debugs, for use before
+  /// any ProcessNVGPU exists.
+  ///
+  /// \return
+  ///     64-bit NVPTX, built from the ELF mapping the client uses to decode
+  ///     cubins so both sides report the same triple. CUDA 13 produces only
+  ///     64-bit cubins.
+  static ArchSpec GetNVPTXArchitecture();
+
   /// Set a breakpoint at the specified address.
   ///
   /// \param[in] addr

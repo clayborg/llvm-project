@@ -428,6 +428,14 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
             if entry["substr"] is not None:
                 self.assertIn(entry["substr"], thread.GetStopDescription(256))
 
+    def test_modules_are_nvptx64(self):
+        """The core and its cubin decode as nvptx64-nvidia-cuda, so types from
+        the cubin's debug info get 8-byte pointers like the target's."""
+        self.assertGreater(self.core_target.GetNumModules(), 0)
+        for module in self.core_target.module_iter():
+            self.assertEqual(module.GetTriple(), "nvptx64-nvidia-cuda", str(module))
+            int_ptr = module.GetBasicType(lldb.eBasicTypeInt).GetPointerType()
+            self.assertEqual(int_ptr.GetByteSize(), 8, str(module))
     def test_cubin_symbolication(self):
         """The embedded relocated cubin symbolicates the primary thread's PC."""
         self.assertGreater(
