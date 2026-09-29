@@ -292,6 +292,13 @@ TEST(ArchSpecTest, MergeFromMachOUnknown) {
   ASSERT_EQ(A.GetCore(), ArchSpec::eCore_uknownMach64);
 }
 
+TEST(ArchSpecTest, SetArchitectureELFCUDAWithoutOSABI) {
+  ArchSpec arch(eArchTypeELF, llvm::ELF::EM_CUDA,
+                ArchSpec::eNVPTXSubType_nvptx64);
+  EXPECT_EQ(arch.GetCore(), ArchSpec::eCore_nvidia_nvptx64);
+  EXPECT_EQ(arch.GetTriple().getTriple(), "nvptx64-nvidia-cuda");
+}
+
 TEST(ArchSpecTest, Compatibility) {
   {
     ArchSpec A("x86_64-apple-macosx10.12");
