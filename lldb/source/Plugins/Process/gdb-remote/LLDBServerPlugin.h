@@ -150,9 +150,11 @@ public:
 
   /// Get the symbols this plug-in still needs the client to look up.
   ///
-  /// These are requested through qSymbol, which the client offers each time it
-  /// loads modules. Unlike the symbol values delivered with BreakpointWasHit,
-  /// this does not wait for a breakpoint to be hit.
+  /// These are requested through qSymbol when the client loads modules. Unlike
+  /// the symbol values delivered with BreakpointWasHit, this does not wait for
+  /// a breakpoint to be hit. The client stops offering for good after a round
+  /// in which every requested name resolved, including one that requested
+  /// nothing, so a name that becomes needed later is never looked up.
   virtual std::vector<std::string> GetSymbolsToLookUp() { return {}; }
 
   /// Receive the client's answer for a name from GetSymbolsToLookUp().

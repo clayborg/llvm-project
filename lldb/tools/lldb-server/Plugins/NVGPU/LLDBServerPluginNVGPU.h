@@ -57,8 +57,7 @@ private:
   void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
   void OnDebuggerAPIEvent();
   void HandleInternalError(CUDBGResult error_type);
-  void ScheduleInjectedPhaseWatchdog();
-  void TryInitiateAttachServerSide();
+  void TryInitiateSafeAttach();
   void SetAttachStateIfProbing(AttachState state);
   void OnAttachComplete();
 
@@ -146,7 +145,6 @@ private:
   bool m_client_waiting_for_attach = false;
 
   static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
-  static constexpr unsigned kAttachInjectTimeoutSeconds = 60;
   static constexpr unsigned kAttachWaitTimeoutSeconds = 10;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;

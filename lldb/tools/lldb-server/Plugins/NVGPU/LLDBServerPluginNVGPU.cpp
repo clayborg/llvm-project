@@ -187,11 +187,11 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
 llvm::StringRef LLDBServerPluginNVGPU::GetPluginName() { return "nvgpu"; }
 
 std::optional<GPUActions> LLDBServerPluginNVGPU::NativeProcessIsStopping() {
-  TryInitiateAttachServerSide();
+  TryInitiateSafeAttach();
   return std::nullopt;
 }
 
-void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
+void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
   Log *log = GetLog(GDBRLog::Plugin);
   using std::chrono::steady_clock;
 
@@ -216,13 +216,13 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
   // Everything below commits eInjected, falls back to eNone, or stays at
   // eProbing to retry at the next stop.
   if (!cpu_process) {
-    LLDB_LOG(log, "TryInitiateAttachServerSide: no current native process yet");
+    LLDB_LOG(log, "TryInitiateSafeAttach: no current native process yet");
     return;
   }
 
   if (steady_clock::now() > deadline) {
     LLDB_LOG(log,
-             "TryInitiateAttachServerSide: timed out after {0}s trying to "
+             "TryInitiateSafeAttach: timed out after {0}s trying to "
              "initiate the safe attach; falling back to launch-style "
              "initialization.",
              kAttachProbeTimeoutSeconds);
@@ -236,11 +236,11 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
       CUDADebuggerAPI::IsLibcudaLoaded(*cpu_process);
   if (!libcuda_loaded) {
     LLDB_LOG(log,
-             "TryInitiateAttachServerSide: could not read the loaded library "
+             "TryInitiateSafeAttach: could not read the loaded library "
              "list: {0}",
              llvm::toString(libcuda_loaded.takeError()));
   } else if (!*libcuda_loaded) {
-    LLDB_LOG(log, "TryInitiateAttachServerSide: libcuda is not loaded; CUDA "
+    LLDB_LOG(log, "TryInitiateSafeAttach: libcuda is not loaded; CUDA "
                   "will be initialized as on launch.");
     SetAttachStateIfProbing(AttachState::eNone);
     return;
@@ -257,28 +257,19 @@ void LLDBServerPluginNVGPU::TryInitiateAttachServerSide() {
   Expected<bool> initiated =
       CUDADebuggerAPI::InitiateSafeAttach(get_addr, *cpu_process);
   if (!initiated) {
-    LLDB_LOG(log,
-             "TryInitiateAttachServerSide: failed to initiate safe attach: {0}",
+    LLDB_LOG(log, "TryInitiateSafeAttach: failed to initiate safe attach: {0}",
              llvm::toString(initiated.takeError()));
     return;
   }
   if (!*initiated) {
-    LLDB_LOG(log, "TryInitiateAttachServerSide: the driver has not finished "
+    LLDB_LOG(log, "TryInitiateSafeAttach: the driver has not finished "
                   "initializing; retrying at the next stop.");
     return;
   }
 
-  {
-    std::lock_guard<std::mutex> guard(m_attach_mutex);
-    if (m_attach_state != AttachState::eProbing)
-      return;
-    m_attach_state = AttachState::eInjected;
-    m_attach_deadline =
-        steady_clock::now() + std::chrono::seconds(kAttachInjectTimeoutSeconds);
-  }
-  ScheduleInjectedPhaseWatchdog();
-  LLDB_LOG(log, "TryInitiateAttachServerSide: safe attach initiated; waiting "
-                "for CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED.");
+  SetAttachStateIfProbing(AttachState::eInjected);
+  LLDB_LOG(log, "TryInitiateSafeAttach: safe attach initiated; waiting for "
+                "CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED.");
 }
 
 void LLDBServerPluginNVGPU::SetAttachStateIfProbing(AttachState state) {
@@ -315,7 +306,7 @@ void LLDBServerPluginNVGPU::SymbolLookedUp(StringRef name,
   // The client looks symbols up while it completes the attach, with the
   // process still stopped at the attach stop, so the handshake can run now.
   if (have_all)
-    TryInitiateAttachServerSide();
+    TryInitiateSafeAttach();
 }
 
 bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
@@ -350,25 +341,6 @@ bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
       },
       std::chrono::seconds(kAttachWaitTimeoutSeconds));
   return true;
-}
-
-void LLDBServerPluginNVGPU::ScheduleInjectedPhaseWatchdog() {
-  // One-shot, so the warning cannot repeat. This has to run on the native
-  // MainLoop: the GPU MainLoop only starts once the attach it is watching has
-  // completed.
-  m_native_process.GetMainLoop().AddCallback(
-      [this](MainLoopBase &) {
-        std::lock_guard<std::mutex> guard(m_attach_mutex);
-        if (m_attach_state != AttachState::eInjected ||
-            std::chrono::steady_clock::now() <= m_attach_deadline)
-          return;
-        LLDB_LOG(GetLog(GDBRLog::Plugin),
-                 "NVGPU late attach: the driver did not finish injecting the "
-                 "debug engine within {0}s. The CPU process must keep running "
-                 "for it to do so.",
-                 kAttachInjectTimeoutSeconds);
-      },
-      std::chrono::seconds(kAttachInjectTimeoutSeconds));
 }
 
 void LLDBServerPluginNVGPU::OnAttachComplete() {
@@ -615,12 +587,13 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   }
 
   // Still probing means CUDA came up via the launch-style breakpoint during an
-  // attach; leaving eProbing stops the handshake retries.
+  // attach, which makes this a launch; leaving eProbing stops the handshake
+  // retries.
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     m_api_initialized = true;
     if (m_attach_state == AttachState::eProbing)
-      m_attach_state = AttachState::eInjected;
+      m_attach_state = AttachState::eNone;
     // Kept for detach, which has no breakpoint of its own to carry them.
     for (const SymbolValue &symbol : args.symbol_values)
       if (symbol.value)
