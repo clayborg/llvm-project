@@ -10,18 +10,16 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 class TestNVGPUUnwind(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
 
-    def wait_for_stop_reason(self, stop_reason, resume=True):
-        """Continue and retry until thread 0 stops for the expected reason."""
-        while True:
-            if resume:
-                self.gpu_process.Continue()
-                self.select_gpu()
-                self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
+    def continue_to_next_stop(self, stop_reason):
+        """Resume until thread 0 stops for `stop_reason`, then reselect the GPU target.
 
-            if self.gpu_process.thread[0].GetStopReason() == stop_reason:
-                return
-
-            resume = True
+        Thread 0 is pinned because check_backtrace reads thread 0.
+        Each scenario below needs the GPU to reach its next breakpoint, so the
+        current stop is never the one wanted here. Bounded by the base helper so
+        a GPU that never gets there fails instead of hanging.
+        """
+        self.continue_gpu_until_stop_reason(stop_reason, thread_index=0)
+        self.select_gpu()
 
     def check_backtrace(self, test_name, expected_frames):
         """Verify that the backtrace contains the expected frames.
@@ -98,7 +96,8 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(self.dbg.GetNumTargets(), 2)
 
         self.select_gpu()
-        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint, resume=False)
+        # The first GPU stop is the breakpoint itself; confirm it rather than resume.
+        self.assert_gpu_stop_reason(lldb.eStopReasonBreakpoint, thread_index=0)
 
         expected_frames = [
             ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
@@ -127,11 +126,8 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         expected_ra = r20_value | (r21_value << 32)
         self.assertEqual(ra_value, expected_ra)
 
-        # Reset async mode
-        self.dbg.SetAsync(False)
-
         # Test 2: Unwind with arguments
-        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint)
+        self.continue_to_next_stop(lldb.eStopReasonBreakpoint)
 
         expected_frames = [
             ("breakpoint", "unwind.cu", line_number(source, "// gpu breakpoint, frame_breakpoint")),
@@ -144,7 +140,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.check_backtrace("test_unwind_with_arguments", expected_frames)
 
         # Test 3: Unwind with divergent control flow
-        self.wait_for_stop_reason(lldb.eStopReasonBreakpoint)
+        self.continue_to_next_stop(lldb.eStopReasonBreakpoint)
 
         # fmt: off
         expected_frames = [
@@ -160,7 +156,7 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
 
         # Test 4: Unwind with null function pointer (no breakpoint - hits fault directly)
         # Note: This must be the last test because it hits a fault and stops the process
-        self.wait_for_stop_reason(lldb.eStopReasonException)
+        self.continue_to_next_stop(lldb.eStopReasonException)
 
         expected_frames = [
             (None, None, None),  # Invalid address (no debug info)
