@@ -11,14 +11,16 @@ load/compare plumbing (_load_both):
 - test_compare_live_core: a live core from comparison_live.cu, needed for a
   real multi-frame backtrace. Compares frame functions, source line, and PCs.
 
-Requires cuda-gdb on PATH; the live-core test also needs nvcc + a GPU. Tests
-skip cleanly when these are unavailable.
+Requires a cuda-gdb from the CUDA major release the build targets first on
+PATH; the live-core test also needs nvcc + a GPU. Tests skip cleanly when these
+are unavailable.
 """
 
 import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 
 import lldb
@@ -28,6 +30,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     CUDBG_GRID_STATUS_ACTIVE,
+    DEFAULT_CUDA_MAJOR,
     cudbg_exception,
 )
 
@@ -42,6 +45,54 @@ from framework.debugger_interface import DebuggerResult, ThreadInfo
 
 def _get_cuda_gdb_path():
     return shutil.which("cuda-gdb")
+
+
+# CUDA release major in "cuda-gdb --version": 13.x prints
+# "NVIDIA (R) cuda-gdb 13.x", 12.0 prints "12.0 release".
+_CUDA_GDB_VERSION = re.compile(r"cuda-gdb (\d+)\.\d+|(\d+)\.\d+ release")
+
+
+def _cuda_gdb_major(cuda_gdb_path):
+    """CUDA release major of a cuda-gdb, or None if its banner is unreadable."""
+    try:
+        banner = subprocess.run(
+            [cuda_gdb_path, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = _CUDA_GDB_VERSION.search(banner)
+    if not match:
+        return None
+    return int(match.group(1) or match.group(2))
+
+
+def _cuda_gdb_skip_reason():
+    """Why the comparison cannot run here, or None if it can.
+
+    cuda-gdb must come from the CUDA major release the build targets.
+    DEFAULT_CUDA_MAJOR is that release. nvgpu_core_builder reads it from the
+    vendored cudadebugger.h and stamps it into the artificial core. A cuda-gdb
+    from another major cannot read these cores. A cuda-gdb whose version cannot
+    be read is also skipped.
+    """
+    cuda_gdb_path = _get_cuda_gdb_path()
+    if not cuda_gdb_path:
+        return "cuda-gdb not found in PATH"
+    major = _cuda_gdb_major(cuda_gdb_path)
+    if major is None:
+        return f"could not read a CUDA version from '{cuda_gdb_path} --version'"
+    if major != DEFAULT_CUDA_MAJOR:
+        return (
+            f"{cuda_gdb_path} is from CUDA {major}, but this build targets "
+            f"CUDA {DEFAULT_CUDA_MAJOR}; put a CUDA {DEFAULT_CUDA_MAJOR} "
+            "cuda-gdb first in PATH"
+        )
+    return None
 
 
 # Leading "(x,y,z) (x,y,z)" (BlockIdx, ThreadIdx) of a non-coalesced
@@ -59,6 +110,7 @@ def _thread_name(block, thread):
     )
 
 
+@skipTestIfFn(_cuda_gdb_skip_reason)
 class TestNVGPUCoreFileComparison(NVGPUCoreTestBase):
     """Compares LLDB and cuda-gdb on an artificial NVGPU (.nvcudmp) core."""
 
@@ -214,12 +266,10 @@ class TestNVGPUCoreFileComparison(NVGPUCoreTestBase):
     def _load_both(self, core_path):
         """Load an existing .nvcudmp in both debuggers.
 
-        Returns the cuda-gdb driver, LLDB driver, and shared comparator. Skips
-        cleanly if cuda-gdb is unavailable or cannot load the core.
+        Returns the cuda-gdb driver, LLDB driver, and shared comparator. The
+        class-level skip has already checked cuda-gdb.
         """
         cuda_gdb_path = _get_cuda_gdb_path()
-        if not cuda_gdb_path:
-            self.skipTest("cuda-gdb not found in PATH")
 
         # Drop drivers from the previous sub-test so a test method can load
         # several cores without retaining debugger state.
