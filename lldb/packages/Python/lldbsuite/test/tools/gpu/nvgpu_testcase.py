@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 import lldb
 from lldbsuite.test import lldbutil
@@ -286,3 +286,17 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             max_continues=max_continues,
             description=description,
         )
+
+    def read_vec3_register(self, frame: lldb.SBFrame, name: str) -> List[int]:
+        """Read a 3-component (dim3/uint3) vector register as [x, y, z]."""
+        reg = frame.FindRegister(name)
+        self.assertTrue(reg.IsValid(), f"{name} should be a valid register")
+        data = reg.GetData()
+        vals = []
+        for i in range(3):
+            err = lldb.SBError()
+            vals.append(data.GetUnsignedInt32(err, i * 4))
+            self.assertTrue(
+                err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
+            )
+        return vals
