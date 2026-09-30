@@ -3995,10 +3995,13 @@ GDBRemoteCommunicationServerLLGS::Handle_qSymbol(
   // empty when it could not resolve the name.
   llvm::StringRef rest = packet.GetStringRef();
   rest.consume_front("qSymbol:");
-  std::pair<llvm::StringRef, llvm::StringRef> value_and_name = rest.split(':');
-  if (value_and_name.second.empty()) {
+  if (rest == ":") {
     m_symbol_lookups_requested.clear();
   } else {
+    std::pair<llvm::StringRef, llvm::StringRef> value_and_name =
+        rest.split(':');
+    if (value_and_name.second.empty())
+      return SendIllFormedResponse(packet, "qSymbol is missing a symbol name");
     StringExtractor name_extractor(value_and_name.second);
     std::string name;
     name_extractor.GetHexByteString(name);
