@@ -279,13 +279,18 @@ void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
   Expected<bool> initiated =
       CUDADebuggerAPI::InitiateSafeAttach(get_addr, *cpu_process);
   if (!initiated) {
+    std::string message = llvm::toString(initiated.takeError());
     LLDB_LOG(log, "TryInitiateSafeAttach: failed to initiate safe attach: {0}",
-             llvm::toString(initiated.takeError()));
+             message);
+    std::lock_guard<std::mutex> guard(m_attach_mutex);
+    m_attach_start_error = std::move(message);
     return;
   }
   if (!*initiated) {
     LLDB_LOG(log, "TryInitiateSafeAttach: the driver has not finished "
                   "initializing; retrying at the next stop.");
+    std::lock_guard<std::mutex> guard(m_attach_mutex);
+    m_attach_start_error.clear();
     return;
   }
 
@@ -331,18 +336,39 @@ void LLDBServerPluginNVGPU::SymbolLookedUp(StringRef name,
     TryInitiateSafeAttach();
 }
 
-bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
+GPUPluginFinishAttachResponse
+LLDBServerPluginNVGPU::FinishAttach(const GPUPluginFinishAttachArgs &args) {
+  GPUPluginFinishAttachResponse finish;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
+    // Still probing means libcuda is loaded, so CUDA may already be running
+    // and its GPU would never appear without a word to the user.
+    if (m_attach_state == AttachState::eProbing) {
+      for (const std::string &name :
+           CUDADebuggerAPI::GetSafeAttachSymbolNames()) {
+        if (!m_libcuda_symbols.contains(name)) {
+          finish.warnings.push_back(
+              llvm::formatv("cannot attach to the GPU: {0} was not found in "
+                            "libcuda; the CUDA driver may be too old to "
+                            "support attaching to a running application",
+                            name)
+                  .str());
+          break;
+        }
+      }
+      if (finish.warnings.empty() && !m_attach_start_error.empty())
+        finish.warnings.push_back("cannot attach to the GPU: " +
+                                  m_attach_start_error);
+    }
     // Until the driver has the request, running the process will not finish
     // the attach. cuda-gdb does not continue in that case either.
-    if (m_attach_state != AttachState::eInjected)
-      return false;
+    if (!args.may_resume || m_attach_state != AttachState::eInjected)
+      return finish;
     m_client_waiting_for_attach = true;
   }
   LLDB_LOG(GetLog(GDBRLog::Plugin),
-           "ShouldResumeToFinishAttach: the client will run the process until "
-           "the attach completes");
+           "FinishAttach: the client will run the process until the attach "
+           "completes");
 
   // Stop the process if the attach takes too long, so the client's attach
   // cannot hang. If the client is briefly holding the process at a breakpoint,
@@ -364,7 +390,8 @@ bool LLDBServerPluginNVGPU::ShouldResumeToFinishAttach() {
           cpu->Halt();
       },
       timeout);
-  return true;
+  finish.resume = true;
+  return finish;
 }
 
 void LLDBServerPluginNVGPU::OnAttachComplete() {

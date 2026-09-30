@@ -224,17 +224,34 @@ llvm::json::Value toJSON(const GPUPluginInitializeArgs &data) {
 }
 
 //------------------------------------------------------------------------------
+// GPUPluginFinishAttachArgs
+//------------------------------------------------------------------------------
+bool fromJSON(const llvm::json::Value &value, GPUPluginFinishAttachArgs &data,
+              llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.map("may_resume", data.may_resume);
+}
+
+llvm::json::Value toJSON(const GPUPluginFinishAttachArgs &data) {
+  return json::Value(Object{
+      {"may_resume", data.may_resume},
+  });
+}
+
+//------------------------------------------------------------------------------
 // GPUPluginFinishAttachResponse
 //------------------------------------------------------------------------------
 bool fromJSON(const llvm::json::Value &value,
               GPUPluginFinishAttachResponse &data, llvm::json::Path path) {
   ObjectMapper o(value, path);
-  return o && o.map("resume", data.resume);
+  return o && o.map("resume", data.resume) &&
+         o.mapOptional("warnings", data.warnings);
 }
 
 llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data) {
   return json::Value(Object{
       {"resume", data.resume},
+      {"warnings", data.warnings},
   });
 }
 

@@ -449,9 +449,13 @@ public:
   /// Tell the GPU plug-ins, with "jGPUPluginFinishAttach", that the attach to
   /// the native process has finished.
   ///
-  /// \return true if a plug-in needs the process to keep running to finish its
-  ///     own attach. That plug-in stops the process again once it has.
-  bool FinishGPUPluginAttach();
+  /// \return
+  ///     Whether a plug-in needs the process to keep running to finish its own
+  ///     attach, which that plug-in ends by stopping the process again, and
+  ///     any warnings for the user. std::nullopt if the plug-ins could not be
+  ///     asked.
+  std::optional<GPUPluginFinishAttachResponse>
+  FinishGPUPluginAttach(const GPUPluginFinishAttachArgs &args);
 
   std::optional<LLDBSettings> GetLLDBSettings();
 

@@ -4032,12 +4032,23 @@ GDBRemoteCommunicationServerLLGS::Handle_qSymbol(
 
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach(
-    StringExtractorGDBRemote &) {
+    StringExtractorGDBRemote &packet) {
+  packet.ConsumeFront("jGPUPluginFinishAttach:");
+  Expected<GPUPluginFinishAttachArgs> args =
+      json::parse<GPUPluginFinishAttachArgs>(packet.Peek(),
+                                             "GPUPluginFinishAttachArgs");
+  if (!args)
+    return SendErrorResponse(args.takeError());
+
   // Every plug-in is asked, since each one that answers yes then owes the
   // client a stop.
   GPUPluginFinishAttachResponse finish;
-  for (auto &plugin_up : m_plugins)
-    finish.resume |= plugin_up->ShouldResumeToFinishAttach();
+  for (auto &plugin_up : m_plugins) {
+    GPUPluginFinishAttachResponse plugin_finish =
+        plugin_up->FinishAttach(*args);
+    finish.resume |= plugin_finish.resume;
+    llvm::append_range(finish.warnings, plugin_finish.warnings);
+  }
   StreamGDBRemote response;
   response.PutAsJSON(finish, /*hex_ascii=*/false);
   return SendPacketNoLock(response.GetString());

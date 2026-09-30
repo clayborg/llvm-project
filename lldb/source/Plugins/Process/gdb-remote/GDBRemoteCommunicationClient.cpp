@@ -695,16 +695,21 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
   return std::nullopt;
 }
 
-bool GDBRemoteCommunicationClient::FinishGPUPluginAttach() {
+std::optional<GPUPluginFinishAttachResponse>
+GDBRemoteCommunicationClient::FinishGPUPluginAttach(
+    const GPUPluginFinishAttachArgs &args) {
   if (m_supports_gpu_plugins != eLazyBoolYes)
-    return false;
+    return std::nullopt;
 
+  StreamGDBRemote packet;
+  packet.PutCString("jGPUPluginFinishAttach:");
+  packet.PutAsJSON(args, /*hex_ascii=*/false);
   StringExtractorGDBRemote response;
   response.SetResponseValidatorToJSON();
-  if (SendPacketAndWaitForResponse("jGPUPluginFinishAttach", response) !=
+  if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
           PacketResult::Success ||
       response.IsUnsupportedResponse() || response.IsErrorResponse())
-    return false;
+    return std::nullopt;
 
   llvm::Expected<GPUPluginFinishAttachResponse> reply =
       llvm::json::parse<GPUPluginFinishAttachResponse>(
@@ -712,9 +717,9 @@ bool GDBRemoteCommunicationClient::FinishGPUPluginAttach() {
   if (!reply) {
     LLDB_LOG_ERROR(GetLog(GDBRLog::Process), reply.takeError(),
                    "malformed jGPUPluginFinishAttach response: {0}");
-    return false;
+    return std::nullopt;
   }
-  return reply->resume;
+  return *reply;
 }
 
 std::optional<LLDBSettings>

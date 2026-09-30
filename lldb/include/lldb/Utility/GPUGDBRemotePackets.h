@@ -285,16 +285,36 @@ bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
 llvm::json::Value toJSON(const GPUPluginInitializeArgs &data);
 
 ///-----------------------------------------------------------------------------
+/// GPUPluginFinishAttachArgs
+///
+/// Arguments sent by the LLDB client in the "jGPUPluginFinishAttach" packet,
+/// which it sends once it has finished attaching to the native process.
+///-----------------------------------------------------------------------------
+struct GPUPluginFinishAttachArgs {
+  /// True if the client is willing to resume the native process for a plug-in
+  /// that needs it running to finish its own attach.
+  bool may_resume = false;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginFinishAttachArgs &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginFinishAttachArgs &data);
+
+///-----------------------------------------------------------------------------
 /// GPUPluginFinishAttachResponse
 ///
-/// The reply to "jGPUPluginFinishAttach", which the LLDB client sends once it
-/// has finished attaching to the native process.
+/// The reply to "jGPUPluginFinishAttach".
 ///-----------------------------------------------------------------------------
 struct GPUPluginFinishAttachResponse {
   /// True if a plug-in needs the native process to keep running to finish its
   /// own attach. The client then resumes it, and the plug-in stops it again
-  /// once it has finished, which ends the attach.
+  /// once it has finished, which ends the attach. Only set when the client
+  /// said it may resume.
   bool resume = false;
+  /// Why plug-ins cannot attach to their GPUs, for the client to show the
+  /// user.
+  std::vector<std::string> warnings;
 };
 
 bool fromJSON(const llvm::json::Value &value,

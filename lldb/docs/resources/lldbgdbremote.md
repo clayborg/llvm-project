@@ -297,29 +297,39 @@ plug-ins.
 ## jGPUPluginFinishAttach
 
 Tell the GPU plug-ins in the native process' lldb-server that LLDB has finished
-attaching to the native process, and ask whether any of them needs the process
-to keep running to finish attaching to its GPU. This packet takes no arguments.
+attaching to the native process, ask whether any of them needs the process to
+keep running to finish attaching to its GPU, and collect the reasons any of them
+cannot attach to its GPU. LLDB sends it just before it would report the stop
+that ends an attach, if the stub advertised `gpu-plugins+`.
 
-LLDB sends it just before it would report the stop that ends an attach, if the
-stub advertised `gpu-plugins+` and the
-`plugin.process.gdb-remote.wait-for-gpu-attach` setting is true, which is the
-default.
+The packet is followed by a JSON dictionary with one key:
 
-The reply is a JSON dictionary with a single key, `resume`. When it is true,
-LLDB resumes the native process instead of reporting the stop, and the attach
-ends at the next stop. A plug-in that asks for this has to stop the native
-process once it has finished attaching to its GPU, or has failed or given up,
-because LLDB keeps waiting until then.
+* `may_resume`: true if LLDB is willing to resume the process for a plug-in that
+  needs it running. It is the value of the
+  `plugin.process.gdb-remote.wait-for-gpu-attach` setting, which is true by
+  default.
+
+The reply is a JSON dictionary with these keys:
+
+* `resume`: true if a plug-in needs the process running, which a stub only
+  answers when `may_resume` is true. LLDB then resumes the native process
+  instead of reporting the stop, and the attach ends at the next stop. A
+  plug-in that asks for this has to stop the native process once it has
+  finished attaching to its GPU, or has failed or given up, because LLDB keeps
+  waiting until then.
+* `warnings` (optional): an array of strings, each explaining why a plug-in
+  cannot attach to its GPU. LLDB shows them to the user.
 
 ```
-LLDB SENDS: jGPUPluginFinishAttach
-STUB REPLIES: {"resume":true}
+LLDB SENDS: jGPUPluginFinishAttach:{"may_resume":true}
+STUB REPLIES: {"resume":true,"warnings":[]}
 ```
 
 LLDB treats an error or unsupported reply as `{"resume":false}`.
 
 **Priority To Implement:** Low. This packet is only needed by stubs with GPU
-plug-ins that need the process to run while they attach.
+plug-ins that need the process to run while they attach, or that can fail to
+attach to their GPU.
 
 ## jGPUPluginGetDynamicLoaderLibraryInfo
 

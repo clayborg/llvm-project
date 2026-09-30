@@ -38,7 +38,8 @@ public:
   std::vector<std::string> GetSymbolsToLookUp() override;
   void SymbolLookedUp(llvm::StringRef name,
                       std::optional<uint64_t> value) override;
-  bool ShouldResumeToFinishAttach() override;
+  GPUPluginFinishAttachResponse
+  FinishAttach(const GPUPluginFinishAttachArgs &args) override;
 
 private:
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
@@ -142,6 +143,10 @@ private:
   /// safe attach handshake and from the initialization breakpoints. Detach
   /// uses them too.
   llvm::StringMap<uint64_t> m_libcuda_symbols;
+
+  /// Why the last request for a safe attach failed, empty if it did not. The
+  /// user is told if the attach completes without the request going through.
+  std::string m_attach_start_error;
 
   /// Not derivable from m_attach_state, which reaches eInjected when the magic
   /// byte is written -- before the API is brought up.

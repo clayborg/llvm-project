@@ -177,7 +177,10 @@ uses the driver's safe attach mechanism:
 #. Once LLDB has finished attaching to the CPU process, it asks the GPU
    plug-ins (via ``jGPUPluginFinishAttach``) whether one of them needs the
    process to keep running. The NVGPU plugin answers yes when it has written
-   that byte, and stops the process again once its attach has finished.
+   that byte, and stops the process again once its attach has finished. If it
+   could not ask the driver, because ``libcuda`` lacks one of the handshake
+   symbols or the request failed, LLDB shows a warning saying why the GPU
+   cannot be attached to.
 #. When the driver finishes injecting the debug engine it calls
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
    it initializes the CUDA debugger API exactly like the launch path.
@@ -195,7 +198,8 @@ driver that exports ``cudbgInitiateDebuggerAttachProcedureFd``. The legacy
 call in the inferior, and is error-prone when the application is stopped in a
 signal-unsafe state) is intentionally not supported. Attaching to a process
 running on a CUDA driver that is too old to provide the safe attach procedure
-is not supported; use a newer driver.
+is not supported: LLDB warns that it cannot attach to the GPU. Use a newer
+driver.
 
 Detaching and re-attaching
 """"""""""""""""""""""""""

@@ -1567,10 +1567,17 @@ void ProcessGDBRemote::DidAttach(ArchSpec &process_arch) {
 
 bool ProcessGDBRemote::ShouldResumeAfterAttach() {
   // A plug-in that asks for the resume then has to stop the process again, so
-  // only ask when the user is willing to wait for it.
-  if (!GetGlobalPluginProperties().GetWaitForGPUAttach())
+  // only offer it when the user is willing to wait for it. Ask either way, so
+  // the user still hears why a GPU cannot be attached to.
+  GPUPluginFinishAttachArgs args;
+  args.may_resume = GetGlobalPluginProperties().GetWaitForGPUAttach();
+  std::optional<GPUPluginFinishAttachResponse> finish =
+      m_gdb_comm.FinishGPUPluginAttach(args);
+  if (!finish)
     return false;
-  return m_gdb_comm.FinishGPUPluginAttach();
+  for (const std::string &warning : finish->warnings)
+    Debugger::ReportWarning(warning, GetTarget().GetDebugger().GetID());
+  return args.may_resume && finish->resume;
 }
 
 Status ProcessGDBRemote::WillResume() {
