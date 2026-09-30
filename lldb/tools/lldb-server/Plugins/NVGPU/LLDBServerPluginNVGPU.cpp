@@ -15,7 +15,6 @@
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/State.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/DenseSet.h"
@@ -879,39 +878,18 @@ llvm::Error LLDBServerPluginNVGPU::RunOnNativeMainLoop(
   return createStringError(message);
 }
 
-lldb::StateType LLDBServerPluginNVGPU::HaltNativeProcess() {
-  Log *log = GetLog(GDBRLog::Plugin);
-  // Written on the native thread. Shared so that a check still queued after
-  // RunOnNativeMainLoop gives up has somewhere to write.
-  auto state = std::make_shared<lldb::StateType>(lldb::eStateInvalid);
-  auto halt = [state](NativeProcessProtocol &cpu) -> Error {
-    if (cpu.IsRunning()) {
-      if (Error err = cpu.Halt().ToError())
-        return err;
-    }
-    *state = cpu.GetState();
-    return Error::success();
+void LLDBServerPluginNVGPU::HaltNativeProcess() {
+  auto halt = [this](MainLoopBase &) {
+    NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess();
+    if (!cpu || !cpu->IsRunning())
+      return;
+    if (Status status = cpu->Halt(); status.Fail())
+      LLDB_LOG(GetLog(GDBRLog::Plugin), "HaltNativeProcess: {0}", status);
   };
-  auto check = [state](NativeProcessProtocol &cpu) -> Error {
-    *state = cpu.GetState();
-    return Error::success();
-  };
-
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::seconds(kNativeHaltTimeoutSeconds);
-  if (Error err = RunOnNativeMainLoop(halt)) {
-    LLDB_LOG(log, "HaltNativeProcess: {0}", llvm::toString(std::move(err)));
-    return lldb::eStateInvalid;
-  }
-  while (StateIsRunningState(*state) &&
-         std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    if (Error err = RunOnNativeMainLoop(check)) {
-      LLDB_LOG(log, "HaltNativeProcess: {0}", llvm::toString(std::move(err)));
-      return lldb::eStateInvalid;
-    }
-  }
-  return *state;
+  if (!m_native_process.GetMainLoop().AddPendingCallback(halt))
+    LLDB_LOG(GetLog(GDBRLog::Plugin),
+             "HaltNativeProcess: the native MainLoop is no longer accepting "
+             "work");
 }
 
 GPUPluginPrepareDetachResponse LLDBServerPluginNVGPU::PrepareDetach() {

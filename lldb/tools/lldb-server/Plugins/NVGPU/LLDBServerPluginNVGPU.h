@@ -81,16 +81,12 @@ private:
   llvm::Error
   RunOnNativeMainLoop(std::function<llvm::Error(NativeProcessProtocol &)> work);
 
-  /// Stop the native process if it is running, and wait up to
-  /// kNativeHaltTimeoutSeconds for it to stop. The base class's
-  /// HaltNativeProcessIfNeeded polls the process from the calling thread, which
-  /// reads freed memory if the inferior exits meanwhile, so everything that
-  /// touches the process goes through RunOnNativeMainLoop instead.
-  ///
-  /// \return
-  ///     The state of the process afterwards, or eStateInvalid if it could not
-  ///     be read, for example because the inferior has exited.
-  lldb::StateType HaltNativeProcess();
+  /// Have the native thread stop the native process if it is running, which
+  /// that thread then reports to the client, and return without waiting for the
+  /// stop, which no caller needs. The base class's HaltNativeProcessIfNeeded
+  /// instead polls the process from the calling thread, which reads freed
+  /// memory if the inferior exits meanwhile.
+  void HaltNativeProcess();
 
   /// The last step of a detach, when the client sends "D": release the
   /// debugger API. A client that skipped PrepareDetach and FinishDetach only
@@ -171,7 +167,6 @@ private:
   static constexpr unsigned kAttachWaitTimeoutSeconds = 10;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;
-  static constexpr unsigned kNativeHaltTimeoutSeconds = 5;
 };
 
 } // namespace lldb_private::lldb_server
