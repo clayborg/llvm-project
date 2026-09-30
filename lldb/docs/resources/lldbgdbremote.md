@@ -2382,16 +2382,16 @@ symbol:
 read packet: qSymbol:6578616D706C65
 ```
 
-This should be looked up by LLDB then sent back to the server. Include the name
-again, with the vaue as a hex number:
+This should be looked up by LLDB then sent back to the server, with the value as
+a hex number followed by the name again:
 ```
-read packet: qSymbol:6578616D706C65:CAFEF00D
+send packet: qSymbol:CAFEF00D:6578616D706C65
 ```
 
-If LLDB cannot find the value, it should respond with only the name. Note that
-the second `:` is not included here, whereas it is in the initial packet.
+If LLDB cannot find the value, it leaves the value empty. Both `:` are still
+included, as in the initial packet:
 ```
-read packet: qSymbol:6578616D706C65
+send packet: qSymbol::6578616D706C65
 ```
 
 If LLDB is asked for any symbols that it cannot find, it should send the
@@ -2401,7 +2401,7 @@ the symbol can now be resolved.
 If the debug server has requested all the symbols it wants, the final response
 will be `OK` (whether they were all found or not).
 
-If LLDB did find all the symbols and recieves an `OK` it does not need to send
+If LLDB did find all the symbols and receives an `OK` it does not need to send
 `qSymbol::` again during the debug session.
 
 lldb-server uses this exchange for GPU plug-ins that need symbol values from the
