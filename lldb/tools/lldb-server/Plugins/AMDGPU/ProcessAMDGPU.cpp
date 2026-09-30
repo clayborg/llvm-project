@@ -13,6 +13,7 @@
 
 #include "LLDBServerPluginAMDGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
+#include "lldb/Host/FileSystem.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Utility/AmdGpuAddressSpaces.h"
 #include "lldb/Utility/AmdGpuCoreUtils.h"
@@ -221,18 +222,41 @@ Status ProcessAMDGPU::Kill() { return Status(); }
 
 Status ProcessAMDGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                  size_t &bytes_read) {
-  NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
-  if (!native_process)
-    return Status::FromErrorString("native process is unavailable");
-  return native_process->ReadMemory(addr, buf, size, bytes_read);
+  llvm::Expected<File *> file = GetProcessMemoryFile();
+  if (!file)
+    return Status::FromError(file.takeError());
+
+  off_t offset = static_cast<off_t>(addr);
+  bytes_read = size;
+  return (*file)->Read(buf, bytes_read, offset);
 }
 
 Status ProcessAMDGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                   size_t size, size_t &bytes_written) {
-  NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
-  if (!native_process)
-    return Status::FromErrorString("native process is unavailable");
-  return native_process->WriteMemory(addr, buf, size, bytes_written);
+  llvm::Expected<File *> file = GetProcessMemoryFile();
+  if (!file)
+    return Status::FromError(file.takeError());
+
+  off_t offset = static_cast<off_t>(addr);
+  bytes_written = size;
+  return (*file)->Write(buf, bytes_written, offset);
+}
+
+llvm::Expected<File *> ProcessAMDGPU::GetProcessMemoryFile() {
+  if (!m_process_memory_file) {
+    NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
+    if (!native_process)
+      return llvm::createStringError("native process is unavailable");
+
+    FileSpec file_spec("/proc/" + std::to_string(native_process->GetID()) +
+                       "/mem");
+    auto file = FileSystem::Instance().Open(
+        file_spec, File::eOpenOptionReadWrite | File::eOpenOptionCloseOnExec);
+    if (!file)
+      return file.takeError();
+    m_process_memory_file = std::move(*file);
+  }
+  return m_process_memory_file.get();
 }
 
 std::vector<AddressSpaceInfo> ProcessAMDGPU::GetAddressSpaces() {

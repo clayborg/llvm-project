@@ -13,6 +13,7 @@
 #include "GpuModuleManager.h"
 #include "ThreadAMDGPU.h"
 #include "WaveAMDGPU.h"
+#include "lldb/Host/File.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include <amd-dbgapi/amd-dbgapi.h>
@@ -30,6 +31,7 @@ class ProcessAMDGPU : public NativeProcessProtocol {
   // TODO: change NativeProcessProtocol::GetArchitecture() to return by value
   mutable ArchSpec m_arch;
   ProcessInstanceInfo m_process_info;
+  std::unique_ptr<File> m_process_memory_file;
 
 public:
   ProcessAMDGPU(lldb::pid_t pid, NativeDelegate &delegate,
@@ -170,6 +172,7 @@ private:
   // created.
   bool m_wave_creation_stopped = false;
 
+  llvm::Expected<File *> GetProcessMemoryFile();
   WaveAMDGPU &GetOrCreateWave(amd_dbgapi_wave_id_t wave_id);
   llvm::Error SetWaveCreationStopped(bool stopped);
   void UpdateWaveList();
