@@ -148,6 +148,9 @@ private:
   amd_dbgapi_architecture_id_t m_architecture_id = AMD_DBGAPI_ARCHITECTURE_NONE;
   std::vector<uint8_t> m_breakpoint_trap_opcode;
   WaveIdMap<std::shared_ptr<WaveAMDGPU>> m_waves;
+  // Physical wave from the latest stop event awaiting current-thread
+  // selection after its logical lane threads are refreshed.
+  std::optional<amd_dbgapi_wave_id_t> m_pending_notification_wave_id;
   WaveAMDGPU &GetOrCreateWave(amd_dbgapi_wave_id_t wave_id);
   void UpdateWaveList();
   llvm::Expected<DbgApiClientMemoryPtr<amd_dbgapi_wave_id_t>>
