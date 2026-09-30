@@ -256,6 +256,54 @@ llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data) {
 }
 
 //------------------------------------------------------------------------------
+// GPUPluginPrepareDetachResponse
+//------------------------------------------------------------------------------
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginPrepareDetachResponse &data, llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.map("resume_native", data.resume_native) &&
+         o.mapOptional("pass_signals", data.pass_signals);
+}
+
+llvm::json::Value toJSON(const GPUPluginPrepareDetachResponse &data) {
+  return json::Value(Object{
+      {"resume_native", data.resume_native},
+      {"pass_signals", data.pass_signals},
+  });
+}
+
+//------------------------------------------------------------------------------
+// GPUMemoryWrite
+//------------------------------------------------------------------------------
+bool fromJSON(const llvm::json::Value &value, GPUMemoryWrite &data,
+              llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.map("address", data.address) && o.map("bytes", data.bytes);
+}
+
+llvm::json::Value toJSON(const GPUMemoryWrite &data) {
+  return json::Value(Object{
+      {"address", data.address},
+      {"bytes", data.bytes},
+  });
+}
+
+//------------------------------------------------------------------------------
+// GPUPluginFinishDetachResponse
+//------------------------------------------------------------------------------
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginFinishDetachResponse &data, llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.mapOptional("memory_writes", data.memory_writes);
+}
+
+llvm::json::Value toJSON(const GPUPluginFinishDetachResponse &data) {
+  return json::Value(Object{
+      {"memory_writes", data.memory_writes},
+  });
+}
+
+//------------------------------------------------------------------------------
 // GPUPluginBreakpointHitResponse
 //------------------------------------------------------------------------------
 

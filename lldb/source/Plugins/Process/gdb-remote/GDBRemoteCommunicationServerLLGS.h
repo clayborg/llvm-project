@@ -328,6 +328,10 @@ protected:
 
   PacketResult Handle_jGPUPluginFinishAttach(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_jGPUPluginPrepareDetach(StringExtractorGDBRemote &packet);
+
+  PacketResult Handle_jGPUPluginFinishDetach(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
       StringExtractorGDBRemote &packet);
 

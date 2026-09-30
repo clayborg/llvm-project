@@ -914,79 +914,139 @@ lldb::StateType LLDBServerPluginNVGPU::HaltNativeProcess() {
   return *state;
 }
 
-void LLDBServerPluginNVGPU::DetachCleanup() {
+GPUPluginPrepareDetachResponse LLDBServerPluginNVGPU::PrepareDetach() {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "LLDBServerPluginNVGPU::DetachCleanup()");
+  LLDB_LOG(log, "LLDBServerPluginNVGPU::PrepareDetach()");
+  GPUPluginPrepareDetachResponse prepare;
 
   // A faulted API must not be called again; the steps below skip it.
   bool faulted = false;
+  llvm::StringMap<uint64_t> symbols;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     faulted = m_api_faulted;
     m_attach_state = AttachState::eDetaching;
+    symbols = m_libcuda_symbols;
   }
+  m_detach_step = DetachStep::ePrepared;
 
-  // 1. Tear the device breakpoints down first, while the API and devices are
+  // Tear the device breakpoints down first, while the API and devices are
   // still valid. The debug API otherwise leaves them set on the device. lldb
   // removes its own before detaching, so this catches any a client left.
   if (m_gpu && !faulted)
     m_gpu->TeardownDeviceBreakpoints();
 
   CUDBGAPI api = m_gpu ? m_gpu->GetDebuggerAPI() : nullptr;
+  if (!api || faulted)
+    return prepare;
 
-  // Only read before step 3 resumes the application: once it runs it can exit,
-  // and the native thread then destroys this process.
-  NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess();
+  // Whether the driver needs the application running to complete its cleanup.
+  // Kept raw because requestCleanupOnDetach takes it verbatim.
+  auto resume_flags = std::make_shared<uint32_t>(0);
+  auto read = [symbols, resume_flags](NativeProcessProtocol &cpu) -> Error {
+    Expected<uint32_t> flags = CUDADebuggerAPI::ReadResumeForAttachDetach(
+        [&symbols](StringRef name) { return LookupSymbol(symbols, name); },
+        cpu);
+    if (!flags)
+      return flags.takeError();
+    *resume_flags = *flags;
+    return Error::success();
+  };
+  if (Error err = RunOnNativeMainLoop(read))
+    LLDB_LOG(log, "PrepareDetach: could not read the resume flag: {0}",
+             llvm::toString(std::move(err)));
+  LLDB_LOG(log, "PrepareDetach: resume_for_detach={0}", *resume_flags);
+  if (!*resume_flags)
+    return prepare;
 
+  // A flag word, not a boolean: cuda-gdb passes it through too, and is seen
+  // passing 3 when it requests more capabilities than we do.
+  CUDBGResult res = api->requestCleanupOnDetach(*resume_flags);
+  if (res != CUDBG_SUCCESS)
+    LLDB_LOG(log, "PrepareDetach: requestCleanupOnDetach failed: {0}",
+             cudbgGetErrorString(res));
+  for (DeviceState &device : m_gpu->GetAllDevices().GetDevices()) {
+    CUDBGResult dres = api->resumeDevice(device.GetDeviceId());
+    if (dres != CUDBG_SUCCESS)
+      LLDB_LOG(log, "PrepareDetach: resumeDevice {0} failed: {1}",
+               device.GetDeviceId(), cudbgGetErrorString(dres));
+  }
+
+  // The driver can only clean up while the application runs, which the client
+  // does for us. Passing these signals through keeps an ordinary one from
+  // stopping the application before the driver has finished.
+  m_detach_step = DetachStep::eCleanupRequested;
+  prepare.resume_native = true;
+  llvm::SmallVector<int, 64> bypass = GetBypassSignals();
+  prepare.pass_signals.assign(bypass.begin(), bypass.end());
+  return prepare;
+}
+
+GPUPluginFinishDetachResponse LLDBServerPluginNVGPU::FinishDetach() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "LLDBServerPluginNVGPU::FinishDetach()");
+
+  if (m_detach_step == DetachStep::eCleanupRequested)
+    DrainUntilDetachComplete();
+
+  bool faulted = false;
   llvm::StringMap<uint64_t> symbols;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
+    faulted = m_api_faulted;
     symbols = m_libcuda_symbols;
   }
-  if (symbols.empty())
-    LLDB_LOG(log, "DetachCleanup: no libcuda symbols were ever delivered; "
-                  "skipping the driver handshake cleanup");
-  auto get_addr = [&symbols](StringRef name) {
-    return LookupSymbol(symbols, name);
-  };
-
-  // 2. Whether the driver needs the application resumed to complete its
-  // cleanup. Kept raw because requestCleanupOnDetach takes it verbatim below.
-  uint32_t resume_for_detach = 0;
-  if (cpu && !symbols.empty()) {
-    if (Expected<uint32_t> resume =
-            CUDADebuggerAPI::ReadResumeForAttachDetach(get_addr, *cpu))
-      resume_for_detach = *resume;
-    else
-      LLDB_LOG(log, "DetachCleanup: could not read the resume flag: {0}",
-               llvm::toString(resume.takeError()));
-  }
-  LLDB_LOG(log, "DetachCleanup: resume_for_detach={0}, api_faulted={1}",
-           resume_for_detach, faulted);
-
-  // 3. Let the driver clean up, which it can only do while the app runs.
-  if (resume_for_detach && api && !faulted)
-    ResumeForDriverCleanup(api, resume_for_detach);
-
-  // 4. Clear the attach-specific driver state.
+  CUDBGAPI api = m_gpu ? m_gpu->GetDebuggerAPI() : nullptr;
   if (api && !faulted) {
     CUDBGResult res = api->clearAttachState();
     if (res != CUDBG_SUCCESS)
-      LLDB_LOG(log, "DetachCleanup: clearAttachState failed: {0}",
+      LLDB_LOG(log, "FinishDetach: clearAttachState failed: {0}",
                cudbgGetErrorString(res));
   }
+  m_detach_step = DetachStep::eFinished;
 
-  // 5. Only now reset the handshake flags, so a later debugger re-negotiates.
+  // Only now reset the handshake flags, so a later debugger re-negotiates.
   // cudbgIpcFlag is what authorizes the driver to emit callbacks, so clearing
-  // it before step 3 cuts off the mechanism that cleanup runs on and leaves the
-  // driver believing a debugger is still attached, which in turn stops it
-  // re-running its attach procedure for a later re-attach.
-  if (!symbols.empty())
-    ResetDriverHandshakeFlags(symbols);
+  // it before the driver's cleanup cuts off the mechanism that cleanup runs on
+  // and leaves the driver believing a debugger is still attached, which in turn
+  // stops it re-running its attach procedure for a later re-attach. The client
+  // makes the writes once it has stopped the application again.
+  GPUPluginFinishDetachResponse finish;
+  finish.memory_writes = CUDADebuggerAPI::GetDetachResetWrites(
+      [&symbols](StringRef name) { return LookupSymbol(symbols, name); });
+  return finish;
+}
 
-  // 6. Drop the API and everything pointing into it.
+void LLDBServerPluginNVGPU::DetachCleanup() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "LLDBServerPluginNVGPU::DetachCleanup()");
+
+  // A client that did not drive the detach still gets the GPU released. The
+  // driver's own cleanup and the handshake reset are skipped: they need the
+  // application run and then written to, which only the client can do safely.
+  if (m_detach_step != DetachStep::eFinished) {
+    LLDB_LOG(log, "DetachCleanup: the client did not drive the detach; "
+                  "releasing the GPU without the driver's cleanup");
+    bool faulted = false;
+    {
+      std::lock_guard<std::mutex> guard(m_attach_mutex);
+      faulted = m_api_faulted;
+      m_attach_state = AttachState::eDetaching;
+    }
+    if (m_gpu && !faulted) {
+      if (m_detach_step == DetachStep::eNone)
+        m_gpu->TeardownDeviceBreakpoints();
+      if (CUDBGAPI api = m_gpu->GetDebuggerAPI()) {
+        CUDBGResult res = api->clearAttachState();
+        if (res != CUDBG_SUCCESS)
+          LLDB_LOG(log, "DetachCleanup: clearAttachState failed: {0}",
+                   cudbgGetErrorString(res));
+      }
+    }
+  }
+
   ReleaseDebuggerAPI();
-
+  m_detach_step = DetachStep::eNone;
   {
     std::lock_guard<std::mutex> guard(m_attach_mutex);
     m_attach_state = AttachState::eNone;
@@ -994,58 +1054,6 @@ void LLDBServerPluginNVGPU::DetachCleanup() {
   }
 
   LLDB_LOG(log, "DetachCleanup: complete");
-}
-
-void LLDBServerPluginNVGPU::ResumeForDriverCleanup(CUDBGAPI api,
-                                                   uint32_t resume_flags) {
-  Log *log = GetLog(GDBRLog::Plugin);
-
-  // A flag word, not a boolean: cuda-gdb passes it through too, and is seen
-  // passing 3 when it requests more capabilities than we do.
-  CUDBGResult res = api->requestCleanupOnDetach(resume_flags);
-  if (res != CUDBG_SUCCESS)
-    LLDB_LOG(log, "DetachCleanup: requestCleanupOnDetach failed: {0}",
-             cudbgGetErrorString(res));
-
-  if (m_gpu) {
-    for (DeviceState &device : m_gpu->GetAllDevices().GetDevices()) {
-      CUDBGResult dres = api->resumeDevice(device.GetDeviceId());
-      if (dres != CUDBG_SUCCESS)
-        LLDB_LOG(log, "DetachCleanup: resumeDevice {0} failed: {1}",
-                 device.GetDeviceId(), cudbgGetErrorString(dres));
-    }
-  }
-
-  // Resuming is PTRACE_CONT, so it has to happen on the native thread. So does
-  // changing the ignored signals, which that thread reads whenever the inferior
-  // gets one; passing them through keeps an ordinary signal from stopping the
-  // application before the driver has finished.
-  std::shared_ptr<llvm::DenseSet<int>> saved_signals =
-      std::make_shared<llvm::DenseSet<int>>();
-  auto resume = [saved_signals](NativeProcessProtocol &cpu) -> Error {
-    *saved_signals = cpu.GetIgnoredSignals();
-    cpu.IgnoreSignals(GetBypassSignals());
-    // Still running if the GPU stop did not stop the CPU; see
-    // NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP.
-    if (cpu.IsRunning())
-      return Error::success();
-    ResumeActionList resume_actions(lldb::eStateRunning,
-                                    LLDB_INVALID_SIGNAL_NUMBER);
-    return cpu.Resume(resume_actions).ToError();
-  };
-  if (Error err = RunOnNativeMainLoop(resume))
-    LLDB_LOG(log, "DetachCleanup: failed to resume the CPU process: {0}",
-             llvm::toString(std::move(err)));
-
-  DrainUntilDetachComplete();
-
-  auto restore_signals = [saved_signals](NativeProcessProtocol &cpu) -> Error {
-    cpu.IgnoreSignals(llvm::to_vector(*saved_signals));
-    return Error::success();
-  };
-  if (Error err = RunOnNativeMainLoop(restore_signals))
-    LLDB_LOG(log, "DetachCleanup: failed to restore the ignored signals: {0}",
-             llvm::toString(std::move(err)));
 }
 
 void LLDBServerPluginNVGPU::DrainUntilDetachComplete() {
@@ -1060,7 +1068,7 @@ void LLDBServerPluginNVGPU::DrainUntilDetachComplete() {
   for (int i = 0; i < kDetachMaxIterations && !finished(); ++i) {
     Expected<int> handled = DrainSyncEventsOnce();
     if (!handled) {
-      LLDB_LOG(log, "DetachCleanup: stopped waiting for the driver: {0}",
+      LLDB_LOG(log, "FinishDetach: stopped waiting for the driver: {0}",
                llvm::toString(handled.takeError()));
       return;
     }
@@ -1070,31 +1078,9 @@ void LLDBServerPluginNVGPU::DrainUntilDetachComplete() {
 
   if (!finished())
     LLDB_LOG(log,
-             "DetachCleanup: detach cleanup did not complete after {0} "
+             "FinishDetach: the driver's cleanup did not complete after {0} "
              "iterations; proceeding with teardown anyway.",
              kDetachMaxIterations);
-}
-
-void LLDBServerPluginNVGPU::ResetDriverHandshakeFlags(
-    const llvm::StringMap<uint64_t> &symbols) {
-  Log *log = GetLog(GDBRLog::Plugin);
-
-  // Step 3 left the application running, and ptrace refuses to write to a
-  // running tracee. cuda-gdb interrupts the target at this same point.
-  lldb::StateType state = HaltNativeProcess();
-  LLDB_LOG(log, "DetachCleanup: halted the app for the flag reset (state {0})",
-           StateToString(state));
-
-  auto reset = [symbols](NativeProcessProtocol &cpu) -> Error {
-    return CUDADebuggerAPI::ResetDetachSymbols(
-        [&symbols](StringRef name) { return LookupSymbol(symbols, name); },
-        cpu);
-  };
-  if (Error err = RunOnNativeMainLoop(reset))
-    LLDB_LOG(log, "DetachCleanup: failed to reset detach symbols: {0}",
-             llvm::toString(std::move(err)));
-  else
-    LLDB_LOG(log, "DetachCleanup: reset the driver handshake flags");
 }
 
 void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {

@@ -69,12 +69,13 @@ public:
   static llvm::Expected<bool>
   IsLibcudaLoaded(NativeProcessProtocol &linux_process);
 
-  /// Clear the requested capabilities, CUDBG_DEBUGGER_INITIALIZED and the IPC
-  /// flag, so a later debugger re-negotiates. Valid only after the driver has
-  /// finished its own detach cleanup, which needs the IPC flag still set.
-  static llvm::Error
-  ResetDetachSymbols(SymbolAddressProvider get_symbol_address,
-                     NativeProcessProtocol &linux_process);
+  /// The writes that clear the requested capabilities,
+  /// CUDBG_DEBUGGER_INITIALIZED and the IPC flag, so a later debugger
+  /// re-negotiates. Valid only after the driver has finished its own detach
+  /// cleanup, which needs the IPC flag still set, and with the process
+  /// stopped, since ptrace refuses to write to a running tracee.
+  static std::vector<GPUMemoryWrite>
+  GetDetachResetWrites(SymbolAddressProvider get_symbol_address);
 
   /// Read CUDBG_RESUME_FOR_ATTACH_DETACH, non-zero meaning the application must
   /// keep running for the driver to finish. Returned raw because it is a flag

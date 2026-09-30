@@ -1,3 +1,4 @@
+import lldb
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -20,14 +21,12 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.select_gpu()
         self.runCmd("detach")
 
-        # The GPU detach resumes the CPU so the driver can clean up, then halts
-        # it again, and LLDB's view of the CPU only catches up as that stop
-        # event is drained. Detaching while LLDB still believes it is running
-        # makes Process::Detach interrupt and then wait out
-        # target.process.interrupt-timeout for a stop that already happened.
-        self.assertTrue(
-            self.wait_for_cpu_process_stopped(),
-            "CPU process never reported stopped before detach",
+        # The GPU detach runs the CPU for the driver's cleanup and stops it again
+        # before it returns, so lldb already sees it stopped.
+        self.assertEqual(
+            self.cpu_process.GetState(),
+            lldb.eStateStopped,
+            "the GPU detach left the CPU running",
         )
         self.select_cpu()
         self.runCmd("detach")

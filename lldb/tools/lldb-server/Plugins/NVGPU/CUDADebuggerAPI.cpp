@@ -473,28 +473,19 @@ CUDADebuggerAPI::IsLibcudaLoaded(NativeProcessProtocol &linux_process) {
   });
 }
 
-Error CUDADebuggerAPI::ResetDetachSymbols(
-    SymbolAddressProvider get_symbol_address,
-    NativeProcessProtocol &linux_process) {
-  // CUDBG_DEBUGGER_INITIALIZED is optional and skipped when libcuda does not
-  // export it.
-  const uint32_t zero = 0;
-  if (Error err = WriteToHostSymbol(get_symbol_address, linux_process,
-                                    Symbols::CUDBG_DEBUGGER_CAPABILITIES, zero))
-    return err;
-
-  if (get_symbol_address(Symbols::CUDBG_DEBUGGER_INITIALIZED)) {
-    if (Error err =
-            WriteToHostSymbol(get_symbol_address, linux_process,
-                              Symbols::CUDBG_DEBUGGER_INITIALIZED, zero))
-      return err;
+std::vector<GPUMemoryWrite> CUDADebuggerAPI::GetDetachResetWrites(
+    SymbolAddressProvider get_symbol_address) {
+  // The IPC flag goes last, as it does on the way in. A symbol libcuda does not
+  // export, such as the optional CUDBG_DEBUGGER_INITIALIZED, is skipped.
+  const std::string zero_uint32(2 * sizeof(uint32_t), '0');
+  std::vector<GPUMemoryWrite> writes;
+  for (const std::string &name :
+       {Symbols::CUDBG_DEBUGGER_CAPABILITIES,
+        Symbols::CUDBG_DEBUGGER_INITIALIZED, Symbols::CUDBG_IPC_FLAG_NAME}) {
+    if (std::optional<uint64_t> address = get_symbol_address(name))
+      writes.push_back({*address, zero_uint32});
   }
-
-  if (Error err = WriteToHostSymbol(get_symbol_address, linux_process,
-                                    Symbols::CUDBG_IPC_FLAG_NAME, zero))
-    return err;
-
-  return Error::success();
+  return writes;
 }
 
 Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,

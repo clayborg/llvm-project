@@ -457,6 +457,22 @@ public:
   std::optional<GPUPluginFinishAttachResponse>
   FinishGPUPluginAttach(const GPUPluginFinishAttachArgs &args);
 
+  /// Tell the GPU plug-in behind this GPU connection, with
+  /// "jGPUPluginPrepareDetach", that the client is detaching the GPU process.
+  ///
+  /// \return
+  ///     Whether the plug-in needs the native process to run while it
+  ///     finishes. std::nullopt if the plug-in could not be asked.
+  std::optional<GPUPluginPrepareDetachResponse> PrepareGPUPluginDetach();
+
+  /// Wait, with "jGPUPluginFinishDetach", until the GPU plug-in behind this
+  /// GPU connection no longer needs the native process to run.
+  ///
+  /// \return
+  ///     Memory to write in the native process once it has stopped.
+  ///     std::nullopt if the plug-in could not be asked.
+  std::optional<GPUPluginFinishDetachResponse> FinishGPUPluginDetach();
+
   std::optional<LLDBSettings> GetLLDBSettings();
 
   std::optional<GPUPluginBreakpointHitResponse> 

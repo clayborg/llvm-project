@@ -40,6 +40,8 @@ public:
                       std::optional<uint64_t> value) override;
   GPUPluginFinishAttachResponse
   FinishAttach(const GPUPluginFinishAttachArgs &args) override;
+  GPUPluginPrepareDetachResponse PrepareDetach() override;
+  GPUPluginFinishDetachResponse FinishDetach() override;
 
 private:
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
@@ -90,12 +92,10 @@ private:
   ///     be read, for example because the inferior has exited.
   lldb::StateType HaltNativeProcess();
 
+  /// The last step of a detach, when the client sends "D": release the
+  /// debugger API. A client that skipped PrepareDetach and FinishDetach only
+  /// gets the GPU released, without the driver's own cleanup.
   void DetachCleanup();
-
-  /// Step 3 of DetachCleanup: ask the driver to clean up, resume the devices
-  /// and the application so it can, and drain until it reports completion.
-  /// Best effort; every failure is logged and detach continues.
-  void ResumeForDriverCleanup(CUDBGAPI api, uint32_t resume_flags);
 
   /// Drain events until CUDBG_EVENT_DETACH_COMPLETE, the API faults, the
   /// inferior exits, or kDetachMaxIterations is reached. We occupy the GPU
@@ -103,14 +103,9 @@ private:
   /// drained here rather than awaited.
   void DrainUntilDetachComplete();
 
-  /// Step 5 of DetachCleanup: clear the driver's handshake globals so a later
-  /// debugger re-negotiates. Only valid once the driver has finished its own
-  /// cleanup, which needs the IPC flag still set.
-  void ResetDriverHandshakeFlags(const llvm::StringMap<uint64_t> &symbols);
-
   /// Finalize and drop the debugger API along with everything holding a
-  /// pointer into it. Step 6 of DetachCleanup, and the undo of an
-  /// InitializeAPIAndConnect that failed partway.
+  /// pointer into it, on detach and to undo an InitializeAPIAndConnect that
+  /// failed partway.
   void ReleaseDebuggerAPI();
 
   /// Send a monitor log line to the client. Only valid while the GPU is
@@ -125,6 +120,17 @@ private:
 
   llvm::Error
   FinishLateAttachIpcHandshake(SymbolAddressProvider get_symbol_address);
+
+  /// How far the client has driven a detach. Only used on the GPU MainLoop
+  /// thread, which serves the GPU connection the detach packets arrive on.
+  enum class DetachStep {
+    eNone,
+    ePrepared,
+    /// The driver was asked to clean up, which FinishDetach waits for.
+    eCleanupRequested,
+    eFinished,
+  };
+  DetachStep m_detach_step = DetachStep::eNone;
 
   Status m_main_loop_status;
   std::optional<CUDADebuggerAPI> m_cuda_api;

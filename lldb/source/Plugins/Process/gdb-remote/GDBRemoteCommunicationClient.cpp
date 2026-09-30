@@ -695,6 +695,31 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
   return std::nullopt;
 }
 
+/// Send \a packet and parse its reply as a \a T.
+///
+/// \return
+///     std::nullopt if the server does not support the packet, fails it, or
+///     replies with something that is not a \a T.
+template <typename T>
+static std::optional<T>
+SendPacketForJSONReply(GDBRemoteCommunicationClient &client,
+                       llvm::StringRef packet, const char *reply_name) {
+  StringExtractorGDBRemote response;
+  response.SetResponseValidatorToJSON();
+  if (client.SendPacketAndWaitForResponse(packet, response) !=
+          GDBRemoteCommunication::PacketResult::Success ||
+      response.IsUnsupportedResponse() || response.IsErrorResponse())
+    return std::nullopt;
+
+  llvm::Expected<T> reply = llvm::json::parse<T>(response.Peek(), reply_name);
+  if (!reply) {
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Process), reply.takeError(),
+                   "malformed {1}: {0}", reply_name);
+    return std::nullopt;
+  }
+  return std::move(*reply);
+}
+
 std::optional<GPUPluginFinishAttachResponse>
 GDBRemoteCommunicationClient::FinishGPUPluginAttach(
     const GPUPluginFinishAttachArgs &args) {
@@ -704,22 +729,22 @@ GDBRemoteCommunicationClient::FinishGPUPluginAttach(
   StreamGDBRemote packet;
   packet.PutCString("jGPUPluginFinishAttach:");
   packet.PutAsJSON(args, /*hex_ascii=*/false);
-  StringExtractorGDBRemote response;
-  response.SetResponseValidatorToJSON();
-  if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
-          PacketResult::Success ||
-      response.IsUnsupportedResponse() || response.IsErrorResponse())
-    return std::nullopt;
+  return SendPacketForJSONReply<GPUPluginFinishAttachResponse>(
+      *this, packet.GetString(), "GPUPluginFinishAttachResponse");
+}
 
-  llvm::Expected<GPUPluginFinishAttachResponse> reply =
-      llvm::json::parse<GPUPluginFinishAttachResponse>(
-          response.Peek(), "GPUPluginFinishAttachResponse");
-  if (!reply) {
-    LLDB_LOG_ERROR(GetLog(GDBRLog::Process), reply.takeError(),
-                   "malformed jGPUPluginFinishAttach response: {0}");
-    return std::nullopt;
-  }
-  return *reply;
+std::optional<GPUPluginPrepareDetachResponse>
+GDBRemoteCommunicationClient::PrepareGPUPluginDetach() {
+  return SendPacketForJSONReply<GPUPluginPrepareDetachResponse>(
+      *this, "jGPUPluginPrepareDetach", "GPUPluginPrepareDetachResponse");
+}
+
+std::optional<GPUPluginFinishDetachResponse>
+GDBRemoteCommunicationClient::FinishGPUPluginDetach() {
+  // The reply waits for the driver to finish its cleanup.
+  ScopedTimeout timeout(*this, std::max(GetPacketTimeout(), seconds(10)));
+  return SendPacketForJSONReply<GPUPluginFinishDetachResponse>(
+      *this, "jGPUPluginFinishDetach", "GPUPluginFinishDetachResponse");
 }
 
 std::optional<LLDBSettings>

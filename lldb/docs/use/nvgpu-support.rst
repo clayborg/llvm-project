@@ -204,10 +204,13 @@ driver.
 Detaching and re-attaching
 """"""""""""""""""""""""""
 
-``detach`` leaves the application running. The plugin removes the breakpoints
-it set on the device, lets the driver run its own cleanup, then resets the
-driver's handshake globals and finalizes the debugger API, so the process is
-left in a state a later debugger can attach to again. Detach the GPU target
+``detach`` leaves the application running. When you detach the GPU target, the
+plugin removes the breakpoints it set on the device and asks the driver to
+clean up. The driver can only do that while the application runs, so LLDB runs
+the CPU process until the driver has finished (via ``jGPUPluginPrepareDetach``
+and ``jGPUPluginFinishDetach``), then stops it again and resets the driver's
+handshake globals, and the plugin finalizes the debugger API. That leaves the
+process in a state a later debugger can attach to again. Detach the GPU target
 before the CPU target, and re-select the host platform before re-attaching::
 
   > target select <gpu-target-index>

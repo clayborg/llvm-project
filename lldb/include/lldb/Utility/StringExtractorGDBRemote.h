@@ -191,6 +191,8 @@ public:
     eServerPacketType_jGPUPluginInitialize,
     eServerPacketType_jGPUPluginBreakpointHit,
     eServerPacketType_jGPUPluginFinishAttach,
+    eServerPacketType_jGPUPluginPrepareDetach,
+    eServerPacketType_jGPUPluginFinishDetach,
     eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
     eServerPacketType_jGPUGetKernelInfos,
 

@@ -322,6 +322,60 @@ bool fromJSON(const llvm::json::Value &value,
 
 llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data);
 
+///-----------------------------------------------------------------------------
+/// GPUPluginPrepareDetachResponse
+///
+/// The reply to "jGPUPluginPrepareDetach", the first packet the LLDB client
+/// sends on a GPU connection when it detaches the GPU process.
+///-----------------------------------------------------------------------------
+struct GPUPluginPrepareDetachResponse {
+  /// True if the native process has to run for the GPU plug-in to finish
+  /// detaching. The client then resumes it until "jGPUPluginFinishDetach"
+  /// returns, and stops it again.
+  bool resume_native = false;
+  /// Signals for the native process to receive without stopping while it runs
+  /// for the plug-in.
+  std::vector<int> pass_signals;
+};
+
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginPrepareDetachResponse &data, llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginPrepareDetachResponse &data);
+
+///-----------------------------------------------------------------------------
+/// GPUMemoryWrite
+///
+/// Bytes for the LLDB client to write to the native process's memory.
+///-----------------------------------------------------------------------------
+struct GPUMemoryWrite {
+  lldb::addr_t address = 0;
+  /// The bytes to write, hex encoded.
+  std::string bytes;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUMemoryWrite &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUMemoryWrite &data);
+
+///-----------------------------------------------------------------------------
+/// GPUPluginFinishDetachResponse
+///
+/// The reply to "jGPUPluginFinishDetach", which returns once the GPU plug-in
+/// has finished with the native process.
+///-----------------------------------------------------------------------------
+struct GPUPluginFinishDetachResponse {
+  /// Writes for the client to make in the native process once it has stopped
+  /// it, before it sends "D" to detach the GPU process.
+  std::vector<GPUMemoryWrite> memory_writes;
+};
+
+bool fromJSON(const llvm::json::Value &value,
+              GPUPluginFinishDetachResponse &data, llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginFinishDetachResponse &data);
+
 struct GPUSectionInfo {
   /// Name of the section to load. If there are multiple sections, each section
   /// will be looked up and then a child section within the previous section

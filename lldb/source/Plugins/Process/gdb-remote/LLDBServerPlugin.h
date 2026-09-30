@@ -184,6 +184,24 @@ public:
     return {};
   }
 
+  /// Called on the plug-in behind a GPU connection when the client starts
+  /// detaching the GPU process, before it sends "D".
+  ///
+  /// \return
+  ///     Whether this plug-in needs the native process to run while it
+  ///     finishes, in which case the client resumes it, and the signals to pass
+  ///     through meanwhile.
+  virtual GPUPluginPrepareDetachResponse PrepareDetach() { return {}; }
+
+  /// Called after PrepareDetach, with the native process running if this
+  /// plug-in asked for it. Returns once this plug-in no longer needs it
+  /// running.
+  ///
+  /// \return
+  ///     Memory for the client to write in the native process once it has
+  ///     stopped it again.
+  virtual GPUPluginFinishDetachResponse FinishDetach() { return {}; }
+
   /// Get the GPU dynamic libraries from the GPU plug-in.
   ///
   /// If a GPU plug-in decides to launch a stand alone GDB server binary that

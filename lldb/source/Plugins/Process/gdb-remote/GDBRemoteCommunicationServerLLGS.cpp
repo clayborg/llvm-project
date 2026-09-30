@@ -289,6 +289,12 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
       StringExtractorGDBRemote::eServerPacketType_jGPUPluginFinishAttach,
       &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach);
   RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jGPUPluginPrepareDetach,
+      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginPrepareDetach);
+  RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jGPUPluginFinishDetach,
+      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishDetach);
+  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::
           eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
       &GDBRemoteCommunicationServerLLGS::
@@ -4051,6 +4057,27 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach(
   }
   StreamGDBRemote response;
   response.PutAsJSON(finish, /*hex_ascii=*/false);
+  return SendPacketNoLock(response.GetString());
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginPrepareDetach(
+    StringExtractorGDBRemote &) {
+  // Only the server for a GPU connection has a plug-in to detach.
+  if (!m_plugin_instance)
+    return SendUnimplementedResponse("jGPUPluginPrepareDetach");
+  StreamGDBRemote response;
+  response.PutAsJSON(m_plugin_instance->PrepareDetach(), /*hex_ascii=*/false);
+  return SendPacketNoLock(response.GetString());
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishDetach(
+    StringExtractorGDBRemote &) {
+  if (!m_plugin_instance)
+    return SendUnimplementedResponse("jGPUPluginFinishDetach");
+  StreamGDBRemote response;
+  response.PutAsJSON(m_plugin_instance->FinishDetach(), /*hex_ascii=*/false);
   return SendPacketNoLock(response.GetString());
 }
 

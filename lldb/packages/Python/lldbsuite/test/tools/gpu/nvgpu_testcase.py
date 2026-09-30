@@ -395,32 +395,3 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 return False
             time.sleep(0.2)
         return False
-
-    def wait_for_cpu_process_stopped(self, timeout_seconds=60):
-        """Pump the debugger's listener until the CPU process reports stopped.
-
-        In async mode a process's *public* state -- what SBProcess.GetState()
-        returns -- only advances when its state-changed event is pulled off a
-        listener, because Process::SetPublicState runs from
-        ProcessEventData::DoOnRemoval as the event leaves the queue. Polling
-        GetState() while never draining the debugger's listener therefore keeps
-        reporting "running" long after the process has stopped, so this has to
-        pump events rather than just sleep. Unlike wait_for_gpu_to_stop, this
-        does not need a stop event still to be queued, because the server may
-        have stopped the CPU while nothing was waiting on it.
-        """
-
-        def stopped():
-            proc = self.cpu_process
-            return (
-                proc is not None
-                and proc.IsValid()
-                and proc.GetState() == lldb.eStateStopped
-            )
-
-        listener = self.dbg.GetListener()
-        event = lldb.SBEvent()
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline and not stopped():
-            listener.WaitForEvent(1, event)
-        return stopped()

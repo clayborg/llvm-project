@@ -87,10 +87,6 @@ public:
   // reinject them back.
   virtual Status IgnoreSignals(llvm::ArrayRef<int> signals);
 
-  // Returns a copy of the signals the process currently passes through without
-  // stopping, so a caller can restore the disposition after changing it.
-  llvm::DenseSet<int> GetIgnoredSignals() const { return m_signals_to_ignore; }
-
   // Memory and memory region functions
 
   virtual Status GetMemoryRegionInfo(lldb::addr_t load_addr,

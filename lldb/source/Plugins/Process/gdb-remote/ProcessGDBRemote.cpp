@@ -61,9 +61,11 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/TargetList.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
+#include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/Listener.h"
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/Timer.h"
@@ -90,6 +92,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/FormatAdapters.h"
@@ -1580,6 +1583,98 @@ bool ProcessGDBRemote::ShouldResumeAfterAttach() {
   return args.may_resume && finish->resume;
 }
 
+void ProcessGDBRemote::DetachGPUPluginFromNativeProcess() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU();
+  ProcessSP cpu_process_sp =
+      cpu_target_sp ? cpu_target_sp->GetProcessSP() : ProcessSP();
+  if (!cpu_process_sp || !cpu_process_sp->IsAlive())
+    return;
+  // GPU targets are only ever created by a native ProcessGDBRemote; see
+  // HandleConnectionRequest.
+  auto &cpu = static_cast<ProcessGDBRemote &>(*cpu_process_sp);
+  GDBRemoteCommunicationClient &cpu_comm = cpu.GetGDBRemote();
+
+  std::optional<GPUPluginPrepareDetachResponse> prepare =
+      m_gdb_comm.PrepareGPUPluginDetach();
+  if (!prepare)
+    return;
+
+  // Run the native process for the plug-in without telling the user, who sees
+  // it stopped before and after: its events go to a listener of our own. Its
+  // signal handling changes only while it is stopped, since sending the packet
+  // while it runs would interrupt it.
+  ListenerSP listener_sp = Listener::MakeListener("lldb.process.gpu-detach");
+  bool resumed = false;
+  bool signals_changed = false;
+  if (prepare->resume_native && cpu.GetState() == eStateStopped &&
+      cpu.HijackProcessEvents(listener_sp)) {
+    if (cpu_comm.GetQPassSignalsSupported()) {
+      if (Status error = cpu_comm.SendSignalsToIgnore(prepare->pass_signals);
+          error.Success())
+        signals_changed = true;
+      else
+        LLDB_LOG(log, "could not pass signals through for the GPU plug-in: {0}",
+                 error);
+    }
+    if (Status error = cpu.Resume(); error.Success()) {
+      resumed = true;
+    } else {
+      LLDB_LOG(log, "could not resume the native process: {0}", error);
+      cpu.RestoreProcessEvents();
+    }
+  }
+
+  std::optional<GPUPluginFinishDetachResponse> finish =
+      m_gdb_comm.FinishGPUPluginDetach();
+
+  if (resumed) {
+    cpu.SendAsyncInterrupt();
+    EventSP event_sp;
+    StateType state = cpu.WaitForProcessToStop(
+        cpu.GetInterruptTimeout(), &event_sp, /*wait_always=*/true, listener_sp,
+        /*stream=*/nullptr, /*use_run_lock=*/true, DoNoSelectMostRelevantFrame);
+    cpu.RestoreProcessEvents();
+    // Only the round trip is ours to hide. The user has to hear if the process
+    // exited meanwhile.
+    if (event_sp && state != eStateStopped)
+      cpu.BroadcastEvent(event_sp);
+  }
+  if (signals_changed && cpu.GetState() == eStateStopped) {
+    if (const UnixSignalsSP &signals = cpu.GetUnixSignals()) {
+      if (Status error = cpu_comm.SendSignalsToIgnore(
+              signals->GetFilteredSignals(false, false, false));
+          error.Fail())
+        LLDB_LOG(log, "could not restore the signals to pass through: {0}",
+                 error);
+    }
+  }
+
+  if (!finish || finish->memory_writes.empty())
+    return;
+  // ptrace refuses to write to a running tracee.
+  if (StateIsRunningState(cpu.GetState()))
+    cpu.Halt();
+  if (cpu.GetState() != eStateStopped) {
+    LLDB_LOG(log, "skipping the memory writes: the native process is {0}",
+             StateAsCString(cpu.GetState()));
+    return;
+  }
+  for (const GPUMemoryWrite &write : finish->memory_writes) {
+    std::string bytes;
+    if (!llvm::tryGetFromHex(write.bytes, bytes)) {
+      LLDB_LOG(log, "malformed memory write from the GPU plug-in: {0}",
+               write.bytes);
+      continue;
+    }
+    Status error;
+    cpu.WriteMemory(write.address, bytes.data(), bytes.size(), error);
+    if (error.Fail())
+      LLDB_LOG(log, "could not write the GPU plug-in's memory at {0:x}: {1}",
+               write.address, error);
+  }
+}
+
 Status ProcessGDBRemote::WillResume() {
   m_continue_c_tids.clear();
   m_continue_C_tids.clear();
@@ -2969,6 +3064,9 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   Status error;
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDetach(keep_stopped: %i)", keep_stopped);
+
+  if (GetTarget().IsGPUTarget())
+    DetachGPUPluginFromNativeProcess();
 
   error = m_gdb_comm.Detach(keep_stopped);
   if (log) {

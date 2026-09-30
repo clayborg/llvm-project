@@ -511,6 +511,12 @@ private:
 
   Status HandleGPUActions(const GPUActions &gpu_action);
 
+  /// Drive the GPU plug-in's side of detaching this GPU process, which may need
+  /// the native process run and written to: jGPUPluginPrepareDetach, then
+  /// jGPUPluginFinishDetach. Best effort, since the detach goes ahead either
+  /// way.
+  void DetachGPUPluginFromNativeProcess();
+
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
   void HandleAsyncMisc(llvm::StringRef data) override;

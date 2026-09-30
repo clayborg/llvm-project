@@ -138,8 +138,9 @@ void ProcessNVGPU::ChangeStateToStopped() {
 Status ProcessNVGPU::Detach() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::Detach()");
-  // The plugin owns the debugger API and the native process, so the cleanup
-  // sequence lives there.
+  // The plugin owns the debugger API, which this releases. The client has
+  // already driven the driver's cleanup with jGPUPluginPrepareDetach and
+  // jGPUPluginFinishDetach.
   if (m_plugin)
     m_plugin->DetachCleanup();
   SetState(StateType::eStateDetached, true);

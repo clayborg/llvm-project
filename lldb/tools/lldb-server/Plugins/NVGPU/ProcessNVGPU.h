@@ -79,7 +79,7 @@ public:
   /// table.
   void ClearDebuggerAPI() { m_api = nullptr; }
 
-  /// Set the owning plugin, to which Detach delegates its cleanup sequence.
+  /// Set the owning plugin, which Detach asks to release the debugger API.
   void SetPlugin(LLDBServerPluginNVGPU *plugin) { m_plugin = plugin; }
 
   /// Remove every tracked device breakpoint from every device. Detach must do
@@ -438,7 +438,7 @@ private:
   /// TeardownDeviceBreakpoints can remove them on detach.
   llvm::DenseSet<lldb::addr_t> m_device_breakpoints;
 
-  /// The owning plugin, used by Detach to delegate the detach cleanup sequence.
+  /// The owning plugin, which Detach asks to release the debugger API.
   LLDBServerPluginNVGPU *m_plugin = nullptr;
 
   /// Snapshot of the information of all devices. It's updated upon every stop.
