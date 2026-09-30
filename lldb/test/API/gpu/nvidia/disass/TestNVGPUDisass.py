@@ -152,7 +152,7 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
 
         self.assertEqual(self.gpu_process.state, lldb.eStateStopped)
         # Look the asserting lane up by its stop reason rather than assuming it is
-        # thread 0: faulting-lane selection is not guaranteed (DTCLLDB-236).
+        # thread 0: faulting-lane selection is not guaranteed.
         thread = self.find_thread_by_stop_reason(lldb.eStopReasonException)
         self.assertIn("CUDA Exception(12): Warp Assert", str(thread))
 
