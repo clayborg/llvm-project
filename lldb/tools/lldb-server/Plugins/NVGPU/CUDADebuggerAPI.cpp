@@ -8,8 +8,8 @@
 
 #include "CUDADebuggerAPI.h"
 #include "../Utils/Utils.h"
+#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/Log.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -18,6 +18,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
 
 #include <chrono>
@@ -80,21 +81,18 @@ static std::string CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED =
 } // namespace Symbols
 
 /// Read a uint32_t global from the running process.
-static Expected<uint32_t>
-ReadUInt32FromHost(SymbolAddressProvider get_addr,
-                   NativeProcessProtocol &linux_process,
-                   llvm::StringRef symbol_name) {
+static Expected<uint32_t> ReadUInt32FromHost(SymbolAddressProvider get_addr,
+                                             HostServer &host_server,
+                                             llvm::StringRef symbol_name) {
   std::optional<uint64_t> symbol_address = get_addr(symbol_name);
   if (!symbol_address)
     return createStringErrorFmt("Couldn't find address for symbol {0}",
                                 symbol_name);
   uint32_t value = 0;
-  size_t bytes_read = 0;
-  Status status = linux_process.ReadMemory(*symbol_address, &value,
-                                           sizeof(value), bytes_read);
-  if (status.Fail() || bytes_read != sizeof(value))
+  if (Error err =
+          host_server.ReadProcessMemory(*symbol_address, &value, sizeof(value)))
     return createStringErrorFmt("Failed to read symbol {0}: {1}", symbol_name,
-                                status.AsCString());
+                                llvm::toString(std::move(err)));
   return value;
 }
 
@@ -133,7 +131,7 @@ static Error VerifyDebuggerCapabilities(CUDADebuggerAPI &api) {
 
 template <typename T>
 static Error WriteToHostSymbol(SymbolAddressProvider get_addr,
-                               NativeProcessProtocol &linux_process,
+                               HostServer &host_server,
                                llvm::StringRef symbol_name, const T &value) {
   static_assert(std::is_trivially_copyable_v<T>,
                 "WriteToHostSymbol only writes fixed-size trivially-copyable "
@@ -143,22 +141,17 @@ static Error WriteToHostSymbol(SymbolAddressProvider get_addr,
     return createStringErrorFmt("Couldn't find address for symbol {}",
                                 symbol_name);
 
-  const size_t value_size = sizeof(value);
-  size_t bytes_written = 0;
-  Status status = linux_process.WriteMemory(*symbol_address, &value, value_size,
-                                            bytes_written);
-  if (status.Fail())
+  if (Error err = host_server.WriteProcessMemory(*symbol_address, &value,
+                                                 sizeof(value)))
     return createStringErrorFmt("Failed to write symbol {}: {}", symbol_name,
-                                status.AsCString());
-  if (bytes_written != value_size)
-    return createStringErrorFmt("Failed to write symbol {}", symbol_name);
+                                llvm::toString(std::move(err)));
   return Error::success();
 }
 
 /// Write the driver's CUDBG_INJECTION_PATH global into the inferior, rejecting
 /// anything that would not fit its fixed-size buffer.
 static Error WriteInjectionPathToInferior(SymbolAddressProvider get_addr,
-                                          NativeProcessProtocol &linux_process,
+                                          HostServer &host_server,
                                           llvm::StringRef path) {
   if (path.size() + 1 > kInjectionPathMaxSize)
     return createStringErrorFmt(
@@ -175,25 +168,25 @@ static Error WriteInjectionPathToInferior(SymbolAddressProvider get_addr,
   // A StringRef is not guaranteed to be NUL-terminated, so terminate a copy.
   llvm::SmallVector<char, 256> buffer(path.begin(), path.end());
   buffer.push_back('\0');
-  size_t bytes_written = 0;
-  Status status = linux_process.WriteMemory(*symbol_address, buffer.data(),
-                                            buffer.size(), bytes_written);
-  if (status.Fail() || bytes_written != buffer.size())
+  if (Error err = host_server.WriteProcessMemory(*symbol_address, buffer.data(),
+                                                 buffer.size()))
     return createStringErrorFmt("Failed to write symbol {0}: {1}",
                                 Symbols::CUDBG_INJECTION_PATH,
-                                status.AsCString());
+                                llvm::toString(std::move(err)));
   return Error::success();
 }
 
 /// Publish the client identity and requested capabilities into the inferior,
 /// and optionally the IPC flag -- which must come last, and which the attach
 /// path defers entirely (see CUDADebuggerAPI::SetIpcFlag).
-static Error WriteInitializationSymbolsToHost(
-    SymbolAddressProvider get_addr, NativeProcessProtocol &linux_process,
-    uint32_t pid, uint32_t session_id, uint32_t revision, bool set_ipc_flag) {
+static Error WriteInitializationSymbolsToHost(SymbolAddressProvider get_addr,
+                                              HostServer &host_server,
+                                              uint32_t pid, uint32_t session_id,
+                                              uint32_t revision,
+                                              bool set_ipc_flag) {
   auto write_uint32_t = [&](const std::string &symbol_name,
                             const uint32_t &value) -> Error {
-    return WriteToHostSymbol(get_addr, linux_process, symbol_name, value);
+    return WriteToHostSymbol(get_addr, host_server, symbol_name, value);
   };
 
   if (Error err = write_uint32_t(Symbols::CUDBG_APICLIENT_PID, pid))
@@ -215,7 +208,7 @@ static Error WriteInitializationSymbolsToHost(
   if (!set_ipc_flag)
     return Error::success();
 
-  return CUDADebuggerAPI::SetIpcFlag(get_addr, linux_process);
+  return CUDADebuggerAPI::SetIpcFlag(get_addr, host_server);
 }
 
 static Error WriteConfigurationToLibcuda(llvm::sys::DynamicLibrary &libcuda,
@@ -251,7 +244,7 @@ static Error WriteConfigurationToLibcuda(llvm::sys::DynamicLibrary &libcuda,
 }
 
 static Error WriteInjectionPathToLibcuda(SymbolAddressProvider get_addr,
-                                         NativeProcessProtocol &linux_process,
+                                         HostServer &host_server,
                                          llvm::sys::DynamicLibrary &libcuda,
                                          StringRef libcuda_library_name) {
   const char *path = getenv("CUDBG_INJECTION_PATH");
@@ -261,8 +254,7 @@ static Error WriteInjectionPathToLibcuda(SymbolAddressProvider get_addr,
   // This also rejects a path too long for the driver's buffer, which the local
   // copy below relies on.
   llvm::StringRef path_ref(path);
-  if (Error err =
-          WriteInjectionPathToInferior(get_addr, linux_process, path_ref))
+  if (Error err = WriteInjectionPathToInferior(get_addr, host_server, path_ref))
     return err;
 
   // Also update this server's locally loaded libcuda image so the API table it
@@ -330,11 +322,11 @@ GetRawAPIInstance(llvm::sys::DynamicLibrary &libcuda,
 
 Expected<CUDADebuggerAPI> CUDADebuggerAPI::InitializeImpl(
     SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
-    NativeProcessProtocol &linux_process, InitContext init_context) {
+    HostServer &host_server, InitContext init_context) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "CUDADebuggerAPI::Initialize()");
 
-  const uint32_t pid = getpid();
+  const uint32_t pid = llvm::sys::Process::getProcessId();
   const uint32_t session_id = 0;
 
   std::string load_error;
@@ -379,7 +371,7 @@ Expected<CUDADebuggerAPI> CUDADebuggerAPI::InitializeImpl(
            api_version.minor, api_version.revision);
 
   if (Error err = WriteInitializationSymbolsToHost(
-          get_symbol_address, linux_process, pid, session_id, revision,
+          get_symbol_address, host_server, pid, session_id, revision,
           /*set_ipc_flag=*/init_context == InitContext::eLaunch))
     return err;
 
@@ -387,7 +379,7 @@ Expected<CUDADebuggerAPI> CUDADebuggerAPI::InitializeImpl(
                                               session_id, libcuda_library_name))
     return err;
 
-  if (Error err = WriteInjectionPathToLibcuda(get_symbol_address, linux_process,
+  if (Error err = WriteInjectionPathToLibcuda(get_symbol_address, host_server,
                                               libcuda, libcuda_library_name))
     return err;
 
@@ -431,11 +423,12 @@ Expected<CUDADebuggerAPI> CUDADebuggerAPI::InitializeImpl(
   return api;
 }
 
-Expected<CUDADebuggerAPI> CUDADebuggerAPI::Initialize(
-    SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
-    NativeProcessProtocol &linux_process, InitContext init_context) {
+Expected<CUDADebuggerAPI>
+CUDADebuggerAPI::Initialize(SymbolAddressProvider get_symbol_address,
+                            StringRef libcuda_library_name,
+                            HostServer &host_server, InitContext init_context) {
   Expected<CUDADebuggerAPI> api = InitializeImpl(
-      get_symbol_address, libcuda_library_name, linux_process, init_context);
+      get_symbol_address, libcuda_library_name, host_server, init_context);
   if (!api)
     return createStringErrorFmt(
         "Failed to initialize the CUDA Debugger API. {}",
@@ -462,14 +455,13 @@ static bool IsLibcudaSoname(llvm::StringRef filename) {
   return g_soname_regex.match(filename);
 }
 
-Expected<bool>
-CUDADebuggerAPI::IsLibcudaLoaded(NativeProcessProtocol &linux_process) {
-  Expected<std::vector<SVR4LibraryInfo>> libraries =
-      linux_process.GetLoadedSVR4Libraries();
-  if (!libraries)
-    return libraries.takeError();
-  return llvm::any_of(*libraries, [](const SVR4LibraryInfo &library) {
-    return IsLibcudaSoname(llvm::sys::path::filename(library.name));
+Expected<bool> CUDADebuggerAPI::IsLibcudaLoaded(HostServer &host_server) {
+  Expected<std::vector<std::string>> paths =
+      host_server.GetLoadedLibraryPaths();
+  if (!paths)
+    return paths.takeError();
+  return llvm::any_of(*paths, [](llvm::StringRef path) {
+    return IsLibcudaSoname(llvm::sys::path::filename(path));
   });
 }
 
@@ -489,22 +481,21 @@ std::vector<GPUMemoryWrite> CUDADebuggerAPI::GetDetachResetWrites(
 }
 
 Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,
-                                  NativeProcessProtocol &linux_process) {
+                                  HostServer &host_server) {
   const uint32_t enabled = 1;
-  return WriteToHostSymbol(get_symbol_address, linux_process,
+  return WriteToHostSymbol(get_symbol_address, host_server,
                            Symbols::CUDBG_IPC_FLAG_NAME, enabled);
 }
 
 Expected<uint32_t> CUDADebuggerAPI::ReadResumeForAttachDetach(
-    SymbolAddressProvider get_symbol_address,
-    NativeProcessProtocol &linux_process) {
-  return ReadUInt32FromHost(get_symbol_address, linux_process,
+    SymbolAddressProvider get_symbol_address, HostServer &host_server) {
+  return ReadUInt32FromHost(get_symbol_address, host_server,
                             Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
 }
 
 Expected<bool>
 CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
-                                    NativeProcessProtocol &linux_process) {
+                                    HostServer &host_server) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   // The attach-procedure file descriptor exported by the driver: an int in the
@@ -517,16 +508,14 @@ CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
         Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
 
   int32_t attach_fd = -1;
-  size_t bytes_read = 0;
-  Status status = linux_process.ReadMemory(*fd_symbol_address, &attach_fd,
-                                           sizeof(attach_fd), bytes_read);
-  if (status.Fail() || bytes_read != sizeof(attach_fd))
+  if (Error err = host_server.ReadProcessMemory(*fd_symbol_address, &attach_fd,
+                                                sizeof(attach_fd)))
     return createStringErrorFmt("Failed to read the attach procedure FD: {0}",
-                                status.AsCString());
+                                llvm::toString(std::move(err)));
   if (attach_fd < 0)
     return false;
 
-  const uint32_t pid = getpid();
+  const uint32_t pid = llvm::sys::Process::getProcessId();
   // The version cannot be negotiated yet, since the debug engine only loads
   // once the procedure runs, so use the compiled revision. Initialize rewrites
   // these globals with the negotiated values at the report-finished breakpoint.
@@ -536,7 +525,7 @@ CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
   // Tell the driver who is attaching, before it injects the debug engine. The
   // IPC flag stays clear until the procedure has finished; see SetIpcFlag.
   if (Error err = WriteInitializationSymbolsToHost(
-          get_symbol_address, linux_process, pid, session_id, revision,
+          get_symbol_address, host_server, pid, session_id, revision,
           /*set_ipc_flag=*/false))
     return err;
 
@@ -544,7 +533,7 @@ CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
   // the request.
   if (const char *injection_path = getenv("CUDBG_INJECTION_PATH")) {
     if (Error err = WriteInjectionPathToInferior(
-            get_symbol_address, linux_process, llvm::StringRef(injection_path)))
+            get_symbol_address, host_server, llvm::StringRef(injection_path)))
       return err;
   }
 
@@ -552,7 +541,8 @@ CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
   // write the magic byte to wake the driver's interrupt handler so it can
   // safely inject the debug engine.
   std::string fd_path =
-      llvm::formatv("/proc/{0}/fd/{1}", linux_process.GetID(), attach_fd).str();
+      llvm::formatv("/proc/{0}/fd/{1}", host_server.GetProcessID(), attach_fd)
+          .str();
   LLDB_LOG(log,
            "CUDADebuggerAPI::InitiateSafeAttach(). Writing magic byte to {0}",
            fd_path);

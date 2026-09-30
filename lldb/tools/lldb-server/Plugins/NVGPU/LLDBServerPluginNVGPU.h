@@ -69,23 +69,21 @@ private:
   /// draining one at a time would strand the rest.
   llvm::Expected<int> DrainSyncEventsOnce();
 
-  /// Run \a work on the native (CPU) MainLoop thread and block until done.
-  ///
-  /// Linux accepts ptrace requests only from the thread that attached, which
-  /// here is the native MainLoop thread, so writing inferior memory or resuming
-  /// the process from the GPU MainLoop thread fails with ESRCH. Reads go
-  /// through process_vm_readv and have no such restriction, which makes this
-  /// easy to miss. \a work gets the process as looked up on that thread, which
-  /// is also the one that destroys it when the inferior exits. The caller must
-  /// not hold m_attach_mutex.
-  llvm::Error
-  RunOnNativeMainLoop(std::function<llvm::Error(NativeProcessProtocol &)> work);
+  /// Run \a work on the native (CPU) MainLoop thread and block until done, so
+  /// that it can use the host server's process actions, which only that
+  /// thread may use. On Linux, for example, ptrace accepts requests only from
+  /// the thread that attached, so writing inferior memory from the GPU
+  /// MainLoop thread fails with ESRCH, while reads go through process_vm_readv
+  /// and do not, which makes this easy to miss. That thread is also the one
+  /// that destroys the process when the inferior exits. The caller must not
+  /// hold m_attach_mutex.
+  llvm::Error RunOnNativeMainLoop(std::function<llvm::Error()> work);
 
-  /// Have the native thread stop the native process if it is running, which
-  /// that thread then reports to the client, and return without waiting for the
-  /// stop, which no caller needs. The base class's HaltNativeProcessIfNeeded
-  /// instead polls the process from the calling thread, which reads freed
-  /// memory if the inferior exits meanwhile.
+  /// Have the host server stop the native process if it is running, which it
+  /// then reports to the client, and return without waiting for the stop,
+  /// which no caller needs. The base class's HaltNativeProcessIfNeeded instead
+  /// polls the process from the calling thread, which reads freed memory if
+  /// the inferior exits meanwhile.
   void HaltNativeProcess();
 
   /// The last step of a detach, when the client sends "D": release the
@@ -135,8 +133,8 @@ private:
   std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
 
   /// Guards everything below, and is taken from both the native server thread
-  /// and the GPU main loop thread. Must NOT be held across blocking
-  /// ptrace/procfs/FD work.
+  /// and the GPU main loop thread. Must NOT be held across the host server's
+  /// process actions or the attach FD write, which block.
   std::mutex m_attach_mutex;
   AttachState m_attach_state = AttachState::eNone;
   std::chrono::steady_clock::time_point m_attach_deadline{};

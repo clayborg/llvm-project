@@ -10,7 +10,7 @@
 #define LLDB_TOOLS_LLDB_SERVER_CUDADDEBUGGERAPI_H
 
 #include "cudadebugger.h"
-#include "lldb/Host/common/NativeProcessProtocol.h"
+#include "lldb/Utility/GPUGDBRemotePackets.h"
 // The runtime CudbgApiVersion type, used to pick an API version the attached
 // driver supports.
 #include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
@@ -22,6 +22,10 @@
 #include <string>
 #include <vector>
 
+namespace lldb_private::process_gdb_remote {
+class GDBRemoteCommunicationServerLLGS;
+} // namespace lldb_private::process_gdb_remote
+
 namespace lldb_private::lldb_server {
 
 /// Custom deleter for CUDBGAPI.
@@ -32,6 +36,11 @@ void CUDBGAPIDeleter(CUDBGAPI api);
 /// the client, either with a breakpoint hit or through qSymbol.
 using SymbolAddressProvider =
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>;
+
+/// The server debugging the native (CPU) process. The handshake reads and
+/// writes that process only through this server's process actions, on its
+/// MainLoop thread.
+using HostServer = process_gdb_remote::GDBRemoteCommunicationServerLLGS;
 
 /// RAII wrapper class for CUDA debugger API instances.
 /// The API methods are accessed through the -> operator.
@@ -47,8 +56,8 @@ public:
 
   static llvm::Expected<CUDADebuggerAPI>
   Initialize(SymbolAddressProvider get_symbol_address,
-             llvm::StringRef libcuda_library_name,
-             NativeProcessProtocol &linux_process, InitContext init_context);
+             llvm::StringRef libcuda_library_name, HostServer &host_server,
+             InitContext init_context);
 
   /// Publish CUDBG_IPC_FLAG_NAME, the master "an API client is ready, emit
   /// callbacks" flag. Written last during initialization so the driver never
@@ -56,7 +65,7 @@ public:
   /// landed; the attach path additionally holds it back until the attach
   /// procedure has finished and the event callback exists.
   static llvm::Error SetIpcFlag(SymbolAddressProvider get_symbol_address,
-                                NativeProcessProtocol &linux_process);
+                                HostServer &host_server);
 
   /// The symbols InitiateSafeAttach needs. They are needed before any
   /// breakpoint has been hit, so they are requested from the client through
@@ -66,8 +75,7 @@ public:
   /// \return true if libcuda is in the inferior's loaded library list. Without
   /// it CUDA cannot have been initialized yet, so the launch-style
   /// initialization breakpoints cover the attach.
-  static llvm::Expected<bool>
-  IsLibcudaLoaded(NativeProcessProtocol &linux_process);
+  static llvm::Expected<bool> IsLibcudaLoaded(HostServer &host_server);
 
   /// The writes that clear the requested capabilities,
   /// CUDBG_DEBUGGER_INITIALIZED and the IPC flag, so a later debugger
@@ -82,19 +90,19 @@ public:
   /// word that requestCleanupOnDetach takes verbatim.
   static llvm::Expected<uint32_t>
   ReadResumeForAttachDetach(SymbolAddressProvider get_symbol_address,
-                            NativeProcessProtocol &linux_process);
+                            HostServer &host_server);
 
   /// Publish the client handshake globals and write the magic byte to the
   /// driver's attach-procedure FD, asking it to inject the debug engine at a
   /// point of its choosing. It reports completion by calling
-  /// CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. The globals are written with
-  /// ptrace, so the process must be stopped.
+  /// CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. The host server writes the
+  /// globals, which on Linux needs the process stopped.
   ///
   /// \return false, having written nothing, if the driver has not published
   /// the FD yet (it is still -1 until the driver finishes initializing).
   static llvm::Expected<bool>
   InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
-                     NativeProcessProtocol &linux_process);
+                     HostServer &host_server);
 
   static GPUBreakpointInfo
   GetInitializationBreakpointInfo(llvm::StringRef library_name);
@@ -123,8 +131,7 @@ private:
 
   static llvm::Expected<CUDADebuggerAPI>
   InitializeImpl(SymbolAddressProvider get_symbol_address,
-                 llvm::StringRef libcuda_library_name,
-                 NativeProcessProtocol &linux_process,
+                 llvm::StringRef libcuda_library_name, HostServer &host_server,
                  InitContext init_context);
 };
 

@@ -26,11 +26,7 @@
 #include <chrono>
 #include <csignal>
 #include <future>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/uio.h>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 
 using namespace lldb;
@@ -218,11 +214,10 @@ void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
 
   // Called on the native MainLoop thread with the process stopped: for every
   // stop reply, and once qSymbol has delivered the last handshake symbol. The
-  // ptrace writes below need both, and must not run under m_attach_mutex,
-  // which the GPU event thread also takes. Nothing can race them: the only
-  // other writer of m_attach_state runs on the GPU MainLoop thread, which
-  // InitializeAPIAndConnect has not created yet.
-  NativeProcessProtocol *cpu_process = nullptr;
+  // host server's writes below need both, and must not run under
+  // m_attach_mutex, which the GPU event thread also takes. Nothing can race
+  // them: the only other writer of m_attach_state runs on the GPU MainLoop
+  // thread, which InitializeAPIAndConnect has not created yet.
   steady_clock::time_point deadline;
   llvm::StringMap<uint64_t> symbols;
   {
@@ -230,17 +225,11 @@ void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
     if (m_attach_state != AttachState::eProbing)
       return;
     deadline = m_attach_deadline;
-    cpu_process = m_native_process.GetCurrentProcess();
     symbols = m_libcuda_symbols;
   }
 
   // Everything below commits eInjected, falls back to eNone, or stays at
   // eProbing to retry at the next stop.
-  if (!cpu_process) {
-    LLDB_LOG(log, "TryInitiateSafeAttach: no current native process yet");
-    return;
-  }
-
   if (steady_clock::now() > deadline) {
     LLDB_LOG(log,
              "TryInitiateSafeAttach: timed out after {0}s trying to "
@@ -254,7 +243,7 @@ void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
   // Without libcuda, CUDA cannot have been initialized, and the launch-style
   // breakpoints from GetInitializeActions will catch it when it is.
   Expected<bool> libcuda_loaded =
-      CUDADebuggerAPI::IsLibcudaLoaded(*cpu_process);
+      CUDADebuggerAPI::IsLibcudaLoaded(m_native_process);
   if (!libcuda_loaded) {
     LLDB_LOG(log,
              "TryInitiateSafeAttach: could not read the loaded library "
@@ -276,7 +265,7 @@ void LLDBServerPluginNVGPU::TryInitiateSafeAttach() {
     return LookupSymbol(symbols, name);
   };
   Expected<bool> initiated =
-      CUDADebuggerAPI::InitiateSafeAttach(get_addr, *cpu_process);
+      CUDADebuggerAPI::InitiateSafeAttach(get_addr, m_native_process);
   if (!initiated) {
     std::string message = llvm::toString(initiated.takeError());
     LLDB_LOG(log, "TryInitiateSafeAttach: failed to initiate safe attach: {0}",
@@ -385,8 +374,9 @@ LLDBServerPluginNVGPU::FinishAttach(const GPUPluginFinishAttachArgs &args) {
                  "NVGPU late attach: not finished after {0}ms; stopping the "
                  "process so the attach completes without the GPU for now.",
                  timeout.count());
-        if (NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess())
-          cpu->Halt();
+        if (Error err = m_native_process.HaltProcess())
+          LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                         "NVGPU late attach: could not stop the process: {0}");
       },
       timeout);
   finish.resume = true;
@@ -510,8 +500,7 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
     SymbolAddressProvider get_symbol_address, StringRef libcuda_library_name,
     bool is_late_attach) {
   Expected<CUDADebuggerAPI> api_or = CUDADebuggerAPI::Initialize(
-      get_symbol_address, libcuda_library_name,
-      *m_native_process.GetCurrentProcess(),
+      get_symbol_address, libcuda_library_name, m_native_process,
       is_late_attach ? CUDADebuggerAPI::InitContext::eLateAttach
                      : CUDADebuggerAPI::InitContext::eLaunch);
   if (!api_or)
@@ -575,17 +564,13 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
 llvm::Error LLDBServerPluginNVGPU::FinishLateAttachIpcHandshake(
     SymbolAddressProvider get_symbol_address) {
   Log *log = GetLog(GDBRLog::Plugin);
-  NativeProcessProtocol *cpu_process = m_native_process.GetCurrentProcess();
-  if (!cpu_process)
-    return createStringError(
-        "No native process available to complete the late attach handshake");
-
-  if (Error err = CUDADebuggerAPI::SetIpcFlag(get_symbol_address, *cpu_process))
+  if (Error err =
+          CUDADebuggerAPI::SetIpcFlag(get_symbol_address, m_native_process))
     return err;
 
   Expected<uint32_t> resume_for_attach =
       CUDADebuggerAPI::ReadResumeForAttachDetach(get_symbol_address,
-                                                 *cpu_process);
+                                                 m_native_process);
   if (!resume_for_attach)
     return resume_for_attach.takeError();
 
@@ -840,12 +825,12 @@ void LLDBServerPluginNVGPU::HandleInternalError(CUDBGResult error_type) {
     HaltNativeProcess();
 }
 
-llvm::Error LLDBServerPluginNVGPU::RunOnNativeMainLoop(
-    std::function<llvm::Error(NativeProcessProtocol &)> work) {
+llvm::Error
+LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work) {
   // Held by both this frame and the callback, so a timeout here cannot leave
   // the native thread writing into a destroyed promise.
   struct SharedWork {
-    std::function<llvm::Error(NativeProcessProtocol &)> work;
+    std::function<llvm::Error()> work;
     /// An empty string means success; otherwise the rendered error.
     std::promise<std::string> result;
   };
@@ -853,12 +838,9 @@ llvm::Error LLDBServerPluginNVGPU::RunOnNativeMainLoop(
   shared->work = std::move(work);
   std::future<std::string> future = shared->result.get_future();
 
-  auto run = [this, shared](MainLoopBase &) {
+  auto run = [shared](MainLoopBase &) {
     std::string message;
-    NativeProcessProtocol *process = m_native_process.GetCurrentProcess();
-    if (!process)
-      message = "the native process has exited";
-    else if (Error err = shared->work(*process))
+    if (Error err = shared->work())
       message = llvm::toString(std::move(err));
     shared->result.set_value(std::move(message));
   };
@@ -880,11 +862,11 @@ llvm::Error LLDBServerPluginNVGPU::RunOnNativeMainLoop(
 
 void LLDBServerPluginNVGPU::HaltNativeProcess() {
   auto halt = [this](MainLoopBase &) {
-    NativeProcessProtocol *cpu = m_native_process.GetCurrentProcess();
-    if (!cpu || !cpu->IsRunning())
+    if (!m_native_process.IsProcessRunning())
       return;
-    if (Status status = cpu->Halt(); status.Fail())
-      LLDB_LOG(GetLog(GDBRLog::Plugin), "HaltNativeProcess: {0}", status);
+    if (Error err = m_native_process.HaltProcess())
+      LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                     "HaltNativeProcess: {0}");
   };
   if (!m_native_process.GetMainLoop().AddPendingCallback(halt))
     LLDB_LOG(GetLog(GDBRLog::Plugin),
@@ -921,10 +903,10 @@ GPUPluginPrepareDetachResponse LLDBServerPluginNVGPU::PrepareDetach() {
   // Whether the driver needs the application running to complete its cleanup.
   // Kept raw because requestCleanupOnDetach takes it verbatim.
   auto resume_flags = std::make_shared<uint32_t>(0);
-  auto read = [symbols, resume_flags](NativeProcessProtocol &cpu) -> Error {
+  auto read = [this, symbols, resume_flags]() -> Error {
     Expected<uint32_t> flags = CUDADebuggerAPI::ReadResumeForAttachDetach(
         [&symbols](StringRef name) { return LookupSymbol(symbols, name); },
-        cpu);
+        m_native_process);
     if (!flags)
       return flags.takeError();
     *resume_flags = *flags;

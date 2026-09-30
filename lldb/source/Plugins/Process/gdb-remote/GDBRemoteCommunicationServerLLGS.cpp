@@ -1367,6 +1367,65 @@ GDBRemoteCommunicationServerLLGS::SendONotification(const char *buffer,
   return SendPacketNoLock(response.GetString());
 }
 
+llvm::Error
+GDBRemoteCommunicationServerLLGS::ReadProcessMemory(lldb::addr_t addr,
+                                                    void *buf, size_t size) {
+  if (!m_current_process)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no current process");
+  size_t bytes_read = 0;
+  Status error =
+      m_current_process->ReadMemoryWithoutTrap(addr, buf, size, bytes_read);
+  if (error.Fail())
+    return error.ToError();
+  if (bytes_read != size)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "read %zu of %zu bytes at 0x%" PRIx64,
+                                   bytes_read, size, addr);
+  return llvm::Error::success();
+}
+
+llvm::Error GDBRemoteCommunicationServerLLGS::WriteProcessMemory(
+    lldb::addr_t addr, const void *buf, size_t size) {
+  if (!m_current_process)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no current process");
+  size_t bytes_written = 0;
+  Status error = m_current_process->WriteMemory(addr, buf, size, bytes_written);
+  if (error.Fail())
+    return error.ToError();
+  if (bytes_written != size)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "wrote %zu of %zu bytes at 0x%" PRIx64,
+                                   bytes_written, size, addr);
+  return llvm::Error::success();
+}
+
+llvm::Expected<std::vector<std::string>>
+GDBRemoteCommunicationServerLLGS::GetLoadedLibraryPaths() {
+  if (!m_current_process)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no current process");
+  // TODO: List the libraries of processes without an SVR4 list, such as on
+  // Windows.
+  llvm::Expected<std::vector<SVR4LibraryInfo>> libraries =
+      m_current_process->GetLoadedSVR4Libraries();
+  if (!libraries)
+    return libraries.takeError();
+  std::vector<std::string> paths;
+  paths.reserve(libraries->size());
+  for (const SVR4LibraryInfo &library : *libraries)
+    paths.push_back(library.name);
+  return paths;
+}
+
+llvm::Error GDBRemoteCommunicationServerLLGS::HaltProcess() {
+  if (!m_current_process)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "no current process");
+  return m_current_process->Halt().ToError();
+}
+
 Status GDBRemoteCommunicationServerLLGS::SetSTDIOFileDescriptor(int fd) {
   Status error;
 

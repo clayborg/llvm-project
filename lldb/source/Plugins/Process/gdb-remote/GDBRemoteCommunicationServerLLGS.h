@@ -127,6 +127,37 @@ public:
 
   PacketResult SendONotification(const char *buffer, uint32_t len);
 
+  // Actions a server plugin takes on the debugged process through this server,
+  // rather than through the process itself. Like the rest of this server, they
+  // may only be used on its MainLoop thread; other threads post them to
+  // GetMainLoop(). Those returning an error fail when there is no current
+  // process.
+
+  /// Read exactly \a size bytes at \a addr, leaving out the breakpoint opcodes
+  /// this server inserted, as the memory read packets do.
+  llvm::Error ReadProcessMemory(lldb::addr_t addr, void *buf, size_t size);
+
+  /// Write exactly \a size bytes at \a addr, as the memory write packets do.
+  llvm::Error WriteProcessMemory(lldb::addr_t addr, const void *buf,
+                                 size_t size);
+
+  /// \return the paths of the shared libraries loaded in the process.
+  llvm::Expected<std::vector<std::string>> GetLoadedLibraryPaths();
+
+  /// Ask the process to stop, which it does at once if it is running and as
+  /// soon as it resumes otherwise. The stop is reported to the client like any
+  /// other.
+  llvm::Error HaltProcess();
+
+  bool IsProcessRunning() const {
+    return m_current_process && m_current_process->IsRunning();
+  }
+
+  lldb::pid_t GetProcessID() const {
+    return m_current_process ? m_current_process->GetID()
+                             : LLDB_INVALID_PROCESS_ID;
+  }
+
 protected:
   MainLoop &m_mainloop;
   MainLoop::ReadHandleUP m_network_handle_up;
