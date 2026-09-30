@@ -25,11 +25,7 @@ lldb::StateType
 LLDBServerPlugin::HaltNativeProcessIfNeeded(bool &was_halted, 
                                             uint32_t timeout_sec) {
   using namespace std::chrono;
-  was_halted = false;
   NativeProcessProtocol *process = m_native_process.GetCurrentProcess();
-  // Null when the inferior exits while a GPU-thread callback races to halt it.
-  if (!process)
-    return lldb::eStateInvalid;
   if (process->IsRunning()) {
     was_halted = true;
     process->Halt();

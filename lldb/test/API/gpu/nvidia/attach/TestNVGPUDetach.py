@@ -5,12 +5,12 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
     """Tests for cleanly detaching from an attached CUDA application.
 
     Builds on the late-attach flow: attach to an already-running kernel, set a
-    GPU breakpoint, then detach. The plugin-owned detach cleanup must tear down
-    the device breakpoints, let the driver clean up, reset its handshake flags
-    and leave the CPU application running. A second attach to the same pid must
-    then succeed, which is what proves the cleanup was complete: a leftover
-    device breakpoint or a driver still believing a debugger is attached makes
-    the re-attach fail or wedge.
+    GPU breakpoint, then detach. lldb removes the breakpoint before it detaches,
+    and the plugin-owned detach cleanup must let the driver clean up, reset its
+    handshake flags and leave the CPU application running. A second attach to
+    the same pid must then succeed, which is what proves the cleanup was
+    complete: a driver still believing a debugger is attached makes the
+    re-attach fail or wedge.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
@@ -42,8 +42,8 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
             self.dbg.DeleteTarget(target)
 
     def _attach_and_set_gpu_breakpoint(self):
-        """Attach, then set a GPU breakpoint so the detach path has device
-        breakpoints to tear down."""
+        """Attach, then set a GPU breakpoint, so the detach starts with one
+        inserted on the device."""
         self.build()
         exe = self.getBuildArtifact("a.out")
         ready_marker = self.getBuildArtifact("kernel_ready.marker")

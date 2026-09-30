@@ -78,6 +78,17 @@ private:
   llvm::Error
   RunOnNativeMainLoop(std::function<llvm::Error(NativeProcessProtocol &)> work);
 
+  /// Stop the native process if it is running, and wait up to
+  /// kNativeHaltTimeoutSeconds for it to stop. The base class's
+  /// HaltNativeProcessIfNeeded polls the process from the calling thread, which
+  /// reads freed memory if the inferior exits meanwhile, so everything that
+  /// touches the process goes through RunOnNativeMainLoop instead.
+  ///
+  /// \return
+  ///     The state of the process afterwards, or eStateInvalid if it could not
+  ///     be read, for example because the inferior has exited.
+  lldb::StateType HaltNativeProcess();
+
   void DetachCleanup();
 
   /// Step 3 of DetachCleanup: ask the driver to clean up, resume the devices
@@ -96,8 +107,9 @@ private:
   /// cleanup, which needs the IPC flag still set.
   void ResetDriverHandshakeFlags(const llvm::StringMap<uint64_t> &symbols);
 
-  /// Step 6 of DetachCleanup: finalize and drop the debugger API along with
-  /// everything holding a pointer into it.
+  /// Finalize and drop the debugger API along with everything holding a
+  /// pointer into it. Step 6 of DetachCleanup, and the undo of an
+  /// InitializeAPIAndConnect that failed partway.
   void ReleaseDebuggerAPI();
 
   /// Send a monitor log line to the client. Only valid while the GPU is
@@ -148,6 +160,7 @@ private:
   static constexpr unsigned kAttachWaitTimeoutSeconds = 10;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;
+  static constexpr unsigned kNativeHaltTimeoutSeconds = 5;
 };
 
 } // namespace lldb_private::lldb_server
