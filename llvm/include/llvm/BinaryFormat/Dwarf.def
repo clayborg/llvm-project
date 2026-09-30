@@ -912,6 +912,9 @@ HANDLE_DW_OP(0xe4, HP_mod_range, -1, -1, 0, HP)
 HANDLE_DW_OP(0xe5, HP_unmod_range, -1, -1, 0, HP)
 HANDLE_DW_OP(0xe6, HP_tls, -1, -1, 0, HP)
 HANDLE_DW_OP(0xe8, INTEL_bit_piece, -1, -1, 0, INTEL)
+// DW_OP_INTEL_push_simd_lane (0xed) collides with DW_OP_WASM_location; both
+// Intel GT opcodes live in SymbolFileIntelGT.h and dispatch via
+// ParseVendorDWARFOpcode.
 
 // Extensions for WebAssembly.
 HANDLE_DW_OP(0xed, WASM_location, -1, -1, 0, WASM)

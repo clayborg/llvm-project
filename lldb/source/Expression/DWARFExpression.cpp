@@ -13,6 +13,7 @@
 #include <optional>
 #include <vector>
 
+#include "lldb/Core/Architecture.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Utility/DataEncoder.h"
@@ -2303,9 +2304,17 @@ llvm::Expected<Value> DWARFExpression::Evaluate(
 
     default:
       if (dwarf_cu) {
-        if (dwarf_cu->ParseVendorDWARFOpcode(op, opcodes, offset, reg_ctx,
-                                             reg_kind, stack)) {
+        if (dwarf_cu->ParseVendorDWARFOpcode(op, opcodes, offset, exe_ctx,
+                                             reg_ctx, reg_kind, stack))
           break;
+      }
+      if (exe_ctx) {
+        if (Target *target = exe_ctx->GetTargetPtr()) {
+          if (Architecture *arch = target->GetArchitecturePlugin()) {
+            if (arch->ParseVendorDWARFOpcode(op, opcodes, offset, exe_ctx,
+                                             reg_ctx, reg_kind, stack))
+              break;
+          }
         }
       }
       return llvm::createStringError(llvm::formatv(

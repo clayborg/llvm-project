@@ -98,10 +98,11 @@ uint64_t SymbolFileDWARFDwo::GetDebugInfoSize(bool load_all_debug_info) {
 
 bool SymbolFileDWARFDwo::ParseVendorDWARFOpcode(
     uint8_t op, const DataExtractor &opcodes, lldb::offset_t &offset,
-    RegisterContext *reg_ctx, lldb::RegisterKind reg_kind,
-    std::vector<Value> &stack) const {
+    ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
+    lldb::RegisterKind reg_kind, std::vector<Value> &stack) const {
   return GetBaseSymbolFile().ParseVendorDWARFOpcode(op, opcodes, offset,
-                                                    reg_ctx, reg_kind, stack);
+                                                    exe_ctx, reg_ctx,
+                                                    reg_kind, stack);
 }
 
 llvm::DenseMap<const DWARFDebugInfoEntry *, Type *> &
