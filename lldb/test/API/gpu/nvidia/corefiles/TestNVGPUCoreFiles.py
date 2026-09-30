@@ -28,20 +28,6 @@ class TestNVGPUCoreFiles(NVGPUCoreTestBase):
         6: (lldb.eStopReasonException, "CUDA Exception: Warp Invalid Address Space"),
     }
 
-    def read_vec3_register(self, frame, name):
-        """Read a 3-component (dim3/uint3) vector register as [x, y, z]."""
-        reg = frame.FindRegister(name)
-        self.assertTrue(reg.IsValid(), f"{name} should be a valid register")
-        data = reg.GetData()
-        vals = []
-        for i in range(3):
-            err = lldb.SBError()
-            vals.append(data.GetUnsignedInt32(err, i * 4))
-            self.assertTrue(
-                err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
-            )
-        return vals
-
     def get_thread_name(self, block, thread):
         return f"blockIdx(x={block} y=0 z=0) threadIdx(x={thread} y=0 z=0)"
 

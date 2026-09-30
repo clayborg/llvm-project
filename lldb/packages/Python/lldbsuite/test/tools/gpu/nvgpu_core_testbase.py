@@ -48,20 +48,53 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
             self.build()
             self._built_core = True
 
+        # A stale core from an earlier run must not satisfy the isfile check below.
+        try:
+            os.remove(core_path)
+        except FileNotFoundError:
+            pass
+
+        # Nothing here is a skip. Whether this test may run at all (device,
+        # driver, nvcc) was decided before it started, so every problem from
+        # here on is a real failure and must surface as one. A program that
+        # cannot be started after a successful build points at a broken
+        # artifact path or build rule. A program that runs past the timeout
+        # either never faults (an exception_type with no switch case spins
+        # forever) or the driver did not write the core. A program that exits
+        # cleanly, or exits without leaving a core, is the same kind of
+        # failure. Turning any of these into a skip would let a coredump test
+        # go green without ever loading a core.
+        argv = [self.getBuildArtifact("a.out"), *args]
         try:
             result = subprocess.run(
-                [self.getBuildArtifact("a.out"), *args],
+                argv,
                 cwd=build_dir,
                 env=env,
                 capture_output=True,
                 timeout=120,
             )
-            if result.returncode == 0:
-                raise RuntimeError("Expected GPU crash but process exited cleanly")
-            if not os.path.isfile(core_path):
-                raise RuntimeError(f"CUDA core dump not found at {core_path}")
-        except Exception as e:
-            self.skipTest(f"Core generation failed: {e}")
+        except OSError as e:
+            self.fail(f"Core generation could not run {argv}: {e}")
+        except subprocess.TimeoutExpired as e:
+            stdout_tail = (e.stdout or b"").decode(errors="replace")[-500:]
+            stderr_tail = (e.stderr or b"").decode(errors="replace")[-500:]
+            self.fail(
+                f"Core generation timed out after {e.timeout} s running {argv}; "
+                f"core path {core_path} "
+                f"(partial file present: {os.path.isfile(core_path)}); "
+                f"stdout tail: {stdout_tail!r}; stderr tail: {stderr_tail!r}"
+            )
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "Expected the test program to crash on the GPU, but it exited cleanly: "
+            f"{result.stderr.decode(errors='replace')[-500:]}",
+        )
+        self.assertTrue(
+            os.path.isfile(core_path),
+            f"CUDA core dump not found at {core_path}; program stderr: "
+            f"{result.stderr.decode(errors='replace')[-500:]}",
+        )
 
         self._generated_cores[cache_key] = core_path
         return core_path
