@@ -294,49 +294,6 @@ error, which LLDB reports before resuming the native process.
 **Priority To Implement:** Low. This packet is only needed by stubs with GPU
 plug-ins.
 
-## jGPUPluginGetDynamicLoaderLibraryInfo
-
-Ask for the shared libraries loaded on a GPU, such as the code objects of its
-kernels. LLDB's `gdb-remote-gpu` dynamic loader plug-in sends this for a GPU
-target. It sends it to the GPU's own GDB server, unless that server's
-`jLLDBSettings` reply sets `send_dyld_packet_to_gpu` to false. In that case the
-packet goes to the native process' lldb-server, which passes it to the named GPU
-plug-in.
-
-The packet is followed by a JSON dictionary with these keys:
-
-* `plugin_name`: the name of the GPU plug-in to ask. The native process'
-  lldb-server requires it, and a GPU's GDB server ignores it.
-* `full`: true for every loaded library, false for only the changes since the
-  previous request.
-
-The reply is a JSON dictionary whose `library_infos` key holds an array with a
-dictionary for each library:
-
-* `pathname`: the path of the library's object file.
-* `uuid` (optional): the library's UUID as a string.
-* `load`: true if the library was loaded, false if it was unloaded.
-* `load_address` (optional): the address to slide the whole object file to.
-* `loaded_sections`: an array of `{"names":[...],"load_address":<integer>}`
-  dictionaries for sections that are loaded individually. `names` is a path of
-  section names from the top level down, such as `["PT_LOAD[0]", ".text"]`,
-  and a single name matches the first section with that name. When neither
-  `load_address` nor `loaded_sections` is given, the library is loaded at the
-  addresses in its object file.
-* `native_memory_address` and `native_memory_size` (optional): where to read the
-  object file from the native process' memory, when it only exists there.
-* `file_offset` and `file_size` (optional): where the object file sits inside
-  `pathname`, when it is embedded in a larger file.
-* `elf_image_base64` (optional): the whole ELF object file, base64 encoded.
-
-```
-LLDB SENDS: jGPUPluginGetDynamicLoaderLibraryInfo:{"plugin_name":"","full":true}
-STUB REPLIES: {"library_infos":[{"pathname":"cuda_elf_102073998357552.cubin","uuid":null,"load":true,"load_address":null,"loaded_sections":[{"names":[".text._Z10spinKernelPViS0_"],"load_address":1099602950656}],"native_memory_address":null,"native_memory_size":null,"file_offset":null,"file_size":null,"elf_image_base64":"f0VMRgIBAUEIAAAA..."}]}
-```
-
-**Priority To Implement:** Low. This packet is only needed by stubs that debug
-GPUs or have GPU plug-ins.
-
 ## jGPUPluginInitialize
 
 Ask the GPU plug-ins in the native process' lldb-server what they need done
@@ -415,8 +372,7 @@ dictionary has these keys:
 * `wait_for_gpu_process_to_stop`: true to wait until the GPU process has stopped
   at `stop_id`.
 * `load_libraries`: true to have the GPU process load its shared libraries
-  again, which the `gdb-remote-gpu` dynamic loader does with
-  `jGPUPluginGetDynamicLoaderLibraryInfo`.
+  again.
 * `resume_gpu_process`: true to resume the GPU process.
 * `wait_for_gpu_process_to_resume`: true to wait until the GPU process has
   resumed from `stop_id`.
@@ -514,33 +470,6 @@ the modules will be interesting to the client.
 **Priority To Implement:** Optional. If not implemented, `qModuleInfo` packet
 will be used, which may be slower if the target contains a large number of modules
 and the communication link has a non-negligible latency.
-
-## jLLDBSettings
-
-Ask a GDB server for settings that configure LLDB's process for it. GPU GDB
-servers use this packet. LLDB sends it only to a stub that advertised
-`lldb-settings+` in its `qSupported` reply, and keeps the first successful reply
-for the rest of the connection.
-
-The reply is a JSON dictionary with these keys:
-
-* `dyld_plugin_name`: the name of the dynamic loader plug-in LLDB should use for
-  the process, or an empty string to have LLDB choose one from the target
-  triple. GPU GDB servers usually name `gdb-remote-gpu`, which loads libraries
-  with `jGPUPluginGetDynamicLoaderLibraryInfo`.
-* `gpu_plugin_name`: the name of the GPU plug-in behind the connection.
-* `send_dyld_packet_to_gpu`: true to send
-  `jGPUPluginGetDynamicLoaderLibraryInfo` to this connection. False to send it
-  to the native process' lldb-server instead, with `gpu_plugin_name` as its
-  `plugin_name`, for GPU GDB servers that cannot inspect the native process.
-
-```
-LLDB SENDS: jLLDBSettings
-STUB REPLIES: {"dyld_plugin_name":"gdb-remote-gpu","gpu_plugin_name":"nvgpu","send_dyld_packet_to_gpu":true}
-```
-
-**Priority To Implement:** Low. This packet is only needed by stubs that debug
-GPUs.
 
 ## jLLDBTraceGetBinaryData
 
