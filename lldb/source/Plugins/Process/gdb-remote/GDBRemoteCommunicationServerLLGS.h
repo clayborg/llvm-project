@@ -18,7 +18,6 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/lldb-private-forward.h"
-#include "llvm/ADT/StringSet.h"
 
 #include "GDBRemoteCommunicationServerCommon.h"
 
@@ -106,8 +105,7 @@ public:
   }
 
   /// \return the MainLoop driving this server. GPU server plugins use this to
-  /// run work on the CPU event loop, which is the loop running while the attach
-  /// handshake is still in progress and the thread ptrace requests must use.
+  /// run work on this server's thread, the only one allowed to use its process.
   MainLoop &GetMainLoop() { return m_mainloop; }
 
   struct DebuggedProcess {
@@ -141,9 +139,6 @@ public:
   llvm::Error WriteProcessMemory(lldb::addr_t addr, const void *buf,
                                  size_t size);
 
-  /// \return the paths of the shared libraries loaded in the process.
-  llvm::Expected<std::vector<std::string>> GetLoadedLibraryPaths();
-
   /// Ask the process to stop, which it does at once if it is running and as
   /// soon as it resumes otherwise. The stop is reported to the client like any
   /// other.
@@ -151,11 +146,6 @@ public:
 
   bool IsProcessRunning() const {
     return m_current_process && m_current_process->IsRunning();
-  }
-
-  lldb::pid_t GetProcessID() const {
-    return m_current_process ? m_current_process->GetID()
-                             : LLDB_INVALID_PROCESS_ID;
   }
 
 protected:
@@ -189,10 +179,6 @@ protected:
   /// If this GDB server has LLDBServerPlugins, then this will list all 
   /// installed LLDBServerPlugin instances.
   std::vector<std::unique_ptr<lldb_server::LLDBServerPlugin>> m_plugins;
-
-  /// Symbols already requested from the client in the current qSymbol round,
-  /// so one it cannot resolve is not requested again.
-  llvm::StringSet<> m_symbol_lookups_requested;
 
   /// If this GDB server is a LLDBServerPlugin, then this will point to the 
   /// LLDBServerPlugin instance.
@@ -354,14 +340,6 @@ protected:
   PacketResult Handle_jGPUPluginInitialize(StringExtractorGDBRemote &packet);
   
   PacketResult Handle_jGPUPluginBreakpointHit(StringExtractorGDBRemote &packet);
-
-  PacketResult Handle_qSymbol(StringExtractorGDBRemote &packet);
-
-  PacketResult Handle_jGPUPluginFinishAttach(StringExtractorGDBRemote &packet);
-
-  PacketResult Handle_jGPUPluginPrepareDetach(StringExtractorGDBRemote &packet);
-
-  PacketResult Handle_jGPUPluginFinishDetach(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
       StringExtractorGDBRemote &packet);

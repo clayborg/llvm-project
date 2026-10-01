@@ -10,16 +10,16 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
     Unlike the other NVGPU tests, which launch the inferior under the debugger
     and rely on the cuInit-style initialization breakpoint, this test starts the
     CUDA process independently (with a resident kernel already executing) and
-    then attaches to it. The lldb-server NVGPU plugin must transparently detect
-    the running CUDA driver, initiate the safe attach procedure, bring up the
-    GPU target, and surface the in-flight kernel's threads in the thread list.
+    then attaches to it. lldb must transparently detect the running CUDA
+    driver, start the driver's attach procedure, bring up the GPU target, and
+    surface the in-flight kernel's threads in the thread list.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
 
     def _set_attach_wait_timeout_ms(self, timeout_ms):
-        """Set how long lldb-server keeps the process running for the GPU
-        attach. The lldb-server that process attach starts inherits it."""
+        """Set how long lldb keeps the process running for the GPU attach.
+        lldb runs in this test's process, so it reads this environment."""
         os.environ["NVGPU_ATTACH_WAIT_TIMEOUT_MS"] = str(timeout_ms)
         self.addTearDownHook(
             lambda: os.environ.pop("NVGPU_ATTACH_WAIT_TIMEOUT_MS", None)
@@ -104,10 +104,9 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
         self._run_until_the_gpu_attach_completes()
 
     def test_attach_times_out_waiting_for_the_gpu(self):
-        """If the driver has not finished the GPU attach in time, lldb-server
-        stops the process so that process attach returns without the GPU target,
-        and the GPU target comes up once the process runs again."""
-        # The driver needs far longer than no time at all.
+        """With no time to wait for the GPU attach, lldb does not run the
+        process, so process attach returns without the GPU target, and the GPU
+        target comes up once the process runs."""
         self._set_attach_wait_timeout_ms(0)
         self.build()
         exe = self.getBuildArtifact("a.out")
@@ -121,7 +120,7 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
 
     def test_attach_before_cuda_is_initialized(self):
         """Attach while libcuda is not loaded yet. There is nothing to hand off
-        then, so the plugin skips the safe attach handshake and the GPU target
+        then, so lldb skips the attach handshake and the GPU target
         comes up through the launch-style initialization breakpoints once the
         application initializes CUDA."""
         self.build()

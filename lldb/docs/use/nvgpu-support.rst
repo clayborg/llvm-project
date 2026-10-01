@@ -104,10 +104,6 @@ behavior when lldb-server starts:
 - `NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP`: when set to "1", disables the automatic
   suspension of the CPU process when the GPU is stopped.
 
-- `NVGPU_ATTACH_WAIT_TIMEOUT_MS`: how long, in milliseconds, ``process attach``
-  keeps the application running for the GPU attach to finish, instead of the
-  default 10 seconds. Mainly useful for testing the timeout.
-
 These environment variables can be set in the shell environment before
 starting lldb-server.
 
@@ -130,9 +126,11 @@ so LLDB keeps the process running until it has, then stops it. When
 ``process attach`` returns, a second (GPU) target is already there alongside
 the CPU target. If the driver has not finished within 10 seconds, the attach
 completes without it, and the GPU target appears once the application runs
-again. Set ``plugin.process.gdb-remote.wait-for-gpu-attach`` to ``false`` to
-have ``process attach`` return as soon as the CPU is attached instead; the GPU
-target then appears once you continue.
+again. To wait a different time, set `NVGPU_ATTACH_WAIT_TIMEOUT_MS` in LLDB's
+environment to the number of milliseconds; with 0, LLDB does not run the
+application at all. Set ``plugin.process.gdb-remote.wait-for-gpu-attach`` to
+``false`` to have ``process attach`` return as soon as the CPU is attached
+instead; the GPU target then appears once you continue.
 
 Select the GPU target to inspect device state:
 
@@ -156,31 +154,29 @@ How it works
 """"""""""""
 
 Because the application is already running, the ``cuInit``-style initialization
-breakpoint used by the launch path has already been passed. Instead, the plugin
-uses the driver's safe attach mechanism:
+breakpoint used by the launch path has already been passed. Instead, LLDB uses
+the driver's safe attach mechanism:
 
-#. When LLDB attaches, it tells the GPU plug-ins (via ``jGPUPluginInitialize``)
-   that this is an attach. The NVGPU plugin then sets a breakpoint on
-   ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``.
-#. At the attach stop, if ``libcuda`` is not loaded in the process, CUDA cannot
-   have been initialized yet. The plugin skips the rest of this procedure, and
-   the ``cuInit``-style breakpoint initializes the debugger API as on launch
-   once the application initializes CUDA.
-#. Otherwise, while LLDB loads the process's modules, ``lldb-server`` asks it
-   for the addresses of the driver's handshake symbols through the standard
-   ``qSymbol`` exchange. Once the driver has published the file descriptor in
-   ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD`` (it stays -1 until the driver
-   has finished initializing), the plugin writes the client handshake globals
-   and a byte to that descriptor. This asks the driver to inject the debug
-   engine at a point it determines is safe, avoiding the unsafe forced function
-   call used by the deprecated mechanism.
-#. Once LLDB has finished attaching to the CPU process, it asks the GPU
-   plug-ins (via ``jGPUPluginFinishAttach``) whether one of them needs the
-   process to keep running. The NVGPU plugin answers yes when it has written
-   that byte, and stops the process again once its attach has finished. If it
-   could not ask the driver, because ``libcuda`` lacks one of the handshake
-   symbols or the request failed, LLDB shows a warning saying why the GPU
-   cannot be attached to.
+#. The NVGPU plugin in ``lldb-server`` sets a breakpoint on
+   ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED`` next to the ``cuInit``-style
+   ones. Its ``jGPUPluginInitialize`` reply also carries the values that the
+   driver needs about the debugger and that only ``lldb-server`` knows, such as
+   the pid of the ``lldb-server`` that will run the debugger API.
+#. Once LLDB has attached to the CPU process, the NVGPU platform plugin looks
+   for ``libcuda`` in the process. If it is not loaded, CUDA cannot have been
+   initialized yet. LLDB skips the rest of this procedure, and the
+   ``cuInit``-style breakpoint initializes the debugger API as on launch once
+   the application initializes CUDA. The same happens while the file descriptor
+   in ``CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD`` is still -1, which it is
+   until the driver has finished initializing.
+#. Otherwise LLDB writes the client handshake globals into ``libcuda``, and a
+   byte to that descriptor through the CPU process's ``lldb-server``. This asks
+   the driver to inject the debug engine at a point it determines is safe,
+   avoiding the unsafe forced function call used by the deprecated mechanism.
+   If ``libcuda`` lacks one of the handshake symbols, or a write fails, LLDB
+   shows a warning saying why the GPU cannot be attached to.
+#. The driver can only inject the debug engine while the application runs, so
+   LLDB resumes the process instead of ending the attach.
 #. When the driver finishes injecting the debug engine it calls
    ``CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED``; the plugin's breakpoint fires and
    it initializes the CUDA debugger API exactly like the launch path.
@@ -190,7 +186,8 @@ uses the driver's safe attach mechanism:
    ``CUDBG_EVENT_ATTACH_COMPLETE``; when it is clear there is nothing to replay
    and the attach completes immediately. Either way the plugin suspends all
    devices, refreshes device state, and reports the GPU as stopped so the
-   kernel's threads appear in the thread list.
+   kernel's threads appear in the thread list. LLDB then stops the CPU process
+   as well, which ends the attach.
 
 LLDB supports **only** this safe late attach mechanism, which requires a CUDA
 driver that exports ``cudbgInitiateDebuggerAttachProcedureFd``. The legacy
@@ -207,9 +204,8 @@ Detaching and re-attaching
 ``detach`` leaves the application running. When you detach the GPU target, the
 plugin removes the breakpoints it set on the device and asks the driver to
 clean up. The driver can only do that while the application runs, so LLDB runs
-the CPU process until the driver has finished (via ``jGPUPluginPrepareDetach``
-and ``jGPUPluginFinishDetach``), then stops it again and resets the driver's
-handshake globals, and the plugin finalizes the debugger API. That leaves the
+the CPU process until the GPU's ``lldb-server`` has finished detaching, then
+stops it again and resets the driver's handshake globals. That leaves the
 process in a state a later debugger can attach to again. Detach the GPU target
 before the CPU target, and re-select the host platform before re-attaching::
 

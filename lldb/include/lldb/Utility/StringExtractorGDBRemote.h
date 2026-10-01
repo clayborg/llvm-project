@@ -123,7 +123,6 @@ public:
     eServerPacketType_qStepPacketSupported,
     eServerPacketType_qStructuredDataPlugins,
     eServerPacketType_qSupported,
-    eServerPacketType_qSymbol,
     eServerPacketType_qSyncThreadStateSupported,
     eServerPacketType_qThreadExtraInfo,
     eServerPacketType_qThreadStopInfo,
@@ -190,9 +189,6 @@ public:
     // GPU plug-in packets.
     eServerPacketType_jGPUPluginInitialize,
     eServerPacketType_jGPUPluginBreakpointHit,
-    eServerPacketType_jGPUPluginFinishAttach,
-    eServerPacketType_jGPUPluginPrepareDetach,
-    eServerPacketType_jGPUPluginFinishDetach,
     eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
     eServerPacketType_jGPUGetKernelInfos,
 

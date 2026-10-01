@@ -9,9 +9,11 @@
 #include "PlatformNVGPU.h"
 #include "cudadebugger.h"
 #include "lldb/Core/Address.h"
+#include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
+#include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/Process.h"
@@ -21,18 +23,26 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadList.h"
+#include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/NVGPU/AttachHandshake.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Stream.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <chrono>
 #include <climits>
 #include <map>
 #include <regex>
@@ -1275,4 +1285,254 @@ lldb::ThreadSP PlatformNVGPU::FindGPUThread(Process &process,
   }
 
   return nullptr;
+}
+
+namespace {
+#define NVGPU_STRINGIFY_HELPER(x) #x
+#define NVGPU_STRINGIFY(x) NVGPU_STRINGIFY_HELPER(x)
+
+// libcuda's debugger handshake globals; see cudadebugger.h.
+constexpr llvm::StringLiteral kAttachFdSymbol =
+    NVGPU_STRINGIFY(CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
+constexpr llvm::StringLiteral kApiClientPidSymbol =
+    NVGPU_STRINGIFY(CUDBG_APICLIENT_PID);
+constexpr llvm::StringLiteral kApiClientRevisionSymbol =
+    NVGPU_STRINGIFY(CUDBG_APICLIENT_REVISION);
+constexpr llvm::StringLiteral kSessionIdSymbol =
+    NVGPU_STRINGIFY(CUDBG_SESSION_ID);
+constexpr llvm::StringLiteral kCapabilitiesSymbol =
+    NVGPU_STRINGIFY(CUDBG_DEBUGGER_CAPABILITIES);
+constexpr llvm::StringLiteral kInjectionPathSymbol = "cudbgInjectionPath";
+constexpr llvm::StringLiteral kResumeForAttachDetachSymbol =
+    NVGPU_STRINGIFY(CUDBG_RESUME_FOR_ATTACH_DETACH);
+// Set by the debug engine once initialized. Older drivers do not export it.
+constexpr llvm::StringLiteral kDebuggerInitializedSymbol =
+    NVGPU_STRINGIFY(CUDBG_DEBUGGER_INITIALIZED);
+constexpr llvm::StringLiteral kIpcFlagSymbol =
+    NVGPU_STRINGIFY(CUDBG_IPC_FLAG_NAME);
+
+// Written to the attach fd to ask the driver to inject its debug engine. The
+// driver accepts any byte.
+constexpr uint8_t kAttachProcedureMagicByte = 0xAB;
+
+// The size of the driver's CUDBG_INJECTION_PATH buffer, including the NUL.
+// Longer paths are rejected rather than truncated.
+constexpr size_t kInjectionPathMaxSize = 4096;
+
+/// \return libcuda's module, named "libcuda.so" optionally followed by numeric
+/// version components, if it is loaded.
+lldb::ModuleSP FindLibcuda(Target &target) {
+  static const llvm::Regex g_soname_regex("^libcuda\\.so(\\.[0-9]+)*$");
+  const ModuleList &images = target.GetImages();
+  for (size_t i = 0; i < images.GetSize(); ++i) {
+    lldb::ModuleSP module_sp = images.GetModuleAtIndex(i);
+    if (module_sp && g_soname_regex.match(
+                         module_sp->GetFileSpec().GetFilename().GetStringRef()))
+      return module_sp;
+  }
+  return nullptr;
+}
+
+std::optional<lldb::addr_t>
+FindSymbolLoadAddress(Module &module, Target &target, llvm::StringRef name) {
+  SymbolContextList sc_list;
+  module.FindSymbolsWithNameAndType(ConstString(name), lldb::eSymbolTypeAny,
+                                    sc_list);
+  for (uint32_t i = 0; i < sc_list.GetSize(); ++i) {
+    SymbolContext sc;
+    if (!sc_list.GetContextAtIndex(i, sc) || !sc.symbol)
+      continue;
+    lldb::addr_t address = sc.symbol->GetAddress().GetLoadAddress(&target);
+    if (address != LLDB_INVALID_ADDRESS)
+      return address;
+  }
+  return std::nullopt;
+}
+
+/// How long the process may run for the driver to finish attaching.
+/// NVGPU_ATTACH_WAIT_TIMEOUT_MS overrides it, mainly for tests: the driver
+/// never comes close to the default.
+std::chrono::milliseconds GetAttachWaitTimeout() {
+  const std::chrono::milliseconds default_timeout = std::chrono::seconds(10);
+  std::optional<std::string> value =
+      llvm::sys::Process::GetEnv("NVGPU_ATTACH_WAIT_TIMEOUT_MS");
+  if (!value)
+    return default_timeout;
+  unsigned ms = 0;
+  if (llvm::StringRef(*value).getAsInteger(10, ms)) {
+    LLDB_LOG(GetLog(LLDBLog::Process),
+             "ignoring NVGPU_ATTACH_WAIT_TIMEOUT_MS={0}, which is not a number "
+             "of milliseconds",
+             *value);
+    return default_timeout;
+  }
+  return std::chrono::milliseconds(ms);
+}
+} // namespace
+
+std::optional<std::chrono::milliseconds>
+PlatformNVGPU::StartGPUAttach(Process &process,
+                              const llvm::json::Value &platform_data) {
+  Log *log = GetLog(LLDBLog::Process);
+  nvgpu::AttachHandshake handshake;
+  llvm::json::Path::Root root;
+  if (!fromJSON(platform_data, handshake, root)) {
+    LLDB_LOG_ERROR(log, root.getError(),
+                   "PlatformNVGPU: malformed platform data: {0}");
+    return std::nullopt;
+  }
+
+  // Without libcuda, CUDA cannot have been initialized yet, and the plug-in's
+  // cuInit breakpoint brings the GPU up as on launch.
+  Target &target = process.GetTarget();
+  lldb::ModuleSP libcuda = FindLibcuda(target);
+  if (!libcuda)
+    return std::nullopt;
+
+  auto warn = [&target](const std::string &message) {
+    Debugger::ReportWarning("cannot attach to the GPU: " + message,
+                            target.GetDebugger().GetID());
+  };
+
+  // Resolve every symbol first, so that one missing writes nothing.
+  llvm::SmallVector<llvm::StringRef, 6> names = {
+      kAttachFdSymbol, kApiClientPidSymbol, kApiClientRevisionSymbol,
+      kSessionIdSymbol, kCapabilitiesSymbol};
+  if (handshake.injection_path)
+    names.push_back(kInjectionPathSymbol);
+  llvm::StringMap<lldb::addr_t> addresses;
+  for (llvm::StringRef name : names) {
+    std::optional<lldb::addr_t> address =
+        FindSymbolLoadAddress(*libcuda, target, name);
+    if (!address) {
+      warn(llvm::formatv("{0} was not found in libcuda; the CUDA driver may "
+                         "be too old to support attaching to a running "
+                         "application",
+                         name)
+               .str());
+      return std::nullopt;
+    }
+    addresses[name] = *address;
+  }
+
+  // The driver publishes the fd once it has initialized. Until then it is -1,
+  // and the cuInit breakpoint brings the GPU up as on launch.
+  int32_t attach_fd = -1;
+  Status error;
+  if (process.ReadMemory(addresses[kAttachFdSymbol], &attach_fd,
+                         sizeof(attach_fd), error) != sizeof(attach_fd)) {
+    warn(
+        llvm::formatv("could not read {0}: {1}", kAttachFdSymbol, error).str());
+    return std::nullopt;
+  }
+  if (attach_fd < 0)
+    return std::nullopt;
+
+  // Tell the driver who is attaching before asking it to. The IPC flag stays
+  // clear until the debug engine is up.
+  for (auto [name, value] :
+       {std::pair(kApiClientPidSymbol, handshake.api_client_pid),
+        std::pair(kApiClientRevisionSymbol, handshake.api_client_revision),
+        std::pair(kSessionIdSymbol, handshake.session_id),
+        std::pair(kCapabilitiesSymbol, handshake.capabilities)}) {
+    if (process.WriteMemory(addresses[name], &value, sizeof(value), error) !=
+        sizeof(value)) {
+      warn(llvm::formatv("could not write {0}: {1}", name, error).str());
+      return std::nullopt;
+    }
+  }
+  if (handshake.injection_path) {
+    // The driver reads the path when it injects the debug engine.
+    if (handshake.injection_path->size() + 1 > kInjectionPathMaxSize) {
+      warn(llvm::formatv("the injection path {0} is longer than the driver's "
+                         "{1}-byte buffer",
+                         *handshake.injection_path, kInjectionPathMaxSize)
+               .str());
+      return std::nullopt;
+    }
+    std::string path = *handshake.injection_path;
+    path.push_back('\0');
+    if (process.WriteMemory(addresses[kInjectionPathSymbol], path.data(),
+                            path.size(), error) != path.size()) {
+      warn(
+          llvm::formatv("could not write {0}: {1}", kInjectionPathSymbol, error)
+              .str());
+      return std::nullopt;
+    }
+  }
+
+  // Wake the driver, which injects its debug engine once the process runs. The
+  // fd is in the process's descriptor table, which procfs exposes.
+  std::string fd_path =
+      llvm::formatv("/proc/{0}/fd/{1}", process.GetID(), attach_fd);
+  if (llvm::Error err =
+          process.WriteBinaryDataToFile(fd_path, kAttachProcedureMagicByte)) {
+    warn("could not ask the driver to attach: " +
+         llvm::toString(std::move(err)));
+    return std::nullopt;
+  }
+  LLDB_LOG(log, "PlatformNVGPU: asked the driver to attach to process {0}",
+           process.GetID());
+  return GetAttachWaitTimeout();
+}
+
+bool PlatformNVGPU::WillDetachGPU(Process &process,
+                                  std::vector<int> &pass_signals) {
+  Log *log = GetLog(LLDBLog::Process);
+  Target &target = process.GetTarget();
+  lldb::ModuleSP libcuda = FindLibcuda(target);
+  if (!libcuda)
+    return false;
+  std::optional<lldb::addr_t> address =
+      FindSymbolLoadAddress(*libcuda, target, kResumeForAttachDetachSymbol);
+  if (!address)
+    return false;
+  // Non-zero when the driver needs the application running to clean up.
+  uint32_t resume_flags = 0;
+  Status error;
+  if (process.ReadMemory(*address, &resume_flags, sizeof(resume_flags),
+                         error) != sizeof(resume_flags)) {
+    LLDB_LOG(log, "PlatformNVGPU: could not read {0}: {1}",
+             kResumeForAttachDetachSymbol, error);
+    return false;
+  }
+  if (!resume_flags)
+    return false;
+
+  // Pass the ordinary signals through, so one cannot stop the application
+  // before the driver has finished: all but those the debugger relies on and
+  // the debug API's SIGURG, as cuda-gdb does.
+  const llvm::StringRef kept[] = {"SIGTRAP", "SIGKILL", "SIGSTOP", "SIGCHLD",
+                                  "SIGURG"};
+  if (const lldb::UnixSignalsSP &signals = process.GetUnixSignals()) {
+    for (int32_t signo = signals->GetFirstSignalNumber();
+         signo != LLDB_INVALID_SIGNAL_NUMBER;
+         signo = signals->GetNextSignalNumber(signo)) {
+      if (!llvm::is_contained(kept, signals->GetSignalAsStringRef(signo)))
+        pass_signals.push_back(signo);
+    }
+  }
+  return true;
+}
+
+void PlatformNVGPU::DidDetachGPU(Process &process) {
+  Log *log = GetLog(LLDBLog::Process);
+  Target &target = process.GetTarget();
+  lldb::ModuleSP libcuda = FindLibcuda(target);
+  if (!libcuda)
+    return;
+  // Reset the handshake so that a later debugger negotiates it again. The
+  // driver's cleanup needed the IPC flag, so it goes last, as on the way in.
+  const uint32_t zero = 0;
+  for (llvm::StringRef name :
+       {kCapabilitiesSymbol, kDebuggerInitializedSymbol, kIpcFlagSymbol}) {
+    std::optional<lldb::addr_t> address =
+        FindSymbolLoadAddress(*libcuda, target, name);
+    if (!address)
+      continue;
+    Status error;
+    if (process.WriteMemory(*address, &zero, sizeof(zero), error) !=
+        sizeof(zero))
+      LLDB_LOG(log, "PlatformNVGPU: could not reset {0}: {1}", name, error);
+  }
 }

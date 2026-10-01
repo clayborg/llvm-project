@@ -650,24 +650,19 @@ StructuredData::ObjectSP GDBRemoteCommunicationClient::GetGPUKernelInfos() {
 }
 
 std::optional<std::vector<GPUActions>>
-GDBRemoteCommunicationClient::GetGPUInitializeActions(
-    const GPUPluginInitializeArgs &args) {
+GDBRemoteCommunicationClient::GetGPUInitializeActions() {
   // Get JSON information containing any breakpoints and other information
   // required by any GPU plug-ins using the "jGPUPluginInitialize" packet.
   //
   // GPU plug-ins might require breakpoints to be set in the native program
   // that controls the GPUs. This packet allows the GPU plug-ins to set one or
   // more breakpoints in the native program and get a callback when those
-  // breakpoints get hit. The arguments tell the plug-ins about the context,
-  // such as whether the native process is being attached to versus launched.
+  // breakpoints get hit.
 
   if (m_supports_gpu_plugins == eLazyBoolYes) {
-    StreamGDBRemote packet;
-    packet.PutCString("jGPUPluginInitialize:");
-    packet.PutAsJSON(args, /*hex_ascii=*/false);
     StringExtractorGDBRemote response;
     response.SetResponseValidatorToJSON();
-    if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
+    if (SendPacketAndWaitForResponse("jGPUPluginInitialize", response) ==
         PacketResult::Success) {
       if (response.IsUnsupportedResponse()) {
         m_supports_gpu_plugins = eLazyBoolNo;
@@ -693,58 +688,6 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions(
   }
 
   return std::nullopt;
-}
-
-/// Send \a packet and parse its reply as a \a T.
-///
-/// \return
-///     std::nullopt if the server does not support the packet, fails it, or
-///     replies with something that is not a \a T.
-template <typename T>
-static std::optional<T>
-SendPacketForJSONReply(GDBRemoteCommunicationClient &client,
-                       llvm::StringRef packet, const char *reply_name) {
-  StringExtractorGDBRemote response;
-  response.SetResponseValidatorToJSON();
-  if (client.SendPacketAndWaitForResponse(packet, response) !=
-          GDBRemoteCommunication::PacketResult::Success ||
-      response.IsUnsupportedResponse() || response.IsErrorResponse())
-    return std::nullopt;
-
-  llvm::Expected<T> reply = llvm::json::parse<T>(response.Peek(), reply_name);
-  if (!reply) {
-    LLDB_LOG_ERROR(GetLog(GDBRLog::Process), reply.takeError(),
-                   "malformed {1}: {0}", reply_name);
-    return std::nullopt;
-  }
-  return std::move(*reply);
-}
-
-std::optional<GPUPluginFinishAttachResponse>
-GDBRemoteCommunicationClient::FinishGPUPluginAttach(
-    const GPUPluginFinishAttachArgs &args) {
-  if (m_supports_gpu_plugins != eLazyBoolYes)
-    return std::nullopt;
-
-  StreamGDBRemote packet;
-  packet.PutCString("jGPUPluginFinishAttach:");
-  packet.PutAsJSON(args, /*hex_ascii=*/false);
-  return SendPacketForJSONReply<GPUPluginFinishAttachResponse>(
-      *this, packet.GetString(), "GPUPluginFinishAttachResponse");
-}
-
-std::optional<GPUPluginPrepareDetachResponse>
-GDBRemoteCommunicationClient::PrepareGPUPluginDetach() {
-  return SendPacketForJSONReply<GPUPluginPrepareDetachResponse>(
-      *this, "jGPUPluginPrepareDetach", "GPUPluginPrepareDetachResponse");
-}
-
-std::optional<GPUPluginFinishDetachResponse>
-GDBRemoteCommunicationClient::FinishGPUPluginDetach() {
-  // The reply waits for the driver to finish its cleanup.
-  ScopedTimeout timeout(*this, std::max(GetPacketTimeout(), seconds(10)));
-  return SendPacketForJSONReply<GPUPluginFinishDetachResponse>(
-      *this, "jGPUPluginFinishDetach", "GPUPluginFinishDetachResponse");
 }
 
 std::optional<LLDBSettings>

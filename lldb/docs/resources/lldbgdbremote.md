@@ -294,65 +294,6 @@ error, which LLDB reports before resuming the native process.
 **Priority To Implement:** Low. This packet is only needed by stubs with GPU
 plug-ins.
 
-## jGPUPluginFinishAttach
-
-Tell the GPU plug-ins in the native process' lldb-server that LLDB has finished
-attaching to the native process, ask whether any of them needs the process to
-keep running to finish attaching to its GPU, and collect the reasons any of them
-cannot attach to its GPU. LLDB sends it just before it would report the stop
-that ends an attach, if the stub advertised `gpu-plugins+`.
-
-The packet is followed by a JSON dictionary with one key:
-
-* `may_resume`: true if LLDB is willing to resume the process for a plug-in that
-  needs it running. It is the value of the
-  `plugin.process.gdb-remote.wait-for-gpu-attach` setting, which is true by
-  default.
-
-The reply is a JSON dictionary with these keys:
-
-* `resume`: true if a plug-in needs the process running, which a stub only
-  answers when `may_resume` is true. LLDB then resumes the native process
-  instead of reporting the stop, and the attach ends at the next stop. A
-  plug-in that asks for this has to stop the native process once it has
-  finished attaching to its GPU, or has failed or given up, because LLDB keeps
-  waiting until then.
-* `warnings` (optional): an array of strings, each explaining why a plug-in
-  cannot attach to its GPU. LLDB shows them to the user.
-
-```
-LLDB SENDS: jGPUPluginFinishAttach:{"may_resume":true}
-STUB REPLIES: {"resume":true,"warnings":[]}
-```
-
-LLDB treats an error or unsupported reply as `{"resume":false}`.
-
-**Priority To Implement:** Low. This packet is only needed by stubs with GPU
-plug-ins that need the process to run while they attach, or that can fail to
-attach to their GPU.
-
-## jGPUPluginFinishDetach
-
-Wait until the GPU plug-in behind a GPU connection no longer needs the native
-process to run for its detach. LLDB sends this on the GPU connection after
-`jGPUPluginPrepareDetach`, with the native process running if the plug-in asked
-for that, and before `D`. This packet takes no arguments.
-
-The reply is a JSON dictionary with one key:
-
-* `memory_writes` (optional): an array of
-  `{"address":<integer>,"bytes":<hex string>}` dictionaries. Once LLDB has
-  stopped the native process again, it writes each one to the native process's
-  memory, before it sends `D`.
-
-```
-LLDB SENDS: jGPUPluginFinishDetach
-STUB REPLIES: {"memory_writes":[{"address":127723229400544,"bytes":"00000000"}]}
-```
-
-**Priority To Implement:** Low. This packet is only needed by GPU stubs whose
-plug-ins need the native process while they detach.
-
 ## jGPUPluginGetDynamicLoaderLibraryInfo
 
 Ask for the shared libraries loaded on a GPU, such as the code objects of its
@@ -401,51 +342,20 @@ GPUs or have GPU plug-ins.
 Ask the GPU plug-ins in the native process' lldb-server what they need done
 when LLDB starts debugging the native process. LLDB sends this once, when it
 connects to a stub that advertised `gpu-plugins+`, before it launches or
-attaches to the process.
-
-The packet is followed by a JSON dictionary with one key:
-
-* `is_attach` (optional, default false): true if LLDB is attaching to a running
-  process rather than launching one, so that a plug-in can prepare to attach to
-  a GPU that is already in use.
+attaches to the process. This packet takes no arguments.
 
 The reply is a JSON array with the GPU actions of each installed GPU plug-in.
 These usually set breakpoints in the native process that tell a plug-in when the
-GPU driver initializes.
+GPU driver initializes. Their `platform_data` is the only time a plug-in can
+pass data to LLDB's platform plug-in of the same name.
 
 ```
-LLDB SENDS: jGPUPluginInitialize:{"is_attach":false}
-STUB REPLIES: [{"plugin_name":"nvgpu","session_name":"","identifier":1,"stop_id":null,"breakpoints":[{"identifier":0,"name_info":{"shlib":"libcuda.so.1","function_name":"cudbgPreInit"},"addr_info":null,"symbol_names":["cudbgIpcFlag"]}],"connect_info":null,"wait_for_gpu_process_to_stop":false,"load_libraries":false,"resume_gpu_process":false,"wait_for_gpu_process_to_resume":false}]
+LLDB SENDS: jGPUPluginInitialize
+STUB REPLIES: [{"plugin_name":"nvgpu","session_name":"","identifier":1,"stop_id":null,"breakpoints":[{"identifier":0,"name_info":{"shlib":"libcuda.so.1","function_name":"cudbgPreInit"},"addr_info":null,"symbol_names":["cudbgIpcFlag"]}],"connect_info":null,"wait_for_gpu_process_to_stop":false,"load_libraries":false,"resume_gpu_process":false,"wait_for_gpu_process_to_resume":false,"stop_native_process":false,"platform_data":{"api_client_pid":12345,"api_client_revision":193,"session_id":0,"capabilities":10}}]
 ```
 
 **Priority To Implement:** Low. This packet is only needed by stubs with GPU
 plug-ins.
-
-## jGPUPluginPrepareDetach
-
-Tell the GPU plug-in behind a GPU connection that LLDB is detaching the GPU
-process. LLDB sends this on the GPU connection before
-`jGPUPluginFinishDetach` and `D`. This packet takes no arguments.
-
-The reply is a JSON dictionary with these keys:
-
-* `resume_native`: true if the plug-in needs the native process to run while it
-  finishes detaching. LLDB then resumes the native process, without reporting
-  it to the user, until `jGPUPluginFinishDetach` returns, and stops it again.
-* `pass_signals` (optional): signals for the native process to receive without
-  stopping while it runs. LLDB sets them with `QPassSignals`, and restores the
-  user's own once it has stopped the process.
-
-```
-LLDB SENDS: jGPUPluginPrepareDetach
-STUB REPLIES: {"resume_native":true,"pass_signals":[1,2,3,4,6]}
-```
-
-LLDB treats an error or unsupported reply as having nothing to do, and sends `D`
-straight away.
-
-**Priority To Implement:** Low. This packet is only needed by GPU stubs whose
-plug-ins need the native process while they detach.
 
 ## gpu-plugins (qSupported feature)
 
@@ -455,12 +365,16 @@ debugs the native (CPU) process of a GPU application. It watches the native
 process for the GPU driver, and asks LLDB to create a second target for the GPU,
 connected to a GDB server that debugs the GPU.
 
-LLDB only sends `jGPUPluginInitialize` and `jGPUPluginFinishAttach` to a stub
-that advertised `gpu-plugins+`. When it detaches a GPU target, it sends
-`jGPUPluginPrepareDetach` and `jGPUPluginFinishDetach` on that GPU connection
-first. The `jGPUPlugin` packets use JSON with the same binary escaping as the
-other JSON packets. Plug-ins can also look up symbols in the native process
-through `qSymbol`.
+LLDB only sends `jGPUPluginInitialize` to a stub that advertised
+`gpu-plugins+`. The `jGPUPlugin` packets use JSON with the same binary escaping
+as the other JSON packets.
+
+When LLDB attaches to a running process, it gives the `platform_data` of each
+GPU plug-in to its platform plug-in with the same name, which can then start
+attaching to a GPU that is already in use. If that needs the process to run,
+LLDB resumes the process instead of reporting the stop that ends the attach, and
+the attach ends at the next stop. The GPU's GDB server reports that it has
+attached by setting `stop_native_process` in the GPU actions of its stop reply.
 
 ### GPU actions
 
@@ -479,6 +393,13 @@ dictionary has these keys:
 * `stop_id` (optional): the stop ID of the GPU process, as in the `stop_id` key
   of its stop replies, that `wait_for_gpu_process_to_stop` and
   `wait_for_gpu_process_to_resume` refer to.
+* `platform_data` (optional): data for LLDB's platform plug-in with the same
+  name as the GPU plug-in, which LLDB passes to it when it attaches to a running
+  process. LLDB does not interpret it, and only reads it from the
+  `jGPUPluginInitialize` reply.
+* `stop_native_process` (optional, default false): true to stop the native
+  process. A GPU's GDB server sets it in its stop reply when the native process
+  should stop along with the GPU process.
 * `breakpoints`: breakpoints to set in the native process, described below.
 * `connect_info` (optional): asks LLDB to create a GPU target and connect it to
   a GDB server for the GPU, with these keys:
@@ -522,7 +443,9 @@ plug-in's GPU target, and LLDB skips them if that target does not exist yet.
   "wait_for_gpu_process_to_stop": false,
   "load_libraries": false,
   "resume_gpu_process": false,
-  "wait_for_gpu_process_to_resume": false
+  "wait_for_gpu_process_to_resume": false,
+  "stop_native_process": false,
+  "platform_data": null
 }
 ```
 
@@ -2442,16 +2365,16 @@ symbol:
 read packet: qSymbol:6578616D706C65
 ```
 
-This should be looked up by LLDB then sent back to the server, with the value as
-a hex number followed by the name again:
+This should be looked up by LLDB then sent back to the server. Include the name
+again, with the vaue as a hex number:
 ```
-send packet: qSymbol:CAFEF00D:6578616D706C65
+read packet: qSymbol:6578616D706C65:CAFEF00D
 ```
 
-If LLDB cannot find the value, it leaves the value empty. Both `:` are still
-included, as in the initial packet:
+If LLDB cannot find the value, it should respond with only the name. Note that
+the second `:` is not included here, whereas it is in the initial packet.
 ```
-send packet: qSymbol::6578616D706C65
+read packet: qSymbol:6578616D706C65
 ```
 
 If LLDB is asked for any symbols that it cannot find, it should send the
@@ -2461,12 +2384,8 @@ the symbol can now be resolved.
 If the debug server has requested all the symbols it wants, the final response
 will be `OK` (whether they were all found or not).
 
-If LLDB did find all the symbols and receives an `OK` it does not need to send
+If LLDB did find all the symbols and recieves an `OK` it does not need to send
 `qSymbol::` again during the debug session.
-
-lldb-server uses this exchange for GPU plug-ins that need symbol values from the
-native process before any of their breakpoints are hit, as described in the
-`gpu-plugins` `qSupported` feature section.
 
 **Priority To Implement:** Low, this is rarely used.
 

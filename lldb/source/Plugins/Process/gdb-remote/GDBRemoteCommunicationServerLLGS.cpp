@@ -283,18 +283,6 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
       StringExtractorGDBRemote::eServerPacketType_jGPUPluginBreakpointHit,
       &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginBreakpointHit);
   RegisterMemberFunctionHandler(
-      StringExtractorGDBRemote::eServerPacketType_qSymbol,
-      &GDBRemoteCommunicationServerLLGS::Handle_qSymbol);
-  RegisterMemberFunctionHandler(
-      StringExtractorGDBRemote::eServerPacketType_jGPUPluginFinishAttach,
-      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach);
-  RegisterMemberFunctionHandler(
-      StringExtractorGDBRemote::eServerPacketType_jGPUPluginPrepareDetach,
-      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginPrepareDetach);
-  RegisterMemberFunctionHandler(
-      StringExtractorGDBRemote::eServerPacketType_jGPUPluginFinishDetach,
-      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishDetach);
-  RegisterMemberFunctionHandler(
       StringExtractorGDBRemote::
           eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
       &GDBRemoteCommunicationServerLLGS::
@@ -1148,6 +1136,15 @@ GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
       response.PutChar(';');
     }
   }
+  // A GPU server reports its plug-in's actions in its own stop replies.
+  if (m_plugin_instance) {
+    if (std::optional<GPUActions> gpu_actions =
+            m_plugin_instance->GPUProcessIsStopping()) {
+      response.PutCString("gpu-actions:");
+      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+      response.PutChar(';');
+    }
+  }
 
   if (m_non_stop && !force_synchronous) {
     PacketResult ret = SendNotificationPacketNoLock(
@@ -1399,24 +1396,6 @@ llvm::Error GDBRemoteCommunicationServerLLGS::WriteProcessMemory(
                                    "wrote %zu of %zu bytes at 0x%" PRIx64,
                                    bytes_written, size, addr);
   return llvm::Error::success();
-}
-
-llvm::Expected<std::vector<std::string>>
-GDBRemoteCommunicationServerLLGS::GetLoadedLibraryPaths() {
-  if (!m_current_process)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "no current process");
-  // TODO: List the libraries of processes without an SVR4 list, such as on
-  // Windows.
-  llvm::Expected<std::vector<SVR4LibraryInfo>> libraries =
-      m_current_process->GetLoadedSVR4Libraries();
-  if (!libraries)
-    return libraries.takeError();
-  std::vector<std::string> paths;
-  paths.reserve(libraries->size());
-  for (const SVR4LibraryInfo &library : *libraries)
-    paths.push_back(library.name);
-  return paths;
 }
 
 llvm::Error GDBRemoteCommunicationServerLLGS::HaltProcess() {
@@ -3992,17 +3971,10 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUGetKernelInfos(
 
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginInitialize(
-    StringExtractorGDBRemote &packet) {
-  packet.ConsumeFront("jGPUPluginInitialize:");
-  Expected<GPUPluginInitializeArgs> args =
-      json::parse<GPUPluginInitializeArgs>(packet.Peek(),
-                                           "GPUPluginInitializeArgs");
-  if (!args)
-    return SendErrorResponse(args.takeError());
-
+    StringExtractorGDBRemote &) {
   std::vector<GPUActions> gpu_actions;
   for (auto &plugin_up : m_plugins)
-    gpu_actions.push_back(plugin_up->GetInitializeActions(*args));
+    gpu_actions.push_back(plugin_up->GetInitializeActions());
   StreamGDBRemote response;
   response.PutAsJSONArray(gpu_actions);
   return SendPacketNoLock(response.GetString());
@@ -4050,94 +4022,6 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginBreakpointHit(
     }
   }
   return SendErrorResponse(Status::FromErrorString("Invalid plugin name."));
-}
-
-GDBRemoteCommunication::PacketResult
-GDBRemoteCommunicationServerLLGS::Handle_qSymbol(
-    StringExtractorGDBRemote &packet) {
-  // The client sends "qSymbol::" when it is ready to look up symbols, then
-  // answers each request with "qSymbol:<value>:<hex name>", leaving the value
-  // empty when it could not resolve the name.
-  llvm::StringRef rest = packet.GetStringRef();
-  rest.consume_front("qSymbol:");
-  if (rest == ":") {
-    m_symbol_lookups_requested.clear();
-  } else {
-    std::pair<llvm::StringRef, llvm::StringRef> value_and_name =
-        rest.split(':');
-    if (value_and_name.second.empty())
-      return SendIllFormedResponse(packet, "qSymbol is missing a symbol name");
-    StringExtractor name_extractor(value_and_name.second);
-    std::string name;
-    name_extractor.GetHexByteString(name);
-    std::optional<uint64_t> value;
-    uint64_t address = 0;
-    if (!value_and_name.first.getAsInteger(16, address))
-      value = address;
-    for (auto &plugin_up : m_plugins)
-      plugin_up->SymbolLookedUp(name, value);
-    // The client offers again on its next module load only if its last lookup
-    // failed, so a miss has to end the round.
-    if (!value)
-      return SendOKResponse();
-  }
-
-  for (auto &plugin_up : m_plugins) {
-    for (const std::string &name : plugin_up->GetSymbolsToLookUp()) {
-      if (!m_symbol_lookups_requested.insert(name).second)
-        continue;
-      StreamGDBRemote response;
-      response.PutCString("qSymbol:");
-      response.PutStringAsRawHex8(name);
-      return SendPacketNoLock(response.GetString());
-    }
-  }
-  return SendOKResponse();
-}
-
-GDBRemoteCommunication::PacketResult
-GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishAttach(
-    StringExtractorGDBRemote &packet) {
-  packet.ConsumeFront("jGPUPluginFinishAttach:");
-  Expected<GPUPluginFinishAttachArgs> args =
-      json::parse<GPUPluginFinishAttachArgs>(packet.Peek(),
-                                             "GPUPluginFinishAttachArgs");
-  if (!args)
-    return SendErrorResponse(args.takeError());
-
-  // Every plug-in is asked, since each one that answers yes then owes the
-  // client a stop.
-  GPUPluginFinishAttachResponse finish;
-  for (auto &plugin_up : m_plugins) {
-    GPUPluginFinishAttachResponse plugin_finish =
-        plugin_up->FinishAttach(*args);
-    finish.resume |= plugin_finish.resume;
-    llvm::append_range(finish.warnings, plugin_finish.warnings);
-  }
-  StreamGDBRemote response;
-  response.PutAsJSON(finish, /*hex_ascii=*/false);
-  return SendPacketNoLock(response.GetString());
-}
-
-GDBRemoteCommunication::PacketResult
-GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginPrepareDetach(
-    StringExtractorGDBRemote &) {
-  // Only the server for a GPU connection has a plug-in to detach.
-  if (!m_plugin_instance)
-    return SendUnimplementedResponse("jGPUPluginPrepareDetach");
-  StreamGDBRemote response;
-  response.PutAsJSON(m_plugin_instance->PrepareDetach(), /*hex_ascii=*/false);
-  return SendPacketNoLock(response.GetString());
-}
-
-GDBRemoteCommunication::PacketResult
-GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginFinishDetach(
-    StringExtractorGDBRemote &) {
-  if (!m_plugin_instance)
-    return SendUnimplementedResponse("jGPUPluginFinishDetach");
-  StreamGDBRemote response;
-  response.PutAsJSON(m_plugin_instance->FinishDetach(), /*hex_ascii=*/false);
-  return SendPacketNoLock(response.GetString());
 }
 
 GDBRemoteCommunication::PacketResult

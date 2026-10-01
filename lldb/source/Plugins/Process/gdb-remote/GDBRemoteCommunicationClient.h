@@ -443,35 +443,7 @@ public:
 
   StructuredData::ObjectSP GetThreadsInfo();
 
-  std::optional<std::vector<GPUActions>>
-  GetGPUInitializeActions(const GPUPluginInitializeArgs &args);
-
-  /// Tell the GPU plug-ins, with "jGPUPluginFinishAttach", that the attach to
-  /// the native process has finished.
-  ///
-  /// \return
-  ///     Whether a plug-in needs the process to keep running to finish its own
-  ///     attach, which that plug-in ends by stopping the process again, and
-  ///     any warnings for the user. std::nullopt if the plug-ins could not be
-  ///     asked.
-  std::optional<GPUPluginFinishAttachResponse>
-  FinishGPUPluginAttach(const GPUPluginFinishAttachArgs &args);
-
-  /// Tell the GPU plug-in behind this GPU connection, with
-  /// "jGPUPluginPrepareDetach", that the client is detaching the GPU process.
-  ///
-  /// \return
-  ///     Whether the plug-in needs the native process to run while it
-  ///     finishes. std::nullopt if the plug-in could not be asked.
-  std::optional<GPUPluginPrepareDetachResponse> PrepareGPUPluginDetach();
-
-  /// Wait, with "jGPUPluginFinishDetach", until the GPU plug-in behind this
-  /// GPU connection no longer needs the native process to run.
-  ///
-  /// \return
-  ///     Memory to write in the native process once it has stopped.
-  ///     std::nullopt if the plug-in could not be asked.
-  std::optional<GPUPluginFinishDetachResponse> FinishGPUPluginDetach();
+  std::optional<std::vector<GPUActions>> GetGPUInitializeActions();
 
   std::optional<LLDBSettings> GetLLDBSettings();
 

@@ -7,8 +7,8 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
 
     Builds on the late-attach flow: attach to an already-running kernel, set a
     GPU breakpoint, then detach. lldb removes the breakpoint before it detaches,
-    and the plugin-owned detach cleanup must let the driver clean up, reset its
-    handshake flags and leave the CPU application running. A second attach to
+    and the detach must let the driver clean up, reset the driver's handshake
+    flags and leave the CPU application running. A second attach to
     the same pid must then succeed, which is what proves the cleanup was
     complete: a driver still believing a debugger is attached makes the
     re-attach fail or wedge.

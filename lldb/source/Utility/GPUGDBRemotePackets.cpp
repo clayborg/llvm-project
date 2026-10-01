@@ -169,18 +169,25 @@ GPUPluginBreakpointHitArgs::GetSymbolValue(llvm::StringRef symbol_name) const {
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,
               llvm::json::Path path) {
   ObjectMapper o(value, path);
-  return o && o.map("plugin_name", data.plugin_name) &&
-         o.map("session_name", data.session_name) &&
-         o.map("identifier", data.identifier) &&
-         o.mapOptional("stop_id", data.stop_id) &&
-         o.map("breakpoints", data.breakpoints) &&
-         o.mapOptional("connect_info", data.connect_info) &&
-         o.map("wait_for_gpu_process_to_stop",
-               data.wait_for_gpu_process_to_stop) &&
-         o.map("load_libraries", data.load_libraries) &&
-         o.map("resume_gpu_process", data.resume_gpu_process) &&
-         o.map("wait_for_gpu_process_to_resume",
-               data.wait_for_gpu_process_to_resume);
+  if (!(o && o.map("plugin_name", data.plugin_name) &&
+        o.map("session_name", data.session_name) &&
+        o.map("identifier", data.identifier) &&
+        o.mapOptional("stop_id", data.stop_id) &&
+        o.map("breakpoints", data.breakpoints) &&
+        o.mapOptional("connect_info", data.connect_info) &&
+        o.map("wait_for_gpu_process_to_stop",
+              data.wait_for_gpu_process_to_stop) &&
+        o.map("load_libraries", data.load_libraries) &&
+        o.map("resume_gpu_process", data.resume_gpu_process) &&
+        o.map("wait_for_gpu_process_to_resume",
+              data.wait_for_gpu_process_to_resume) &&
+        o.mapOptional("stop_native_process", data.stop_native_process)))
+    return false;
+  // Plug-in defined, so kept as raw JSON, which json::fromJSON does not map.
+  const json::Value *platform_data = value.getAsObject()->get("platform_data");
+  if (platform_data && platform_data->kind() != json::Value::Null)
+    data.platform_data = *platform_data;
+  return true;
 }
 
 llvm::json::Value toJSON(const GPUActions &data) {
@@ -205,101 +212,8 @@ llvm::json::Value toJSON(const GPUActions &data) {
       {"load_libraries", data.load_libraries},
       {"resume_gpu_process", data.resume_gpu_process},
       {"wait_for_gpu_process_to_resume", data.wait_for_gpu_process_to_resume},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUPluginInitializeArgs
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
-              llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.mapOptional("is_attach", data.is_attach);
-}
-
-llvm::json::Value toJSON(const GPUPluginInitializeArgs &data) {
-  return json::Value(Object{
-      {"is_attach", data.is_attach},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUPluginFinishAttachArgs
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value, GPUPluginFinishAttachArgs &data,
-              llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.map("may_resume", data.may_resume);
-}
-
-llvm::json::Value toJSON(const GPUPluginFinishAttachArgs &data) {
-  return json::Value(Object{
-      {"may_resume", data.may_resume},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUPluginFinishAttachResponse
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginFinishAttachResponse &data, llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.map("resume", data.resume) &&
-         o.mapOptional("warnings", data.warnings);
-}
-
-llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data) {
-  return json::Value(Object{
-      {"resume", data.resume},
-      {"warnings", data.warnings},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUPluginPrepareDetachResponse
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginPrepareDetachResponse &data, llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.map("resume_native", data.resume_native) &&
-         o.mapOptional("pass_signals", data.pass_signals);
-}
-
-llvm::json::Value toJSON(const GPUPluginPrepareDetachResponse &data) {
-  return json::Value(Object{
-      {"resume_native", data.resume_native},
-      {"pass_signals", data.pass_signals},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUMemoryWrite
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value, GPUMemoryWrite &data,
-              llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.map("address", data.address) && o.map("bytes", data.bytes);
-}
-
-llvm::json::Value toJSON(const GPUMemoryWrite &data) {
-  return json::Value(Object{
-      {"address", data.address},
-      {"bytes", data.bytes},
-  });
-}
-
-//------------------------------------------------------------------------------
-// GPUPluginFinishDetachResponse
-//------------------------------------------------------------------------------
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginFinishDetachResponse &data, llvm::json::Path path) {
-  ObjectMapper o(value, path);
-  return o && o.mapOptional("memory_writes", data.memory_writes);
-}
-
-llvm::json::Value toJSON(const GPUPluginFinishDetachResponse &data) {
-  return json::Value(Object{
-      {"memory_writes", data.memory_writes},
+      {"stop_native_process", data.stop_native_process},
+      {"platform_data", data.platform_data},
   });
 }
 

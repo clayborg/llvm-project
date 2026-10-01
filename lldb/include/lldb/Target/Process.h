@@ -1034,10 +1034,29 @@ public:
   /// [NVIDIA] Called once an attach has completed, before the stop that ended
   /// it is reported.
   ///
-  /// \return true to resume the process instead of reporting that stop, when
+  /// \return
+  ///     true to resume the process instead of reporting that stop, when
   ///     something still needs the process to run before the attach is useful.
   ///     The attach then ends at the next stop.
   virtual bool ShouldResumeAfterAttach() { return false; }
+
+  /// [NVIDIA] Write \a data to the file at \a path on the machine the process
+  /// runs on, which may differ from this host. Used to signal a driver through
+  /// a file in the process, such as a pipe it reads, without running its code.
+  ///
+  /// \param[in] path
+  ///     A path on the process's machine.
+  ///
+  /// \param[in] data
+  ///     The bytes to write.
+  ///
+  /// \return
+  ///     An error unless every byte was written.
+  virtual llvm::Error WriteBinaryDataToFile(llvm::StringRef path,
+                                            llvm::ArrayRef<uint8_t> data) {
+    return llvm::createStringError(
+        "writing a file on the process's machine is not supported");
+  }
 
   /// Called after a process re-execs itself.
   ///

@@ -277,8 +277,6 @@ StringExtractorGDBRemote::GetServerPacketType() const {
         return eServerPacketType_qStepPacketSupported;
       if (PACKET_STARTS_WITH("qSupported"))
         return eServerPacketType_qSupported;
-      if (PACKET_STARTS_WITH("qSymbol:"))
-        return eServerPacketType_qSymbol;
       if (PACKET_MATCHES("qSyncThreadStateSupported"))
         return eServerPacketType_qSyncThreadStateSupported;
       if (PACKET_MATCHES("qStructuredDataPlugins"))
@@ -325,16 +323,10 @@ StringExtractorGDBRemote::GetServerPacketType() const {
       return eServerPacketType_jThreadsInfo;
     if (PACKET_STARTS_WITH("jThreadExtendedInfo:"))
       return eServerPacketType_jThreadExtendedInfo;
-    if (PACKET_STARTS_WITH("jGPUPluginInitialize:"))
+    if (PACKET_MATCHES("jGPUPluginInitialize"))
       return eServerPacketType_jGPUPluginInitialize;
     if (PACKET_STARTS_WITH("jGPUPluginBreakpointHit:"))
       return eServerPacketType_jGPUPluginBreakpointHit;
-    if (PACKET_STARTS_WITH("jGPUPluginFinishAttach:"))
-      return eServerPacketType_jGPUPluginFinishAttach;
-    if (PACKET_MATCHES("jGPUPluginPrepareDetach"))
-      return eServerPacketType_jGPUPluginPrepareDetach;
-    if (PACKET_MATCHES("jGPUPluginFinishDetach"))
-      return eServerPacketType_jGPUPluginFinishDetach;
     if (PACKET_STARTS_WITH("jGPUPluginGetDynamicLoaderLibraryInfo:"))
       return eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo;
     if (PACKET_MATCHES("jGPUGetKernelInfos"))

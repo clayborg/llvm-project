@@ -20,7 +20,6 @@
 #include <optional>
 #include <stdint.h>
 #include <string>
-#include <vector>
 
 namespace lldb_private {
 
@@ -89,6 +88,15 @@ public:
     return std::nullopt;
   };
 
+  /// Get notified when the GPU process this plug-in serves is stopping.
+  ///
+  /// Called each time the GPU process stops, as its stop reply is created. The
+  /// GPUActions returned ride on that stop reply, for example to have LLDB stop
+  /// the native process too.
+  virtual std::optional<GPUActions> GPUProcessIsStopping() {
+    return std::nullopt;
+  }
+
   /// Get the GPU plug-in notified when the native process exits.
   ///
   /// This function will get called when the native process exits. This allows
@@ -113,12 +121,7 @@ public:
   /// gets hit. When the breakpoint is hit, the BreakpointWasHit(...) method
   /// will get called with a structure that identifies the plugin,
   /// breakpoint and it will supply any requested symbol values.
-  ///
-  /// \param[in] args
-  ///     Context for the initialization, such as whether the native process is
-  ///     being attached to versus launched.
-  virtual GPUActions
-  GetInitializeActions(const GPUPluginInitializeArgs &args) = 0;
+  virtual GPUActions GetInitializeActions() = 0;
 
   /// Get a file descriptor to listen for in the ptrace epoll loop.
   ///
@@ -147,60 +150,6 @@ public:
   /// way with the native process.
   virtual llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) = 0;
-
-  /// Get the symbols this plug-in still needs the client to look up.
-  ///
-  /// These are requested through qSymbol when the client loads modules. Unlike
-  /// the symbol values delivered with BreakpointWasHit, this does not wait for
-  /// a breakpoint to be hit. The client stops offering for good after a round
-  /// in which every requested name resolved, including one that requested
-  /// nothing, so a name that becomes needed later is never looked up.
-  virtual std::vector<std::string> GetSymbolsToLookUp() { return {}; }
-
-  /// Receive the client's answer for a name from GetSymbolsToLookUp().
-  ///
-  /// \param[in] name
-  ///     The symbol that was looked up.
-  ///
-  /// \param[in] value
-  ///     Its load address, or std::nullopt if the client could not resolve it.
-  virtual void SymbolLookedUp(llvm::StringRef name,
-                              std::optional<uint64_t> value) {}
-
-  /// Called when the client has finished attaching to the native process.
-  ///
-  /// \param[in] args
-  ///     Whether the client is willing to resume the process for a plug-in
-  ///     that needs it running.
-  ///
-  /// \return
-  ///     Whether this plug-in needs the native process to run to finish its
-  ///     own attach, which it may only ask for when \a args allows it. The
-  ///     client then resumes the process and waits for the next stop, which
-  ///     this plug-in has to cause once it has finished, failed, or given up.
-  ///     Any warnings tell the user why this plug-in cannot attach.
-  virtual GPUPluginFinishAttachResponse
-  FinishAttach(const GPUPluginFinishAttachArgs &args) {
-    return {};
-  }
-
-  /// Called on the plug-in behind a GPU connection when the client starts
-  /// detaching the GPU process, before it sends "D".
-  ///
-  /// \return
-  ///     Whether this plug-in needs the native process to run while it
-  ///     finishes, in which case the client resumes it, and the signals to pass
-  ///     through meanwhile.
-  virtual GPUPluginPrepareDetachResponse PrepareDetach() { return {}; }
-
-  /// Called after PrepareDetach, with the native process running if this
-  /// plug-in asked for it. Returns once this plug-in no longer needs it
-  /// running.
-  ///
-  /// \return
-  ///     Memory for the client to write in the native process once it has
-  ///     stopped it again.
-  virtual GPUPluginFinishDetachResponse FinishDetach() { return {}; }
 
   /// Get the GPU dynamic libraries from the GPU plug-in.
   ///

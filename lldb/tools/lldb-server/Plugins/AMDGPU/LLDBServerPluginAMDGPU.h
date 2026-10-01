@@ -56,7 +56,7 @@ public:
                          MainLoop &main_loop);
   ~LLDBServerPluginAMDGPU() override;
   llvm::StringRef GetPluginName() override;
-  GPUActions GetInitializeActions(const GPUPluginInitializeArgs &args) override;
+  GPUActions GetInitializeActions() override;
   std::optional<struct GPUActions> NativeProcessIsStopping() override;
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
   llvm::Expected<GPUPluginBreakpointHitResponse>

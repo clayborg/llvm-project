@@ -80,7 +80,7 @@ public:
   llvm::StringRef GetPluginName() override;
   int GetEventFileDescriptorAtIndex(size_t idx) override;
   bool HandleEventFileDescriptorEvent(int fd) override;
-  GPUActions GetInitializeActions(const GPUPluginInitializeArgs &args) override;
+  GPUActions GetInitializeActions() override;
   std::optional<struct GPUActions> NativeProcessIsStopping() override;
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
   llvm::Expected<GPUPluginBreakpointHitResponse>

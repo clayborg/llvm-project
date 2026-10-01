@@ -10,6 +10,7 @@
 #define LLDB_SOURCE_PLUGINS_PROCESS_GDB_REMOTE_PROCESSGDBREMOTE_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -138,6 +139,9 @@ public:
   void DidAttach(ArchSpec &process_arch) override;
 
   bool ShouldResumeAfterAttach() override;
+
+  llvm::Error WriteBinaryDataToFile(llvm::StringRef path,
+                                    llvm::ArrayRef<uint8_t> data) override;
 
   // PluginInterface protocol
   llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
@@ -511,11 +515,16 @@ private:
 
   Status HandleGPUActions(const GPUActions &gpu_action);
 
-  /// Drive the GPU plug-in's side of detaching this GPU process, which may need
-  /// the native process run and written to: jGPUPluginPrepareDetach, then
-  /// jGPUPluginFinishDetach. Best effort, since the detach goes ahead either
-  /// way.
-  void DetachGPUPluginFromNativeProcess();
+  /// Detach this GPU process, with the native process running meanwhile if its
+  /// platform needs it, and let the platform clean up the native process after.
+  Status DetachGPUProcess(bool keep_stopped);
+
+  /// Stop the native process once the GPU attach it runs for has finished, or
+  /// after \a timeout.
+  void WaitForGPUAttach(std::chrono::milliseconds timeout);
+
+  /// Called on the native process when its GPU process asks it to stop.
+  void StopForGPU();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
@@ -582,11 +591,22 @@ private:
   //  Map to track processed GPU actions.
   std::unordered_map<std::string, uint32_t> m_processed_gpu_actions;
 
-  /// True when this process is being attached to (as opposed to launched). Used
-  /// to tell GPU plug-ins, via jGPUPluginInitialize, that they should set up
-  /// the late attach handshake. Set before the GPU initialize actions are
-  /// fetched in ConnectToDebugserver().
-  bool m_gpu_is_attaching = false;
+  /// The "platform_data" from each GPU plug-in's "jGPUPluginInitialize" reply,
+  /// by plug-in name, for the platform of that name to use at attach.
+  llvm::StringMap<llvm::json::Value> m_gpu_platform_data;
+
+  /// A GPU attach that keeps this native process running until the GPU process
+  /// first stops, shared with the thread that stops it.
+  struct GPUAttachWait {
+    std::mutex mutex;
+    std::condition_variable cv;
+    /// The GPU process reported its first stop.
+    bool gpu_stopped = false;
+    /// This process stopped, which ended the attach.
+    bool ended = false;
+  };
+  std::mutex m_gpu_attach_wait_mutex;
+  std::shared_ptr<GPUAttachWait> m_gpu_attach_wait;
 };
 
 } // namespace process_gdb_remote

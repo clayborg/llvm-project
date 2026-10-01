@@ -257,124 +257,20 @@ struct GPUActions {
   /// Set this to true if the native plug-in sync with the GPU process and wait
   /// for it to return to a running state.
   bool wait_for_gpu_process_to_resume = false;
+  /// Set this to true for LLDB to stop the native (CPU) process. A GPU stop
+  /// reply carries it so the native process stops when its GPU does, the way
+  /// the native process stopping brings the GPU up.
+  bool stop_native_process = false;
+  /// Data for the client-side platform that has the plug-in's name, which LLDB
+  /// passes to it when it attaches to a running process. LLDB does not
+  /// interpret it. Only read from the "jGPUPluginInitialize" reply.
+  std::optional<llvm::json::Value> platform_data;
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,
               llvm::json::Path path);
 
 llvm::json::Value toJSON(const GPUActions &data);
-
-///-----------------------------------------------------------------------------
-/// GPUPluginInitializeArgs
-///
-/// Arguments sent by the LLDB client in the "jGPUPluginInitialize" packet. This
-/// allows the client to tell the GPU plug-ins about the context in which they
-/// are being initialized (for example, whether the native process is being
-/// attached to versus launched), so plug-ins can return the right set of
-/// initialization actions.
-///-----------------------------------------------------------------------------
-struct GPUPluginInitializeArgs {
-  /// True if the native process is being attached to rather than launched, so
-  /// plug-ins know to set up a late attach handshake.
-  bool is_attach = false;
-};
-
-bool fromJSON(const llvm::json::Value &value, GPUPluginInitializeArgs &data,
-              llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUPluginInitializeArgs &data);
-
-///-----------------------------------------------------------------------------
-/// GPUPluginFinishAttachArgs
-///
-/// Arguments sent by the LLDB client in the "jGPUPluginFinishAttach" packet,
-/// which it sends once it has finished attaching to the native process.
-///-----------------------------------------------------------------------------
-struct GPUPluginFinishAttachArgs {
-  /// True if the client is willing to resume the native process for a plug-in
-  /// that needs it running to finish its own attach.
-  bool may_resume = false;
-};
-
-bool fromJSON(const llvm::json::Value &value, GPUPluginFinishAttachArgs &data,
-              llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUPluginFinishAttachArgs &data);
-
-///-----------------------------------------------------------------------------
-/// GPUPluginFinishAttachResponse
-///
-/// The reply to "jGPUPluginFinishAttach".
-///-----------------------------------------------------------------------------
-struct GPUPluginFinishAttachResponse {
-  /// True if a plug-in needs the native process to keep running to finish its
-  /// own attach. The client then resumes it, and the plug-in stops it again
-  /// once it has finished, which ends the attach. Only set when the client
-  /// said it may resume.
-  bool resume = false;
-  /// Why plug-ins cannot attach to their GPUs, for the client to show the
-  /// user.
-  std::vector<std::string> warnings;
-};
-
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginFinishAttachResponse &data, llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUPluginFinishAttachResponse &data);
-
-///-----------------------------------------------------------------------------
-/// GPUPluginPrepareDetachResponse
-///
-/// The reply to "jGPUPluginPrepareDetach", the first packet the LLDB client
-/// sends on a GPU connection when it detaches the GPU process.
-///-----------------------------------------------------------------------------
-struct GPUPluginPrepareDetachResponse {
-  /// True if the native process has to run for the GPU plug-in to finish
-  /// detaching. The client then resumes it until "jGPUPluginFinishDetach"
-  /// returns, and stops it again.
-  bool resume_native = false;
-  /// Signals for the native process to receive without stopping while it runs
-  /// for the plug-in.
-  std::vector<int> pass_signals;
-};
-
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginPrepareDetachResponse &data, llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUPluginPrepareDetachResponse &data);
-
-///-----------------------------------------------------------------------------
-/// GPUMemoryWrite
-///
-/// Bytes for the LLDB client to write to the native process's memory.
-///-----------------------------------------------------------------------------
-struct GPUMemoryWrite {
-  lldb::addr_t address = 0;
-  /// The bytes to write, hex encoded.
-  std::string bytes;
-};
-
-bool fromJSON(const llvm::json::Value &value, GPUMemoryWrite &data,
-              llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUMemoryWrite &data);
-
-///-----------------------------------------------------------------------------
-/// GPUPluginFinishDetachResponse
-///
-/// The reply to "jGPUPluginFinishDetach", which returns once the GPU plug-in
-/// has finished with the native process.
-///-----------------------------------------------------------------------------
-struct GPUPluginFinishDetachResponse {
-  /// Writes for the client to make in the native process once it has stopped
-  /// it, before it sends "D" to detach the GPU process.
-  std::vector<GPUMemoryWrite> memory_writes;
-};
-
-bool fromJSON(const llvm::json::Value &value,
-              GPUPluginFinishDetachResponse &data, llvm::json::Path path);
-
-llvm::json::Value toJSON(const GPUPluginFinishDetachResponse &data);
 
 struct GPUSectionInfo {
   /// Name of the section to load. If there are multiple sections, each section

@@ -11,24 +11,16 @@
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Utility/Log.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DynamicLibrary.h"
-#include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
-#include "llvm/Support/Regex.h"
 
 #include <chrono>
 #include <cstring>
-#include <fcntl.h>
 #include <string>
 #include <thread>
 #include <type_traits>
-#include <unistd.h>
-#include <vector>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -45,9 +37,11 @@ static constexpr unsigned kInitRetryDelayMs = 100;
 static constexpr unsigned kInitMaxRetryDelayMs = 1000;
 static constexpr unsigned kInitTimeoutMs = 5000;
 
-// Written to the attach-procedure FD to ask the driver to inject the debug
-// engine. The driver accepts any byte.
-static constexpr uint8_t kAttachProcedureMagicByte = 0xAB;
+// The debugger capabilities we request, which Initialize then requires the
+// debug engine to support.
+static constexpr uint32_t kRequestedCapabilities =
+    CUDBG_DEBUGGER_CAPABILITY_SUSPEND_EVENTS |
+    CUDBG_DEBUGGER_CAPABILITY_NO_CONTEXT_PUSH_POP_EVENTS;
 
 // Assumed size of the driver's fixed CUDBG_INJECTION_PATH buffer, including the
 // trailing NUL. Longer paths are rejected rather than truncated.
@@ -61,10 +55,6 @@ static std::string CUDBG_APICLIENT_REVISION =
 static std::string CUDBG_SESSION_ID = STRINGIFY_SYMBOL(CUDBG_SESSION_ID);
 static std::string CUDBG_DEBUGGER_CAPABILITIES =
     STRINGIFY_SYMBOL(CUDBG_DEBUGGER_CAPABILITIES);
-// Set by the debug engine once initialized, cleared on detach. Optional: a
-// libcuda that does not export it must not break detach.
-static std::string CUDBG_DEBUGGER_INITIALIZED =
-    STRINGIFY_SYMBOL(CUDBG_DEBUGGER_INITIALIZED);
 static std::string CUDBG_INJECTION_PATH = "cudbgInjectionPath";
 static std::string CUDBG_GET_API = "cudbgGetAPI";
 static std::string CUDBG_GET_API_VERSION = "cudbgGetAPIVersion";
@@ -74,8 +64,6 @@ static std::string CUDA_INITIALIZATION_SYMBOL =
 // process. See the "Attaching and Detaching" section of cudadebugger.h.
 static std::string CUDBG_RESUME_FOR_ATTACH_DETACH =
     STRINGIFY_SYMBOL(CUDBG_RESUME_FOR_ATTACH_DETACH);
-static std::string CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD =
-    STRINGIFY_SYMBOL(CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
 static std::string CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED =
     STRINGIFY_SYMBOL(CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED);
 } // namespace Symbols
@@ -198,11 +186,8 @@ static Error WriteInitializationSymbolsToHost(SymbolAddressProvider get_addr,
   if (Error err = write_uint32_t(Symbols::CUDBG_SESSION_ID, session_id))
     return err;
 
-  const uint32_t capabilities =
-      CUDBG_DEBUGGER_CAPABILITY_SUSPEND_EVENTS |
-      CUDBG_DEBUGGER_CAPABILITY_NO_CONTEXT_PUSH_POP_EVENTS;
-  if (Error err =
-          write_uint32_t(Symbols::CUDBG_DEBUGGER_CAPABILITIES, capabilities))
+  if (Error err = write_uint32_t(Symbols::CUDBG_DEBUGGER_CAPABILITIES,
+                                 kRequestedCapabilities))
     return err;
 
   if (!set_ipc_flag)
@@ -436,48 +421,17 @@ CUDADebuggerAPI::Initialize(SymbolAddressProvider get_symbol_address,
   return api;
 }
 
-std::vector<std::string> CUDADebuggerAPI::GetSafeAttachSymbolNames() {
-  return {
-      Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD,
-      Symbols::CUDBG_APICLIENT_PID,
-      Symbols::CUDBG_APICLIENT_REVISION,
-      Symbols::CUDBG_SESSION_ID,
-      Symbols::CUDBG_DEBUGGER_CAPABILITIES,
-      Symbols::CUDBG_INJECTION_PATH,
-  };
-}
-
-/// \return true if \a filename is libcuda's soname, "libcuda.so" optionally
-/// followed by numeric version components (libcuda.so.1, libcuda.so.550.54.15),
-/// rather than any name that merely contains it.
-static bool IsLibcudaSoname(llvm::StringRef filename) {
-  static const llvm::Regex g_soname_regex("^libcuda\\.so(\\.[0-9]+)*$");
-  return g_soname_regex.match(filename);
-}
-
-Expected<bool> CUDADebuggerAPI::IsLibcudaLoaded(HostServer &host_server) {
-  Expected<std::vector<std::string>> paths =
-      host_server.GetLoadedLibraryPaths();
-  if (!paths)
-    return paths.takeError();
-  return llvm::any_of(*paths, [](llvm::StringRef path) {
-    return IsLibcudaSoname(llvm::sys::path::filename(path));
-  });
-}
-
-std::vector<GPUMemoryWrite> CUDADebuggerAPI::GetDetachResetWrites(
-    SymbolAddressProvider get_symbol_address) {
-  // The IPC flag goes last, as it does on the way in. A symbol libcuda does not
-  // export, such as the optional CUDBG_DEBUGGER_INITIALIZED, is skipped.
-  const std::string zero_uint32(2 * sizeof(uint32_t), '0');
-  std::vector<GPUMemoryWrite> writes;
-  for (const std::string &name :
-       {Symbols::CUDBG_DEBUGGER_CAPABILITIES,
-        Symbols::CUDBG_DEBUGGER_INITIALIZED, Symbols::CUDBG_IPC_FLAG_NAME}) {
-    if (std::optional<uint64_t> address = get_symbol_address(name))
-      writes.push_back({*address, zero_uint32});
-  }
-  return writes;
+nvgpu::AttachHandshake CUDADebuggerAPI::GetAttachHandshake() {
+  nvgpu::AttachHandshake handshake;
+  handshake.api_client_pid = llvm::sys::Process::getProcessId();
+  // The version cannot be negotiated before the debug engine is up, so announce
+  // the compiled one. Initialize writes the negotiated one at the breakpoint
+  // that ends the attach.
+  handshake.api_client_revision = nvgpu::CudbgApiVersion::Compiled().revision;
+  handshake.session_id = 0;
+  handshake.capabilities = kRequestedCapabilities;
+  handshake.injection_path = llvm::sys::Process::GetEnv("CUDBG_INJECTION_PATH");
+  return handshake;
 }
 
 Error CUDADebuggerAPI::SetIpcFlag(SymbolAddressProvider get_symbol_address,
@@ -493,79 +447,6 @@ Expected<uint32_t> CUDADebuggerAPI::ReadResumeForAttachDetach(
                             Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
 }
 
-Expected<bool>
-CUDADebuggerAPI::InitiateSafeAttach(SymbolAddressProvider get_symbol_address,
-                                    HostServer &host_server) {
-  Log *log = GetLog(GDBRLog::Plugin);
-
-  // The attach-procedure file descriptor exported by the driver: an int in the
-  // inferior's address space referring to a pipe in the inferior's fd table.
-  std::optional<uint64_t> fd_symbol_address =
-      get_symbol_address(Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
-  if (!fd_symbol_address)
-    return createStringErrorFmt(
-        "Couldn't find address for symbol {0}",
-        Symbols::CUDBG_INITIATE_DEBUGGER_ATTACH_PROCEDURE_FD);
-
-  int32_t attach_fd = -1;
-  if (Error err = host_server.ReadProcessMemory(*fd_symbol_address, &attach_fd,
-                                                sizeof(attach_fd)))
-    return createStringErrorFmt("Failed to read the attach procedure FD: {0}",
-                                llvm::toString(std::move(err)));
-  if (attach_fd < 0)
-    return false;
-
-  const uint32_t pid = llvm::sys::Process::getProcessId();
-  // The version cannot be negotiated yet, since the debug engine only loads
-  // once the procedure runs, so use the compiled revision. Initialize rewrites
-  // these globals with the negotiated values at the report-finished breakpoint.
-  const uint32_t session_id = 0;
-  const uint32_t revision = nvgpu::CudbgApiVersion::Compiled().revision;
-
-  // Tell the driver who is attaching, before it injects the debug engine. The
-  // IPC flag stays clear until the procedure has finished; see SetIpcFlag.
-  if (Error err = WriteInitializationSymbolsToHost(
-          get_symbol_address, host_server, pid, session_id, revision,
-          /*set_ipc_flag=*/false))
-    return err;
-
-  // Must precede the magic byte: the driver reads the path when it services
-  // the request.
-  if (const char *injection_path = getenv("CUDBG_INJECTION_PATH")) {
-    if (Error err = WriteInjectionPathToInferior(
-            get_symbol_address, host_server, llvm::StringRef(injection_path)))
-      return err;
-  }
-
-  // The fd belongs to the inferior's fd table; reach it through procfs and
-  // write the magic byte to wake the driver's interrupt handler so it can
-  // safely inject the debug engine.
-  std::string fd_path =
-      llvm::formatv("/proc/{0}/fd/{1}", host_server.GetProcessID(), attach_fd)
-          .str();
-  LLDB_LOG(log,
-           "CUDADebuggerAPI::InitiateSafeAttach(). Writing magic byte to {0}",
-           fd_path);
-
-  int host_fd = llvm::sys::RetryAfterSignal(-1, ::open, fd_path.c_str(),
-                                            O_WRONLY | O_CLOEXEC);
-  if (host_fd < 0)
-    return createStringErrorFmt("Failed to open {0}: {1}", fd_path,
-                                ::strerror(errno));
-
-  const uint8_t magic = kAttachProcedureMagicByte;
-  ssize_t written =
-      llvm::sys::RetryAfterSignal(-1, ::write, host_fd, &magic, sizeof(magic));
-  int write_errno = errno;
-  ::close(host_fd);
-  if (written != static_cast<ssize_t>(sizeof(magic)))
-    return createStringErrorFmt(
-        "Failed to write the magic byte to {0}: {1}", fd_path,
-        written < 0 ? ::strerror(write_errno) : "short write");
-
-  return true;
-}
-
 GPUBreakpointInfo
 CUDADebuggerAPI::GetInitializationBreakpointInfo(StringRef library_name) {
   GPUBreakpointInfo bp;
@@ -576,10 +457,8 @@ CUDADebuggerAPI::GetInitializationBreakpointInfo(StringRef library_name) {
   bp.symbol_names.push_back(Symbols::CUDBG_SESSION_ID);
   bp.symbol_names.push_back(Symbols::CUDBG_DEBUGGER_CAPABILITIES);
   bp.symbol_names.push_back(Symbols::CUDBG_INJECTION_PATH);
-  // Only needed at detach, which has no breakpoint of its own to carry them.
-  // CUDBG_DEBUGGER_INITIALIZED is optional; older drivers do not export it.
+  // Only needed at detach, which has no breakpoint of its own to carry it.
   bp.symbol_names.push_back(Symbols::CUDBG_RESUME_FOR_ATTACH_DETACH);
-  bp.symbol_names.push_back(Symbols::CUDBG_DEBUGGER_INITIALIZED);
   return bp;
 }
 

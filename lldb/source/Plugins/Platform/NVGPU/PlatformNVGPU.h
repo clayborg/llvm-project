@@ -93,6 +93,15 @@ public:
   bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
                           GPUDim3 &thread_idx) override;
 
+  std::optional<std::chrono::milliseconds>
+  StartGPUAttach(Process &native_process,
+                 const llvm::json::Value &platform_data) override;
+
+  bool WillDetachGPU(Process &native_process,
+                     std::vector<int> &pass_signals) override;
+
+  void DidDetachGPU(Process &native_process) override;
+
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 

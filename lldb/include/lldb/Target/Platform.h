@@ -9,6 +9,7 @@
 #ifndef LLDB_TARGET_PLATFORM_H
 #define LLDB_TARGET_PLATFORM_H
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -35,6 +36,10 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/VersionTuple.h"
+
+namespace llvm::json {
+class Value;
+} // namespace llvm::json
 
 namespace lldb_private {
 
@@ -1135,6 +1140,47 @@ public:
                                   GPUDim3 &thread_idx) {
     return false;
   }
+
+  /// [NVIDIA] Ask the driver of a GPU plug-in named like this platform to
+  /// attach to the GPU of \a native_process, which LLDB has just attached to
+  /// and which is stopped. Reads and writes \a native_process and signals the
+  /// driver through it.
+  ///
+  /// \param[in] native_process
+  ///     The attached CPU process.
+  ///
+  /// \param[in] platform_data
+  ///     The "platform_data" from the plug-in's "jGPUPluginInitialize" reply.
+  ///
+  /// \return
+  ///     How long \a native_process may run for the driver to finish attaching,
+  ///     which ends when the GPU process first stops, or std::nullopt if it
+  ///     need not run.
+  virtual std::optional<std::chrono::milliseconds>
+  StartGPUAttach(Process &native_process,
+                 const llvm::json::Value &platform_data) {
+    return std::nullopt;
+  }
+
+  /// [NVIDIA] Called before LLDB detaches a GPU process of this platform.
+  ///
+  /// \param[in] native_process
+  ///     The CPU process whose GPU is detaching, which is stopped.
+  ///
+  /// \param[out] pass_signals
+  ///     The signals \a native_process should receive without stopping while it
+  ///     runs.
+  ///
+  /// \return
+  ///     Whether \a native_process has to run while the GPU process detaches.
+  virtual bool WillDetachGPU(Process &native_process,
+                             std::vector<int> &pass_signals) {
+    return false;
+  }
+
+  /// [NVIDIA] Called once a GPU process of this platform has detached, with
+  /// \a native_process stopped again.
+  virtual void DidDetachGPU(Process &native_process) {}
 
 protected:
   /// Create a list of ArchSpecs with the given OS and a architectures. The

@@ -22,6 +22,7 @@ add_lldb_library(lldbPluginPlatformNVGPU PLUGIN
     lldbHost
     lldbInterpreter
     lldbTarget
+    lldbUtilityNVGPU
     lldbPluginPlatformPOSIX
   )
 

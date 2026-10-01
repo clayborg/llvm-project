@@ -1,6 +1,7 @@
 include(SetupCUDA)
 
 add_lldb_library(lldbUtilityNVGPU
+  AttachHandshake.cpp
   CUDAAddressSpaces.cpp
   CUDADebuggerAPIVersion.cpp
   CUDAException.cpp

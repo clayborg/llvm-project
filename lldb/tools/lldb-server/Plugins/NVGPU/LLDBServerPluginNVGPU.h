@@ -15,8 +15,6 @@
 #include "ProcessNVGPU.h"
 #include "lldb/Utility/Status.h"
 
-#include <chrono>
-
 namespace lldb_private::lldb_server {
 
 /// LLDB server plugin for NVIDIA GPU debugging support.
@@ -30,28 +28,21 @@ public:
                         MainLoop &main_loop);
 
   llvm::StringRef GetPluginName() override;
-  GPUActions GetInitializeActions(const GPUPluginInitializeArgs &args) override;
+  GPUActions GetInitializeActions() override;
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
-  std::optional<GPUActions> NativeProcessIsStopping() override;
+  std::optional<GPUActions> GPUProcessIsStopping() override;
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
-  std::vector<std::string> GetSymbolsToLookUp() override;
-  void SymbolLookedUp(llvm::StringRef name,
-                      std::optional<uint64_t> value) override;
-  GPUPluginFinishAttachResponse
-  FinishAttach(const GPUPluginFinishAttachArgs &args) override;
-  GPUPluginPrepareDetachResponse PrepareDetach() override;
-  GPUPluginFinishDetachResponse FinishDetach() override;
 
 private:
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
   friend class ProcessNVGPU;
 
-  /// Phases of the late attach handshake. The launch path stays at eNone.
+  /// Where the GPU stands between bringing the debugger API up and releasing
+  /// it. The launch path stays at eNone until a detach.
   enum class AttachState {
     eNone,
-    eProbing,
-    eInjected,
+    /// The driver has finished a late attach.
     eComplete,
     eDetaching,
   };
@@ -60,8 +51,6 @@ private:
   void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
   void OnDebuggerAPIEvent();
   void HandleInternalError(CUDBGResult error_type);
-  void TryInitiateSafeAttach();
-  void SetAttachStateIfProbing(AttachState state);
   void OnAttachComplete();
 
   /// Drain the event queue until empty, then acknowledge once, returning how
@@ -86,9 +75,10 @@ private:
   /// the inferior exits meanwhile.
   void HaltNativeProcess();
 
-  /// The last step of a detach, when the client sends "D": release the
-  /// debugger API. A client that skipped PrepareDetach and FinishDetach only
-  /// gets the GPU released, without the driver's own cleanup.
+  /// Detach from the GPU when the client sends "D": tear down device
+  /// breakpoints, have the driver clean up, and release the debugger API. If
+  /// the driver needs the application running to clean up, the client keeps
+  /// it running until this returns.
   void DetachCleanup();
 
   /// Drain events until CUDBG_EVENT_DETACH_COMPLETE, the API faults, the
@@ -115,18 +105,13 @@ private:
   llvm::Error
   FinishLateAttachIpcHandshake(SymbolAddressProvider get_symbol_address);
 
-  /// How far the client has driven a detach. Only used on the GPU MainLoop
-  /// thread, which serves the GPU connection the detach packets arrive on.
-  enum class DetachStep {
-    eNone,
-    ePrepared,
-    /// The driver was asked to clean up, which FinishDetach waits for.
-    eCleanupRequested,
-    eFinished,
-  };
-  DetachStep m_detach_step = DetachStep::eNone;
-
   Status m_main_loop_status;
+
+  /// Set while the GPU stop that completes a late attach is being reported, so
+  /// its stop reply asks the client to stop the CPU. Only used on the GPU
+  /// MainLoop thread, which reports GPU stops.
+  bool m_stop_native_with_gpu = false;
+
   std::optional<CUDADebuggerAPI> m_cuda_api;
   ProcessNVGPU *m_gpu = nullptr;
   /// A utility to send debugger api notifications to the main loop.
@@ -134,22 +119,15 @@ private:
 
   /// Guards everything below, and is taken from both the native server thread
   /// and the GPU main loop thread. Must NOT be held across the host server's
-  /// process actions or the attach FD write, which block.
+  /// process actions, which block.
   std::mutex m_attach_mutex;
   AttachState m_attach_state = AttachState::eNone;
-  std::chrono::steady_clock::time_point m_attach_deadline{};
 
-  /// libcuda symbol addresses the client has resolved, from qSymbol for the
-  /// safe attach handshake and from the initialization breakpoints. Detach
-  /// uses them too.
+  /// libcuda symbol addresses the client resolved for the breakpoint that
+  /// brought the API up. Detach uses them too.
   llvm::StringMap<uint64_t> m_libcuda_symbols;
 
-  /// Why the last request for a safe attach failed, empty if it did not. The
-  /// user is told if the attach completes without the request going through.
-  std::string m_attach_start_error;
-
-  /// Not derivable from m_attach_state, which reaches eInjected when the magic
-  /// byte is written -- before the API is brought up.
+  /// Not derivable from m_attach_state, which stays eNone on the launch path.
   bool m_api_initialized = false;
 
   /// Set by CUDBG_EVENT_INTERNAL_ERROR; acking or resuming on a poisoned API
@@ -157,12 +135,6 @@ private:
   bool m_api_faulted = false;
   bool m_native_process_exited = false;
 
-  /// The client resumed the process for us and is waiting for the stop that
-  /// ends its attach, which we owe it once ours has finished or timed out.
-  bool m_client_waiting_for_attach = false;
-
-  static constexpr unsigned kAttachProbeTimeoutSeconds = 30;
-  static constexpr unsigned kAttachWaitTimeoutSeconds = 10;
   static constexpr int kDetachMaxIterations = 100;
   static constexpr unsigned kNativeWorkTimeoutMs = 5000;
 };

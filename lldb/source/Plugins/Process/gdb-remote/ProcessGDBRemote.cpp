@@ -92,7 +92,6 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/FormatAdapters.h"
@@ -965,6 +964,8 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
            "for plugin '{0}' with gpu_action_identifier {1}",
            gpu_action.plugin_name, gpu_action.identifier);
   Status error;
+  if (gpu_action.stop_native_process)
+    StopForGPU();
   if (!gpu_action.breakpoints.empty())
     HandleGPUBreakpoints(gpu_action);
   if (gpu_action.connect_info) {
@@ -1238,10 +1239,11 @@ Status ProcessGDBRemote::ConnectToDebugserver(llvm::StringRef connect_url) {
   m_gdb_comm.GetVContSupported('c');
   m_gdb_comm.GetVAttachOrWaitSupported();
   m_gdb_comm.EnableErrorStringInPacket();
-  GPUPluginInitializeArgs gpu_init_args;
-  gpu_init_args.is_attach = m_gpu_is_attaching;
-  if (auto init_actions = m_gdb_comm.GetGPUInitializeActions(gpu_init_args)) {
+  if (auto init_actions = m_gdb_comm.GetGPUInitializeActions()) {
     for (const auto &init_action : *init_actions) {
+      if (init_action.platform_data)
+        m_gpu_platform_data.insert_or_assign(init_action.plugin_name,
+                                             *init_action.platform_data);
       if (Status err = HandleGPUActions(init_action); err.Fail()) {
         Debugger::ReportError(llvm::formatv(
             "HandleGPUActions failed. Error: {0}\nActions:\n{1}\n",
@@ -1474,8 +1476,6 @@ Status ProcessGDBRemote::DoAttachToProcessWithID(
 
   // Clear out and clean up from any current state
   Clear();
-  // Reported to the GPU plug-ins by ConnectToDebugserver below.
-  m_gpu_is_attaching = true;
   if (attach_pid != LLDB_INVALID_PROCESS_ID) {
     error = EstablishConnectionIfNeeded(attach_info);
     if (error.Success()) {
@@ -1500,8 +1500,6 @@ Status ProcessGDBRemote::DoAttachToProcessWithName(
   Status error;
   // Clear out and clean up from any current state
   Clear();
-  // Reported to the GPU plug-ins by ConnectToDebugserver below.
-  m_gpu_is_attaching = true;
 
   if (process_name && process_name[0]) {
     error = EstablishConnectionIfNeeded(attach_info);
@@ -1569,52 +1567,140 @@ void ProcessGDBRemote::DidAttach(ArchSpec &process_arch) {
 }
 
 bool ProcessGDBRemote::ShouldResumeAfterAttach() {
-  // A plug-in that asks for the resume then has to stop the process again, so
-  // only offer it when the user is willing to wait for it. Ask either way, so
-  // the user still hears why a GPU cannot be attached to.
-  GPUPluginFinishAttachArgs args;
-  args.may_resume = GetGlobalPluginProperties().GetWaitForGPUAttach();
-  std::optional<GPUPluginFinishAttachResponse> finish =
-      m_gdb_comm.FinishGPUPluginAttach(args);
-  if (!finish)
+  std::optional<std::chrono::milliseconds> wait;
+  for (const auto &entry : m_gpu_platform_data) {
+    // A GPU plug-in's client side is the platform that has its name. Asking it
+    // to start the GPU attach also tells the user why it cannot.
+    PlatformSP platform_sp = Platform::Create(entry.getKey());
+    if (!platform_sp)
+      continue;
+    if (std::optional<std::chrono::milliseconds> timeout =
+            platform_sp->StartGPUAttach(*this, entry.getValue()))
+      wait = wait ? std::max(*wait, *timeout) : *timeout;
+  }
+  // Running the process for the driver means stopping it again afterwards, so
+  // only when the user is willing to wait for that. Waiting at most no time is
+  // not running it at all.
+  if (!wait || wait->count() == 0 ||
+      !GetGlobalPluginProperties().GetWaitForGPUAttach())
     return false;
-  for (const std::string &warning : finish->warnings)
-    Debugger::ReportWarning(warning, GetTarget().GetDebugger().GetID());
-  return args.may_resume && finish->resume;
+  WaitForGPUAttach(*wait);
+  return true;
 }
 
-void ProcessGDBRemote::DetachGPUPluginFromNativeProcess() {
+void ProcessGDBRemote::WaitForGPUAttach(std::chrono::milliseconds timeout) {
+  auto wait = std::make_shared<GPUAttachWait>();
+  {
+    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
+    m_gpu_attach_wait = wait;
+  }
+  std::weak_ptr<ProcessGDBRemote> process_wp =
+      std::static_pointer_cast<ProcessGDBRemote>(shared_from_this());
+  std::thread([wait, timeout, process_wp] {
+    std::unique_lock<std::mutex> lock(wait->mutex);
+    wait->cv.wait_for(lock, timeout,
+                      [&] { return wait->gpu_stopped || wait->ended; });
+    if (wait->ended)
+      return;
+    const bool timed_out = !wait->gpu_stopped;
+    lock.unlock();
+
+    // Interrupt only once that ends the attach: an interrupt while the process
+    // is still publicly attaching cancels the attach, and one while it is
+    // briefly stopped at an internal breakpoint is dropped.
+    for (int i = 0; i < 1000; ++i) {
+      {
+        std::lock_guard<std::mutex> guard(wait->mutex);
+        if (wait->ended)
+          return;
+      }
+      std::shared_ptr<ProcessGDBRemote> process_sp = process_wp.lock();
+      if (!process_sp)
+        return;
+      if (process_sp->GetState() != eStateAttaching &&
+          StateIsRunningState(process_sp->GetPrivateState())) {
+        if (timed_out)
+          LLDB_LOG(GetLog(GDBRLog::Plugin),
+                   "the GPU attach did not finish within {0} ms; stopping the "
+                   "process so the attach completes without the GPU for now",
+                   timeout.count());
+        process_sp->SendAsyncInterrupt();
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }).detach();
+}
+
+void ProcessGDBRemote::StopForGPU() {
+  std::shared_ptr<GPUAttachWait> wait;
+  {
+    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
+    wait = m_gpu_attach_wait;
+  }
+  // A GPU attach this process runs for stops it once that is safe; see
+  // WaitForGPUAttach.
+  if (wait) {
+    std::lock_guard<std::mutex> lock(wait->mutex);
+    wait->gpu_stopped = true;
+    wait->cv.notify_all();
+    return;
+  }
+  if (StateIsRunningState(GetPrivateState()))
+    SendAsyncInterrupt();
+}
+
+llvm::Error
+ProcessGDBRemote::WriteBinaryDataToFile(llvm::StringRef path,
+                                        llvm::ArrayRef<uint8_t> data) {
+  Status error;
+  lldb::user_id_t fd = m_gdb_comm.OpenFile(
+      FileSpec(path), File::eOpenOptionWriteOnly, /*mode=*/0, error);
+  if (error.Fail())
+    return error.takeError();
+  uint64_t written =
+      m_gdb_comm.WriteFile(fd, /*offset=*/0, data.data(), data.size(), error);
+  Status close_error;
+  m_gdb_comm.CloseFile(fd, close_error);
+  if (error.Fail())
+    return error.takeError();
+  if (written != data.size())
+    return llvm::createStringError(llvm::formatv(
+        "wrote {0} of {1} bytes to {2}", written, data.size(), path));
+  return llvm::Error::success();
+}
+
+Status ProcessGDBRemote::DetachGPUProcess(bool keep_stopped) {
   Log *log = GetLog(GDBRLog::Plugin);
   TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU();
   ProcessSP cpu_process_sp =
       cpu_target_sp ? cpu_target_sp->GetProcessSP() : ProcessSP();
-  if (!cpu_process_sp || !cpu_process_sp->IsAlive())
-    return;
+  PlatformSP platform_sp = GetTarget().GetPlatform();
+  if (!cpu_process_sp || !cpu_process_sp->IsAlive() || !platform_sp)
+    return m_gdb_comm.Detach(keep_stopped);
   // GPU targets are only ever created by a native ProcessGDBRemote; see
   // HandleConnectionRequest.
   auto &cpu = static_cast<ProcessGDBRemote &>(*cpu_process_sp);
   GDBRemoteCommunicationClient &cpu_comm = cpu.GetGDBRemote();
 
-  std::optional<GPUPluginPrepareDetachResponse> prepare =
-      m_gdb_comm.PrepareGPUPluginDetach();
-  if (!prepare)
-    return;
+  std::vector<int> pass_signals;
+  const bool run_cpu = cpu.GetState() == eStateStopped &&
+                       platform_sp->WillDetachGPU(cpu, pass_signals);
 
-  // Run the native process for the plug-in without telling the user, who sees
+  // Run the native process for the platform without telling the user, who sees
   // it stopped before and after: its events go to a listener of our own. Its
   // signal handling changes only while it is stopped, since sending the packet
   // while it runs would interrupt it.
   ListenerSP listener_sp = Listener::MakeListener("lldb.process.gpu-detach");
   bool resumed = false;
   bool signals_changed = false;
-  if (prepare->resume_native && cpu.GetState() == eStateStopped &&
-      cpu.HijackProcessEvents(listener_sp)) {
+  if (run_cpu && cpu.HijackProcessEvents(listener_sp)) {
     if (cpu_comm.GetQPassSignalsSupported()) {
-      if (Status error = cpu_comm.SendSignalsToIgnore(prepare->pass_signals);
+      if (Status error = cpu_comm.SendSignalsToIgnore(pass_signals);
           error.Success())
         signals_changed = true;
       else
-        LLDB_LOG(log, "could not pass signals through for the GPU plug-in: {0}",
+        LLDB_LOG(log, "could not pass signals through for the GPU detach: {0}",
                  error);
     }
     if (Status error = cpu.Resume(); error.Success()) {
@@ -1625,8 +1711,15 @@ void ProcessGDBRemote::DetachGPUPluginFromNativeProcess() {
     }
   }
 
-  std::optional<GPUPluginFinishDetachResponse> finish =
-      m_gdb_comm.FinishGPUPluginDetach();
+  Status error;
+  {
+    // The GPU server replies once the driver has cleaned up, which needs the
+    // native process running.
+    GDBRemoteCommunication::ScopedTimeout timeout(
+        m_gdb_comm,
+        std::max(m_gdb_comm.GetPacketTimeout(), std::chrono::seconds(10)));
+    error = m_gdb_comm.Detach(keep_stopped);
+  }
 
   if (resumed) {
     cpu.SendAsyncInterrupt();
@@ -1650,29 +1743,17 @@ void ProcessGDBRemote::DetachGPUPluginFromNativeProcess() {
     }
   }
 
-  if (!finish || finish->memory_writes.empty())
-    return;
   // ptrace refuses to write to a running tracee.
   if (StateIsRunningState(cpu.GetState()))
     cpu.Halt();
-  if (cpu.GetState() != eStateStopped) {
-    LLDB_LOG(log, "skipping the memory writes: the native process is {0}",
+  if (cpu.GetState() == eStateStopped)
+    platform_sp->DidDetachGPU(cpu);
+  else
+    LLDB_LOG(log,
+             "not cleaning up after the GPU detach: the native process "
+             "is {0}",
              StateAsCString(cpu.GetState()));
-    return;
-  }
-  for (const GPUMemoryWrite &write : finish->memory_writes) {
-    std::string bytes;
-    if (!llvm::tryGetFromHex(write.bytes, bytes)) {
-      LLDB_LOG(log, "malformed memory write from the GPU plug-in: {0}",
-               write.bytes);
-      continue;
-    }
-    Status error;
-    cpu.WriteMemory(write.address, bytes.data(), bytes.size(), error);
-    if (error.Fail())
-      LLDB_LOG(log, "could not write the GPU plug-in's memory at {0:x}: {1}",
-               write.address, error);
-  }
+  return error;
 }
 
 Status ProcessGDBRemote::WillResume() {
@@ -3066,9 +3147,9 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   LLDB_LOGF(log, "ProcessGDBRemote::DoDetach(keep_stopped: %i)", keep_stopped);
 
   if (GetTarget().IsGPUTarget())
-    DetachGPUPluginFromNativeProcess();
-
-  error = m_gdb_comm.Detach(keep_stopped);
+    error = DetachGPUProcess(keep_stopped);
+  else
+    error = m_gdb_comm.Detach(keep_stopped);
   if (log) {
     if (error.Success())
       log->PutCString(
@@ -3202,6 +3283,18 @@ addr_t ProcessGDBRemote::GetImageInfoAddress() {
 }
 
 void ProcessGDBRemote::WillPublicStop() {
+  // A GPU attach this process ran for is over once it stops.
+  std::shared_ptr<GPUAttachWait> wait;
+  {
+    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
+    wait = std::move(m_gpu_attach_wait);
+  }
+  if (wait) {
+    std::lock_guard<std::mutex> lock(wait->mutex);
+    wait->ended = true;
+    wait->cv.notify_all();
+  }
+
   // See if the GDB remote client supports the JSON threads info. If so, we
   // gather stop info for all threads, expedited registers, expedited memory,
   // runtime queue information (iOS and MacOSX only), and more. Expediting
