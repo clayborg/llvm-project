@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-/// See docs/resources/lldbgdbremote.md for more information.
+/// See docs/lldb-gdb-remote.txt for more information.
 namespace lldb_private {
 
 /// A class that represents a symbol value
