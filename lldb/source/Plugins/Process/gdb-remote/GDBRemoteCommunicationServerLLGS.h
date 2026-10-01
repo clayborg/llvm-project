@@ -104,8 +104,10 @@ public:
     m_plugin_instance = plugin;
   }
 
-  /// \return the MainLoop driving this server. GPU server plugins use this to
-  /// run work on this server's thread, the only one allowed to use its process.
+  /// \return
+  ///     The MainLoop driving this server. GPU server plugins use it to run
+  ///     work on this server's thread, the only one allowed to use its
+  ///     process.
   MainLoop &GetMainLoop() { return m_mainloop; }
 
   struct DebuggedProcess {

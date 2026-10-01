@@ -25,18 +25,79 @@ namespace lldb_private::lldb_server {
 /// debugger API.
 class LLDBServerPluginNVGPU : public LLDBServerPlugin {
 public:
+  /// Constructor for the NVIDIA GPU server plugin.
+  ///
+  /// \param[in] native_process
+  ///     Reference to the GDB server managing the native process.
+  ///
+  /// \param[in] main_loop
+  ///     Reference to the main event loop for handling asynchronous events.
   LLDBServerPluginNVGPU(LLDBServerPlugin::GDBServer &native_process,
                         MainLoop &main_loop);
 
+  /// Get the name identifier for this plugin.
+  ///
+  /// \return
+  ///     String reference containing the plugin name.
   llvm::StringRef GetPluginName() override;
+
+  /// Get the initialization actions required for this plugin.
+  ///
+  /// \return
+  ///     GPUActions structure containing the initialization steps.
   GPUActions GetInitializeActions() override;
+
+  /// Handle breakpoint hit events from the GPU.
+  ///
+  /// Processes breakpoint events and determines the appropriate response
+  /// action for the debugger.
+  ///
+  /// \param[in] args
+  ///     Arguments containing details about the breakpoint hit.
+  ///
+  /// \return
+  ///     Expected response indicating the action to take, or error if
+  ///     the breakpoint could not be processed.
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
+
+  /// Handle notification that the native process is stopping.
+  ///
+  /// \return
+  ///     Optional GPUActions if specific actions need to be taken during
+  ///     the stop process, or nullopt if no actions are required.
   std::optional<GPUActions> NativeProcessIsStopping() override;
+
   std::optional<GPUActions> GPUProcessIsStopping() override;
+
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
 private:
+  /// Create a connection to the GPU process that the client can use.
+  ///
+  /// Establishes a communication channel between the debugger client and
+  /// the GPU debugging infrastructure.
+  ///
+  /// \return
+  ///     Expected connection info on success, or error on failure.
+  llvm::Expected<GPUPluginConnectionInfo> CreateConnection();
+
+  /// Function used to execute the main loop of the GPU process in an
+  /// independent thread.
+  ///
+  /// This method runs the GPU process event handling loop in a separate
+  /// thread to avoid blocking the main debugger execution.
+  ///
+  /// \param[in] listen_socket_up
+  ///     Unique pointer to TCP socket for listening to client connections.
+  void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
+
+  /// Process debugger API events.
+  ///
+  /// Handles events from the CUDA debugger API, processing them and
+  /// taking appropriate action based on event type.
+  void OnDebuggerAPIEvent();
+
   // ProcessNVGPU::Detach delegates to the private DetachCleanup.
   friend class ProcessNVGPU;
 
@@ -49,9 +110,6 @@ private:
     eDetaching,
   };
 
-  llvm::Expected<GPUPluginConnectionInfo> CreateConnection();
-  void AcceptAndMainLoopThread(std::unique_ptr<TCPSocket> listen_socket_up);
-  void OnDebuggerAPIEvent();
   void HandleInternalError(CUDBGResult error_type);
   void OnAttachComplete();
 
@@ -108,16 +166,15 @@ private:
   FinishLateAttachIpcHandshake(SymbolAddressProvider get_symbol_address);
 
   Status m_main_loop_status;
+  std::optional<CUDADebuggerAPI> m_cuda_api;
+  ProcessNVGPU *m_gpu = nullptr;
+  /// A utility to send debugger api notifications to the main loop.
+  std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
 
   /// Set while the GPU stop that completes a late attach is being reported, so
   /// its stop reply asks the client to stop the CPU. Only used on the GPU
   /// MainLoop thread, which reports GPU stops.
   bool m_stop_native_with_gpu = false;
-
-  std::optional<CUDADebuggerAPI> m_cuda_api;
-  ProcessNVGPU *m_gpu = nullptr;
-  /// A utility to send debugger api notifications to the main loop.
-  std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
 
   /// Guards everything below, and is taken from both the native server thread
   /// and the GPU main loop thread. Must NOT be held across the host server's

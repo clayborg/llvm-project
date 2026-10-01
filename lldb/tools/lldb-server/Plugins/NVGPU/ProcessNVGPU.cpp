@@ -65,8 +65,8 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
 
   if (m_is_faking_a_stop_for_dyld) {
     m_is_faking_a_stop_for_dyld = false;
-    // Acknowledges only the events already read before the deferred dyld stop;
-    // the ones left unread behind it are untouched.
+    // Ack'ing here is fine because the next call to OnDebuggerAPIEvent will
+    // be triggered after the Resume packet has been fully processed.
     CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
       logAndReportFatalError(

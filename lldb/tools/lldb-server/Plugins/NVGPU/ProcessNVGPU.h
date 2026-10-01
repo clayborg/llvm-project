@@ -79,7 +79,8 @@ public:
   /// table.
   void ClearDebuggerAPI() { m_api = nullptr; }
 
-  /// Set the owning plugin, which Detach asks to release the debugger API.
+  /// Set the owning plugin, which does the detach because it owns the debugger
+  /// API.
   void SetPlugin(LLDBServerPluginNVGPU *plugin) { m_plugin = plugin; }
 
   /// Remove every tracked device breakpoint from every device. Detach must do
@@ -322,9 +323,6 @@ public:
   /// \param[in] event
   ///     Event data containing information about the suspended devices.
   ///
-  /// \param[in] log_to_client_callback
-  ///     Function to log messages to the client.
-  ///
   /// \param[in] forced_stop_description
   ///     When non-empty, the debugger initiated this suspension rather than a
   ///     breakpoint or exception, and the selected thread is reported with this
@@ -438,7 +436,7 @@ private:
   /// TeardownDeviceBreakpoints can remove them on detach.
   llvm::DenseSet<lldb::addr_t> m_device_breakpoints;
 
-  /// The owning plugin, which Detach asks to release the debugger API.
+  /// See SetPlugin.
   LLDBServerPluginNVGPU *m_plugin = nullptr;
 
   /// Snapshot of the information of all devices. It's updated upon every stop.

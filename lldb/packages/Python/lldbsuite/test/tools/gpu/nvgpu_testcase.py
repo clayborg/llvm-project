@@ -46,8 +46,8 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
     # The driver refuses late attach outright unless the debugger requests the
     # lazy function loading and finalization capabilities, which we do not yet,
-    # so disable those driver features in the inferior instead. Drop once
-    # WriteInitializationSymbolsToHost negotiates the capabilities.
+    # so disable those driver features in the inferior instead. Drop once the
+    # debugger requests them.
     LATE_ATTACH_INFERIOR_ENV = [
         "CUDA_MODULE_LOADING=EAGER",
         "CUDA_DISABLE_FUNCTION_LAZY_FINALIZATION=1",

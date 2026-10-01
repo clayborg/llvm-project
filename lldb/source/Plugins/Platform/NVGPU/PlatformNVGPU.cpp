@@ -1319,8 +1319,9 @@ constexpr uint8_t kAttachProcedureMagicByte = 0xAB;
 // Longer paths are rejected rather than truncated.
 constexpr size_t kInjectionPathMaxSize = 4096;
 
-/// \return libcuda's module, named "libcuda.so" optionally followed by numeric
-/// version components, if it is loaded.
+/// \return
+///     libcuda's module, named "libcuda.so" optionally followed by numeric
+///     version components, if it is loaded.
 lldb::ModuleSP FindLibcuda(Target &target) {
   static const llvm::Regex g_soname_regex("^libcuda\\.so(\\.[0-9]+)*$");
   const ModuleList &images = target.GetImages();

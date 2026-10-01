@@ -52,10 +52,51 @@ public:
   /// IPC flag is published; see SetIpcFlag.
   enum class InitContext { eLaunch, eLateAttach };
 
+  /// Initialize the CUDA debugger API.
+  ///
+  /// \param[in] get_symbol_address
+  ///     Resolves the symbols of the GPU plugin breakpoint that triggered the
+  ///     initialization.
+  ///
+  /// \param[in] libcuda_library_name
+  ///     The name of the CUDA library that contains the CUDA debugger API.
+  ///
+  /// \param[in] host_server
+  ///     The server debugging the process that spawned the GPU process.
+  ///
+  /// \param[in] init_context
+  ///     Whether the API comes up on launch or at the end of a late attach.
   static llvm::Expected<CUDADebuggerAPI>
   Initialize(SymbolAddressProvider get_symbol_address,
              llvm::StringRef libcuda_library_name, HostServer &host_server,
              InitContext init_context);
+
+  CUDBGAPI operator->() const { return m_api_up.get(); }
+
+  CUDBGAPI GetRawAPI() const { return m_api_up.get(); }
+
+  /// The CUDA debugger API version this session operates at: the lesser of
+  /// this build's compiled version and the live driver's reported version.
+  /// Any driver of the same CUDA major release works -- older OR newer than
+  /// the compiled header; only the major must match (a different major is
+  /// rejected at initialization, see Initialize). Taking the lesser of the
+  /// two just means we never request an entry point the running driver
+  /// doesn't provide. Carried so it can be handed to `ProcessNVGPU` for
+  /// runtime gating of version-specific API calls (see
+  /// `ProcessNVGPU::GetAPIVersion`).
+  nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
+
+  static GPUBreakpointInfo
+  GetInitializationBreakpointInfo(llvm::StringRef library_name);
+
+  static GPUBreakpointInfo
+  GetAttachFinishedBreakpointInfo(llvm::StringRef library_name);
+
+  /// \return
+  ///     true if a breakpoint on \a function_name came from the late attach
+  ///     path rather than launch-style cuInit initialization. The two sequence
+  ///     the IPC flag differently, so they must be told apart.
+  static bool IsAttachFinishedBreakpoint(llvm::StringRef function_name);
 
   /// Publish CUDBG_IPC_FLAG_NAME, the master "an API client is ready, emit
   /// callbacks" flag. Written last during initialization so the driver never
@@ -76,24 +117,6 @@ public:
   static llvm::Expected<uint32_t>
   ReadResumeForAttachDetach(SymbolAddressProvider get_symbol_address,
                             HostServer &host_server);
-
-  static GPUBreakpointInfo
-  GetInitializationBreakpointInfo(llvm::StringRef library_name);
-  static GPUBreakpointInfo
-  GetAttachFinishedBreakpointInfo(llvm::StringRef library_name);
-
-  /// \return true if a breakpoint on \a function_name came from the late attach
-  /// path rather than launch-style cuInit initialization. The two sequence the
-  /// IPC flag differently, so they must be told apart.
-  static bool IsAttachFinishedBreakpoint(llvm::StringRef function_name);
-
-  CUDBGAPI operator->() const { return m_api_up.get(); }
-  CUDBGAPI GetRawAPI() const { return m_api_up.get(); }
-
-  /// The lesser of the compiled and the driver's own version, so we never
-  /// request an entry point the driver lacks. Initialize rejects a driver from
-  /// a different CUDA major release outright.
-  nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
 
 private:
   CUDADebuggerAPI(CUDBGAPI api, nvgpu::CudbgApiVersion api_version)
