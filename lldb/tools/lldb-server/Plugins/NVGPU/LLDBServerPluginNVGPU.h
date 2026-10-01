@@ -68,8 +68,6 @@ public:
   ///     the stop process, or nullopt if no actions are required.
   std::optional<GPUActions> NativeProcessIsStopping() override;
 
-  std::optional<GPUActions> GPUProcessIsStopping() override;
-
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
 private:
@@ -98,7 +96,8 @@ private:
   /// taking appropriate action based on event type.
   void OnDebuggerAPIEvent();
 
-  // ProcessNVGPU::Detach delegates to the private DetachCleanup.
+  // ProcessNVGPU delegates its detach and its stop reply actions to the private
+  // DetachCleanup and GetGPUStopActions.
   friend class ProcessNVGPU;
 
   /// Where the GPU stands between bringing the debugger API up and releasing
@@ -112,6 +111,11 @@ private:
 
   void HandleInternalError(CUDBGResult error_type);
   void OnAttachComplete();
+
+  /// The GPUActions for the stop reply ProcessNVGPU is sending, which stop the
+  /// native process too while the stop that completes a late attach is
+  /// reported.
+  std::optional<GPUActions> GetGPUStopActions();
 
   /// Drain the event queue until empty, then acknowledge once, returning how
   /// many events were handled. One notification can cover several events, so

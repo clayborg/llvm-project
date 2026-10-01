@@ -1136,14 +1136,12 @@ GDBRemoteCommunicationServerLLGS::SendStopReplyPacketForThread(
       response.PutChar(';');
     }
   }
-  // A GPU server reports its plug-in's actions in its own stop replies.
-  if (m_plugin_instance) {
-    if (std::optional<GPUActions> gpu_actions =
-            m_plugin_instance->GPUProcessIsStopping()) {
-      response.PutCString("gpu-actions:");
-      response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
-      response.PutChar(';');
-    }
+  // A GPU process can report actions for the native process in its own stop
+  // replies.
+  if (std::optional<GPUActions> gpu_actions = process.GetGPUActions()) {
+    response.PutCString("gpu-actions:");
+    response.PutAsJSON(*gpu_actions, /*hex_ascii=*/true);
+    response.PutChar(';');
   }
 
   if (m_non_stop && !force_synchronous) {

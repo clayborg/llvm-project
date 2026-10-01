@@ -61,7 +61,6 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/TargetList.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
-#include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/LLDBLog.h"
@@ -319,6 +318,7 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
 
 // Destructor
 ProcessGDBRemote::~ProcessGDBRemote() {
+  EndGPUAttachWait();
   //  m_mach_process.UnregisterNotificationCallbacks (this);
   Clear();
   // We need to call finalize on the process before destroying ourselves to
@@ -1556,6 +1556,7 @@ ProcessGDBRemote::TraceGetBinaryData(const TraceGetBinaryDataRequest &request) {
 }
 
 void ProcessGDBRemote::DidExit() {
+  EndGPUAttachWait();
   // When we exit, disconnect from the GDB server communications
   m_gdb_comm.Disconnect();
 }
@@ -1594,60 +1595,97 @@ void ProcessGDBRemote::WaitForGPUAttach(std::chrono::milliseconds timeout) {
     std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
     m_gpu_attach_wait = wait;
   }
+  StartGPUStopThread(std::move(wait), timeout);
+}
+
+void ProcessGDBRemote::StopForGPU() {
+  std::shared_ptr<GPUAttachWait> wait;
+  bool start_thread = false;
+  {
+    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
+    if (!m_gpu_attach_wait) {
+      // Outside a GPU attach, a process already stopped for the user needs
+      // nothing, and a request left pending would interrupt its next resume.
+      if (!StateIsRunningState(GetState()))
+        return;
+      m_gpu_attach_wait = std::make_shared<GPUAttachWait>();
+      start_thread = true;
+    }
+    wait = m_gpu_attach_wait;
+  }
+  {
+    std::lock_guard<std::mutex> lock(wait->mutex);
+    wait->stop_requested = true;
+    wait->cv.notify_all();
+  }
+  if (start_thread)
+    StartGPUStopThread(std::move(wait), std::nullopt);
+}
+
+void ProcessGDBRemote::StartGPUStopThread(
+    std::shared_ptr<GPUAttachWait> wait,
+    std::optional<std::chrono::milliseconds> timeout) {
   std::weak_ptr<ProcessGDBRemote> process_wp =
       std::static_pointer_cast<ProcessGDBRemote>(shared_from_this());
   std::thread([wait, timeout, process_wp] {
     std::unique_lock<std::mutex> lock(wait->mutex);
-    wait->cv.wait_for(lock, timeout,
-                      [&] { return wait->stop_requested || wait->ended; });
-    if (wait->ended)
-      return;
-    const bool timed_out = !wait->stop_requested;
-    lock.unlock();
+    auto requested = [&] { return wait->stop_requested || wait->ended; };
+    if (timeout)
+      wait->cv.wait_for(lock, *timeout, requested);
+    else
+      wait->cv.wait(lock, requested);
+    if (!wait->ended && !wait->stop_requested)
+      LLDB_LOG(GetLog(GDBRLog::Plugin),
+               "the GPU attach did not finish within {0} ms; stopping the "
+               "process so the attach completes without the GPU for now",
+               timeout->count());
 
-    // Interrupt only once that ends the attach: an interrupt while the process
-    // is still publicly attaching cancels the attach, and one while it is
-    // briefly stopped at an internal breakpoint is dropped.
-    for (int i = 0; i < 1000; ++i) {
+    // Interrupt the continue itself rather than through SendAsyncInterrupt:
+    // the private state thread drops an interrupt while the process is briefly
+    // stopped, and DoHalt cancels an attach that is still public. Interrupt
+    // does nothing without a continue in flight, so try again each time the
+    // process resumes, until it stops for the user.
+    while (!wait->ended) {
+      wait->resumed = false;
+      lock.unlock();
       {
-        std::lock_guard<std::mutex> guard(wait->mutex);
-        if (wait->ended)
+        std::shared_ptr<ProcessGDBRemote> process_sp = process_wp.lock();
+        if (!process_sp)
           return;
+        process_sp->m_gdb_comm.Interrupt(process_sp->GetInterruptTimeout());
       }
-      std::shared_ptr<ProcessGDBRemote> process_sp = process_wp.lock();
-      if (!process_sp)
-        return;
-      if (process_sp->GetState() != eStateAttaching &&
-          StateIsRunningState(process_sp->GetPrivateState())) {
-        if (timed_out)
-          LLDB_LOG(GetLog(GDBRLog::Plugin),
-                   "the GPU attach did not finish within {0} ms; stopping the "
-                   "process so the attach completes without the GPU for now",
-                   timeout.count());
-        process_sp->SendAsyncInterrupt();
-        return;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      lock.lock();
+      wait->cv.wait(lock, [&] { return wait->resumed || wait->ended; });
     }
   }).detach();
 }
 
-void ProcessGDBRemote::StopForGPU() {
+void ProcessGDBRemote::EndGPUAttachWait() {
+  std::shared_ptr<GPUAttachWait> wait;
+  {
+    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
+    wait = std::move(m_gpu_attach_wait);
+  }
+  if (wait) {
+    std::lock_guard<std::mutex> lock(wait->mutex);
+    wait->ended = true;
+    wait->cv.notify_all();
+  }
+}
+
+void ProcessGDBRemote::DidResume() {
+  // DoResume returns once the continue packet is sent, so a stop for the GPU
+  // can now interrupt it.
   std::shared_ptr<GPUAttachWait> wait;
   {
     std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
     wait = m_gpu_attach_wait;
   }
-  // A GPU attach this process runs for stops it once that is safe; see
-  // WaitForGPUAttach.
   if (wait) {
     std::lock_guard<std::mutex> lock(wait->mutex);
-    wait->stop_requested = true;
+    wait->resumed = true;
     wait->cv.notify_all();
-    return;
   }
-  if (StateIsRunningState(GetPrivateState()))
-    SendAsyncInterrupt();
 }
 
 llvm::Error
@@ -1681,28 +1719,18 @@ Status ProcessGDBRemote::DetachGPUProcess(bool keep_stopped) {
   // GPU targets are only ever created by a native ProcessGDBRemote; see
   // HandleConnectionRequest.
   auto &cpu = static_cast<ProcessGDBRemote &>(*cpu_process_sp);
-  GDBRemoteCommunicationClient &cpu_comm = cpu.GetGDBRemote();
 
   std::vector<int> pass_signals;
   const bool run_cpu = cpu.GetState() == eStateStopped &&
                        platform_sp->WillDetachGPU(cpu, pass_signals);
 
   // Run the native process for the platform without telling the user, who sees
-  // it stopped before and after: its events go to a listener of our own. Its
-  // signal handling changes only while it is stopped, since sending the packet
-  // while it runs would interrupt it.
+  // it stopped before and after: its events go to a listener of our own. The
+  // resume passes the platform's signals along with the user's.
   ListenerSP listener_sp = Listener::MakeListener("lldb.process.gpu-detach");
   bool resumed = false;
-  bool signals_changed = false;
   if (run_cpu && cpu.HijackProcessEvents(listener_sp)) {
-    if (cpu_comm.GetQPassSignalsSupported()) {
-      if (Status error = cpu_comm.SendSignalsToIgnore(pass_signals);
-          error.Success())
-        signals_changed = true;
-      else
-        LLDB_LOG(log, "could not pass signals through for the GPU detach: {0}",
-                 error);
-    }
+    cpu.SetExtraSignalsToPass(pass_signals);
     if (Status error = cpu.Resume(); error.Success()) {
       resumed = true;
     } else {
@@ -1733,11 +1761,12 @@ Status ProcessGDBRemote::DetachGPUProcess(bool keep_stopped) {
     if (event_sp && state != eStateStopped)
       cpu.BroadcastEvent(event_sp);
   }
-  if (signals_changed && cpu.GetState() == eStateStopped) {
-    if (const UnixSignalsSP &signals = cpu.GetUnixSignals()) {
-      if (Status error = cpu_comm.SendSignalsToIgnore(
-              signals->GetFilteredSignals(false, false, false));
-          error.Fail())
+  if (run_cpu) {
+    // Back to the user's signals, sent now if the process is stopped and
+    // otherwise when it next resumes, since the packet would interrupt it.
+    cpu.SetExtraSignalsToPass({});
+    if (cpu.GetState() == eStateStopped) {
+      if (Status error = cpu.UpdateAutomaticSignalFiltering(); error.Fail())
         LLDB_LOG(log, "could not restore the signals to pass through: {0}",
                  error);
     }
@@ -3274,17 +3303,7 @@ addr_t ProcessGDBRemote::GetImageInfoAddress() {
 }
 
 void ProcessGDBRemote::WillPublicStop() {
-  // A GPU attach this process ran for is over once it stops.
-  std::shared_ptr<GPUAttachWait> wait;
-  {
-    std::lock_guard<std::mutex> guard(m_gpu_attach_wait_mutex);
-    wait = std::move(m_gpu_attach_wait);
-  }
-  if (wait) {
-    std::lock_guard<std::mutex> lock(wait->mutex);
-    wait->ended = true;
-    wait->cv.notify_all();
-  }
+  EndGPUAttachWait();
 
   // See if the GDB remote client supports the JSON threads info. If so, we
   // gather stop info for all threads, expedited registers, expedited memory,
@@ -4705,7 +4724,9 @@ Status ProcessGDBRemote::UpdateAutomaticSignalFiltering() {
 
   // Signals' version hasn't changed, no need to send anything.
   uint64_t new_signals_version = m_unix_signals_sp->GetVersion();
-  if (new_signals_version == m_last_signals_version) {
+  // [NVIDIA] Unless the extra signals to pass have.
+  if (new_signals_version == m_last_signals_version &&
+      !m_extra_signals_changed) {
     LLDB_LOG(log, "Signals' version hasn't changed. version={0}",
              m_last_signals_version);
     return Status();
@@ -4713,6 +4734,10 @@ Status ProcessGDBRemote::UpdateAutomaticSignalFiltering() {
 
   auto signals_to_ignore =
       m_unix_signals_sp->GetFilteredSignals(false, false, false);
+  // [NVIDIA]
+  for (int32_t signo : m_extra_signals_to_pass)
+    if (!llvm::is_contained(signals_to_ignore, signo))
+      signals_to_ignore.push_back(signo);
   Status error = m_gdb_comm.SendSignalsToIgnore(signals_to_ignore);
 
   LLDB_LOG(log,
@@ -4721,10 +4746,17 @@ Status ProcessGDBRemote::UpdateAutomaticSignalFiltering() {
            m_last_signals_version, new_signals_version,
            signals_to_ignore.size(), error);
 
-  if (error.Success())
+  if (error.Success()) {
     m_last_signals_version = new_signals_version;
+    m_extra_signals_changed = false;
+  }
 
   return error;
+}
+
+void ProcessGDBRemote::SetExtraSignalsToPass(std::vector<int32_t> signals) {
+  m_extra_signals_to_pass = std::move(signals);
+  m_extra_signals_changed = true;
 }
 
 bool ProcessGDBRemote::StartNoticingNewThreads() {

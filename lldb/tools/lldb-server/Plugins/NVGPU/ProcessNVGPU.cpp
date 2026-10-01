@@ -165,6 +165,11 @@ Status ProcessNVGPU::Interrupt() {
 
 Status ProcessNVGPU::Kill() { return Status(); }
 
+std::optional<GPUActions> ProcessNVGPU::GetGPUActions() {
+  // The plugin knows whether this stop completes a late attach.
+  return m_plugin ? m_plugin->GetGPUStopActions() : std::nullopt;
+}
+
 Status ProcessNVGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                  size_t size, size_t &bytes_written) {
   return Status::FromErrorString("unimplemented");

@@ -155,6 +155,13 @@ public:
   ///     Status indicating success or failure of the kill operation.
   Status Kill() override;
 
+  /// Get the GPUActions to add to the stop reply being sent.
+  ///
+  /// \return
+  ///     The actions that stop the native process too, while the stop that
+  ///     completes a late attach is reported.
+  std::optional<GPUActions> GetGPUActions() override;
+
   /// Read memory from the GPU address space.
   ///
   /// \param[in] addr

@@ -88,15 +88,6 @@ public:
     return std::nullopt;
   };
 
-  /// Get notified when the GPU process this plug-in serves is stopping.
-  ///
-  /// Called each time the GPU process stops, as its stop reply is created. The
-  /// GPUActions returned ride on that stop reply, for example to have LLDB stop
-  /// the native process too.
-  virtual std::optional<GPUActions> GPUProcessIsStopping() {
-    return std::nullopt;
-  }
-
   /// Get the GPU plug-in notified when the native process exits.
   ///
   /// This function will get called when the native process exits. This allows

@@ -153,6 +153,8 @@ public:
 
   Status DoResume(lldb::RunDirection direction) override;
 
+  void DidResume() override;
+
   Status DoHalt(bool &caused_stop) override;
 
   Status DoDetach(bool keep_stopped) override;
@@ -492,6 +494,11 @@ private:
   std::string m_partial_profile_data;
   std::map<uint64_t, uint32_t> m_thread_id_to_used_usec_map;
   uint64_t m_last_signals_version = 0;
+  /// [NVIDIA] Signals to pass to the process along with the user's; see
+  /// SetExtraSignalsToPass.
+  std::vector<int32_t> m_extra_signals_to_pass;
+  /// [NVIDIA] m_extra_signals_to_pass changed since it was last sent.
+  bool m_extra_signals_changed = false;
 
   static bool NewThreadNotifyBreakpointHit(void *baton,
                                            StoppointCallbackContext *context,
@@ -519,12 +526,27 @@ private:
   /// platform needs it, and let the platform clean up the native process after.
   Status DetachGPUProcess(bool keep_stopped);
 
+  /// Pass \a signals to the process along with the user's from its next
+  /// resume, until called again.
+  void SetExtraSignalsToPass(std::vector<int32_t> signals);
+
   /// Stop the native process once the GPU attach it runs for has finished, or
   /// after \a timeout.
   void WaitForGPUAttach(std::chrono::milliseconds timeout);
 
   /// Called on the native process when its GPU process asks it to stop.
   void StopForGPU();
+
+  struct GPUAttachWait;
+
+  /// Stop this native process for \a wait once it is requested, or after
+  /// \a timeout if there is one, on a thread of its own.
+  void StartGPUStopThread(std::shared_ptr<GPUAttachWait> wait,
+                          std::optional<std::chrono::milliseconds> timeout);
+
+  /// End any stop for the GPU in progress, once this process has stopped for
+  /// the user or is gone.
+  void EndGPUAttachWait();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
@@ -596,13 +618,16 @@ private:
   llvm::StringMap<llvm::json::Value> m_gpu_platform_data;
 
   /// A GPU attach that keeps this native process running until a GPU's GDB
-  /// server asks for it to stop, shared with the thread that stops it.
+  /// server asks for it to stop, or such a request made after the attach,
+  /// shared with the thread that stops it.
   struct GPUAttachWait {
     std::mutex mutex;
     std::condition_variable cv;
     /// A GPU's GDB server asked for this process to stop.
     bool stop_requested = false;
-    /// This process stopped, which ended the attach.
+    /// This process resumed since the stopping thread last tried to stop it.
+    bool resumed = false;
+    /// This process stopped for the user or is gone, which ended the wait.
     bool ended = false;
   };
   std::mutex m_gpu_attach_wait_mutex;

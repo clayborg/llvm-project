@@ -185,7 +185,7 @@ void LLDBServerPluginNVGPU::OnAttachComplete() {
   m_stop_native_with_gpu = false;
 }
 
-std::optional<GPUActions> LLDBServerPluginNVGPU::GPUProcessIsStopping() {
+std::optional<GPUActions> LLDBServerPluginNVGPU::GetGPUStopActions() {
   if (!m_stop_native_with_gpu)
     return std::nullopt;
   GPUActions actions = GetNewGPUAction();
