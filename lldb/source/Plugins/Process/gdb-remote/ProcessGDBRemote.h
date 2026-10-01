@@ -595,13 +595,13 @@ private:
   /// by plug-in name, for the platform of that name to use at attach.
   llvm::StringMap<llvm::json::Value> m_gpu_platform_data;
 
-  /// A GPU attach that keeps this native process running until the GPU process
-  /// first stops, shared with the thread that stops it.
+  /// A GPU attach that keeps this native process running until a GPU's GDB
+  /// server asks for it to stop, shared with the thread that stops it.
   struct GPUAttachWait {
     std::mutex mutex;
     std::condition_variable cv;
-    /// The GPU process reported its first stop.
-    bool gpu_stopped = false;
+    /// A GPU's GDB server asked for this process to stop.
+    bool stop_requested = false;
     /// This process stopped, which ended the attach.
     bool ended = false;
   };

@@ -1041,8 +1041,8 @@ public:
   virtual bool ShouldResumeAfterAttach() { return false; }
 
   /// [NVIDIA] Write \a data to the file at \a path on the machine the process
-  /// runs on, which may differ from this host. Used to signal a driver through
-  /// a file in the process, such as a pipe it reads, without running its code.
+  /// runs on, which may not be this host. For example, a GPU platform writes
+  /// to a pipe that the GPU driver in the process reads, to ask it to attach.
   ///
   /// \param[in] path
   ///     A path on the process's machine.

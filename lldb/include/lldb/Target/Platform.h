@@ -1141,21 +1141,22 @@ public:
     return false;
   }
 
-  /// [NVIDIA] Ask the driver of a GPU plug-in named like this platform to
-  /// attach to the GPU of \a native_process, which LLDB has just attached to
-  /// and which is stopped. Reads and writes \a native_process and signals the
-  /// driver through it.
+  /// [NVIDIA] Start attaching to the GPU of a process that LLDB has just
+  /// attached to, for example by asking the GPU driver in the process to let a
+  /// debugger in. LLDB calls this, with the process stopped, on the platform
+  /// named after each GPU plug-in that sent "platform_data" in its
+  /// "jGPUPluginInitialize" reply.
   ///
   /// \param[in] native_process
   ///     The attached CPU process.
   ///
   /// \param[in] platform_data
-  ///     The "platform_data" from the plug-in's "jGPUPluginInitialize" reply.
+  ///     The "platform_data" the GPU plug-in sent.
   ///
   /// \return
-  ///     How long \a native_process may run for the driver to finish attaching,
-  ///     which ends when the GPU process first stops, or std::nullopt if it
-  ///     need not run.
+  ///     How long \a native_process may run for the GPU attach to finish, or
+  ///     std::nullopt or zero if it need not run. LLDB stops the process when
+  ///     the GPU's GDB server asks it to, or once that time is up.
   virtual std::optional<std::chrono::milliseconds>
   StartGPUAttach(Process &native_process,
                  const llvm::json::Value &platform_data) {

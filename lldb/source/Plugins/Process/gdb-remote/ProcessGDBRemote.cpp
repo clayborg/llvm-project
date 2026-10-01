@@ -1599,10 +1599,10 @@ void ProcessGDBRemote::WaitForGPUAttach(std::chrono::milliseconds timeout) {
   std::thread([wait, timeout, process_wp] {
     std::unique_lock<std::mutex> lock(wait->mutex);
     wait->cv.wait_for(lock, timeout,
-                      [&] { return wait->gpu_stopped || wait->ended; });
+                      [&] { return wait->stop_requested || wait->ended; });
     if (wait->ended)
       return;
-    const bool timed_out = !wait->gpu_stopped;
+    const bool timed_out = !wait->stop_requested;
     lock.unlock();
 
     // Interrupt only once that ends the attach: an interrupt while the process
@@ -1642,7 +1642,7 @@ void ProcessGDBRemote::StopForGPU() {
   // WaitForGPUAttach.
   if (wait) {
     std::lock_guard<std::mutex> lock(wait->mutex);
-    wait->gpu_stopped = true;
+    wait->stop_requested = true;
     wait->cv.notify_all();
     return;
   }
