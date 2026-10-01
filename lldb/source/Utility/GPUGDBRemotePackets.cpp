@@ -169,25 +169,25 @@ GPUPluginBreakpointHitArgs::GetSymbolValue(llvm::StringRef symbol_name) const {
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,
               llvm::json::Path path) {
   ObjectMapper o(value, path);
-  if (!(o && o.map("plugin_name", data.plugin_name) &&
-        o.map("session_name", data.session_name) &&
-        o.map("identifier", data.identifier) &&
-        o.mapOptional("stop_id", data.stop_id) &&
-        o.map("breakpoints", data.breakpoints) &&
-        o.mapOptional("connect_info", data.connect_info) &&
-        o.map("wait_for_gpu_process_to_stop",
-              data.wait_for_gpu_process_to_stop) &&
-        o.map("load_libraries", data.load_libraries) &&
-        o.map("resume_gpu_process", data.resume_gpu_process) &&
-        o.map("wait_for_gpu_process_to_resume",
-              data.wait_for_gpu_process_to_resume) &&
-        o.mapOptional("stop_native_process", data.stop_native_process)))
+  if (!o)
     return false;
   // Plug-in defined, so kept as raw JSON, which json::fromJSON does not map.
   const json::Value *platform_data = value.getAsObject()->get("platform_data");
   if (platform_data && platform_data->kind() != json::Value::Null)
     data.platform_data = *platform_data;
-  return true;
+  return o.map("plugin_name", data.plugin_name) &&
+         o.map("session_name", data.session_name) &&
+         o.map("identifier", data.identifier) &&
+         o.mapOptional("stop_id", data.stop_id) &&
+         o.map("breakpoints", data.breakpoints) &&
+         o.mapOptional("connect_info", data.connect_info) &&
+         o.map("wait_for_gpu_process_to_stop",
+               data.wait_for_gpu_process_to_stop) &&
+         o.map("load_libraries", data.load_libraries) &&
+         o.map("resume_gpu_process", data.resume_gpu_process) &&
+         o.map("wait_for_gpu_process_to_resume",
+               data.wait_for_gpu_process_to_resume) &&
+         o.mapOptional("stop_native_process", data.stop_native_process);
 }
 
 llvm::json::Value toJSON(const GPUActions &data) {

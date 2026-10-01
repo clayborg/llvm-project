@@ -11,22 +11,21 @@
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ProcessNVGPU.h"
-#include "lldb/Host/Debug.h"
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Process.h"
 
 #include <chrono>
 #include <future>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/uio.h>
 #include <thread>
-#include <utility>
+#include <unistd.h>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -163,6 +162,10 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
 }
 
 llvm::StringRef LLDBServerPluginNVGPU::GetPluginName() { return "nvgpu"; }
+
+std::optional<GPUActions> LLDBServerPluginNVGPU::NativeProcessIsStopping() {
+  return {};
+}
 
 void LLDBServerPluginNVGPU::OnAttachComplete() {
   Log *log = GetLog(GDBRLog::Plugin);

@@ -17,11 +17,8 @@
 #include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/ADT/StringMap.h"
 
 #include <memory>
-#include <string>
-#include <vector>
 
 namespace lldb_private::process_gdb_remote {
 class GDBRemoteCommunicationServerLLGS;

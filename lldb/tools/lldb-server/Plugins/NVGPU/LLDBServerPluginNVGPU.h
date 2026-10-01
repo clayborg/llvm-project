@@ -14,6 +14,7 @@
 #include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "ProcessNVGPU.h"
 #include "lldb/Utility/Status.h"
+#include "llvm/ADT/StringMap.h"
 
 namespace lldb_private::lldb_server {
 
@@ -31,6 +32,7 @@ public:
   GPUActions GetInitializeActions() override;
   llvm::Expected<GPUPluginBreakpointHitResponse>
   BreakpointWasHit(GPUPluginBreakpointHitArgs &args) override;
+  std::optional<GPUActions> NativeProcessIsStopping() override;
   std::optional<GPUActions> GPUProcessIsStopping() override;
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
