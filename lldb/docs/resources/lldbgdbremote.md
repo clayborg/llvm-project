@@ -259,6 +259,25 @@ A stub that has nothing to report replies with an empty packet.
 **Priority To Implement:** Low. This packet is only needed by stubs that debug
 GPUs.
 
+## GPU actions
+
+A GPU plug-in in lldb-server asks LLDB to do things through a JSON dictionary
+of GPU actions, which arrives in the reply to `jGPUPluginInitialize` or
+`jGPUPluginBreakpointHit`, or in the `gpu-actions` key of a stop reply. It can
+contain these optional keys, among others:
+
+* `stop_native_process` (default false): true to have LLDB stop the native
+  process. A GPU's GDB server sets it in its stop reply when the native process
+  should stop along with the GPU process.
+* `platform_data`: data for LLDB's platform plug-in with the same name as the
+  GPU plug-in. LLDB only reads it from the `jGPUPluginInitialize` reply, does
+  not interpret it, and passes it to that platform when it attaches to a
+  running process. If the platform then needs the process to run to attach to
+  the GPU, LLDB resumes it instead of reporting the stop that ends the attach,
+  unless the `plugin.process.gdb-remote.wait-for-gpu-attach` setting is off.
+  The attach ends once the GPU's GDB server sets `stop_native_process`, or
+  after a time the platform chooses.
+
 ## jGetSharedCacheInfo
 
 This packet asks the remote debug stub to send the details about the inferior's
@@ -2558,6 +2577,8 @@ Request packet has the fields:
    3. binary-escaped-data to be written
 
 Response is `F`, followed by the number of bytes written (base 16).
+
+lldb-server ignores the offset for a file that cannot seek, such as a pipe.
 
 ### vFile:size
 
