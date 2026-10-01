@@ -1178,8 +1178,11 @@ public:
     return false;
   }
 
-  /// [NVIDIA] Called once a GPU process of this platform has detached, with
-  /// \a native_process stopped again.
+  /// [NVIDIA] Called once a GPU process of this platform has detached.
+  ///
+  /// \param[in] native_process
+  ///     The CPU process whose GPU detached. It is stopped if it was stopped
+  ///     when the detach began, and may be running otherwise.
   virtual void DidDetachGPU(Process &native_process) {}
 
 protected:

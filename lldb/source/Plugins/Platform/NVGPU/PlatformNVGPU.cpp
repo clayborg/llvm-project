@@ -27,6 +27,7 @@
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/NVGPU/AttachHandshake.h"
 #include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/State.h"
 #include "lldb/Utility/Stream.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -1522,6 +1523,15 @@ void PlatformNVGPU::DidDetachGPU(Process &process) {
   lldb::ModuleSP libcuda = FindLibcuda(target);
   if (!libcuda)
     return;
+  // ptrace refuses to write to a running tracee.
+  if (StateIsRunningState(process.GetState()))
+    process.Halt();
+  if (process.GetState() != lldb::eStateStopped) {
+    LLDB_LOG(log,
+             "PlatformNVGPU: not resetting the handshake: the process is {0}",
+             StateAsCString(process.GetState()));
+    return;
+  }
   // Reset the handshake so that a later debugger negotiates it again. The
   // driver's cleanup needed the IPC flag, so it goes last, as on the way in.
   const uint32_t zero = 0;

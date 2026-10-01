@@ -1743,16 +1743,7 @@ Status ProcessGDBRemote::DetachGPUProcess(bool keep_stopped) {
     }
   }
 
-  // ptrace refuses to write to a running tracee.
-  if (StateIsRunningState(cpu.GetState()))
-    cpu.Halt();
-  if (cpu.GetState() == eStateStopped)
-    platform_sp->DidDetachGPU(cpu);
-  else
-    LLDB_LOG(log,
-             "not cleaning up after the GPU detach: the native process "
-             "is {0}",
-             StateAsCString(cpu.GetState()));
+  platform_sp->DidDetachGPU(cpu);
   return error;
 }
 
