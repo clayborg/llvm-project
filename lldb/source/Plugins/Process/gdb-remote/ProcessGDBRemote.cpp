@@ -318,7 +318,7 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
 
 // Destructor
 ProcessGDBRemote::~ProcessGDBRemote() {
-  EndGPUAttachWait();
+  EndGPUAttachWait(); // [NVIDIA]
   //  m_mach_process.UnregisterNotificationCallbacks (this);
   Clear();
   // We need to call finalize on the process before destroying ourselves to
@@ -1556,7 +1556,7 @@ ProcessGDBRemote::TraceGetBinaryData(const TraceGetBinaryDataRequest &request) {
 }
 
 void ProcessGDBRemote::DidExit() {
-  EndGPUAttachWait();
+  EndGPUAttachWait(); // [NVIDIA]
   // When we exit, disconnect from the GDB server communications
   m_gdb_comm.Disconnect();
 }
@@ -3166,7 +3166,7 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDetach(keep_stopped: %i)", keep_stopped);
 
-  if (GetTarget().IsGPUTarget())
+  if (GetTarget().IsGPUTarget()) // [NVIDIA]
     error = DetachGPUProcess(keep_stopped);
   else
     error = m_gdb_comm.Detach(keep_stopped);
@@ -3303,7 +3303,7 @@ addr_t ProcessGDBRemote::GetImageInfoAddress() {
 }
 
 void ProcessGDBRemote::WillPublicStop() {
-  EndGPUAttachWait();
+  EndGPUAttachWait(); // [NVIDIA]
 
   // See if the GDB remote client supports the JSON threads info. If so, we
   // gather stop info for all threads, expedited registers, expedited memory,
