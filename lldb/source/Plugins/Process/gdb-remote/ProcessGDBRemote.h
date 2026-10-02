@@ -157,6 +157,8 @@ public:
 
   Status DoHalt(bool &caused_stop) override;
 
+  Status WillDetach() override;
+
   Status DoDetach(bool keep_stopped) override;
 
   bool DetachRequiresHalt() override { return true; }

@@ -206,11 +206,13 @@ plugin removes the breakpoints it set on the device and asks the driver to
 clean up. The driver can only do that while the application runs, so LLDB runs
 the CPU process until the GPU's ``lldb-server`` has finished detaching, then
 stops it again and resets the driver's handshake globals. That leaves the
-process in a state a later debugger can attach to again. Detach the GPU target
-before the CPU target, and re-select the host platform before re-attaching::
+process in a state a later debugger can attach to again.
 
-  > target select <gpu-target-index>
-  > detach
+Detaching the GPU target leaves the CPU target attached and stopped. Detaching
+the CPU target detaches the GPU target first, the same way, so a single
+``detach`` with the CPU target selected detaches both. Quitting LLDB does the
+same. Re-select the host platform before re-attaching::
+
   > target select <cpu-target-index>
   > detach
   > platform select host

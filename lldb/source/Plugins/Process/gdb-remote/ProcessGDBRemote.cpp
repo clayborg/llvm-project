@@ -1708,6 +1708,38 @@ ProcessGDBRemote::WriteBinaryDataToFile(llvm::StringRef path,
   return llvm::Error::success();
 }
 
+Status ProcessGDBRemote::WillDetach() {
+  if (GetTarget().IsGPUTarget())
+    return Status();
+  // Detaching a native process detaches its GPU processes too, and first:
+  // their GDB servers run inside its lldb-server, and a GPU's driver may need
+  // this process running to clean up. A GPU process can detach on its own.
+  llvm::SmallVector<ProcessSP, 2> gpu_processes;
+  TargetList &targets = GetTarget().GetDebugger().GetTargetList();
+  for (size_t i = 0; i < targets.GetNumTargets(); ++i) {
+    TargetSP target_sp = targets.GetTargetAtIndex(i);
+    if (!target_sp || target_sp->GetNativeTargetForGPU().get() != &GetTarget())
+      continue;
+    ProcessSP process_sp = target_sp->GetProcessSP();
+    if (process_sp && process_sp->IsAlive())
+      gpu_processes.push_back(process_sp);
+  }
+
+  for (const ProcessSP &process_sp : gpu_processes) {
+    // lldb-server cannot leave a process stopped on detach, so only this
+    // process is asked to.
+    Status error = process_sp->Detach(/*keep_stopped=*/false);
+    // The user asked for this process to detach, so it does regardless.
+    if (error.Fail())
+      Debugger::ReportWarning(llvm::formatv("could not detach GPU process "
+                                            "{0}: {1}",
+                                            process_sp->GetID(), error)
+                                  .str(),
+                              GetTarget().GetDebugger().GetID());
+  }
+  return Status();
+}
+
 Status ProcessGDBRemote::DetachGPUProcess(bool keep_stopped) {
   Log *log = GetLog(GDBRLog::Plugin);
   TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU();
