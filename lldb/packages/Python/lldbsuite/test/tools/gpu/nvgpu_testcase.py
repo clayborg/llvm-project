@@ -187,6 +187,14 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             description=f"with stop reason {lldbutil.stop_reason_to_str(stop_reason)}",
         )
 
+    def find_thread_by_function(self, name: str) -> lldb.SBThread:
+        """Return the first GPU thread stopped in a function whose name contains
+        `name`; fail if none is."""
+        return self.find_some_thread(
+            lambda thread: name in (thread.GetFrameAtIndex(0).GetFunctionName() or ""),
+            description=f"stopped in a function with {name!r} in its name",
+        )
+
     def assert_gpu_stop(
         self,
         match: StopMatcher,

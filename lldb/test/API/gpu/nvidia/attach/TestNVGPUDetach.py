@@ -78,9 +78,4 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         )
 
         self.attach_to_running_cuda_app(self._popen.pid)
-        self.select_gpu()
-        self.assertGreater(
-            len(self.gpu_process.threads),
-            0,
-            "expected the kernel's threads to appear after re-attach",
-        )
+        self.find_thread_by_function("spinKernel")

@@ -29,7 +29,7 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
         """Resume the CPU process, which the late attach needs running, and wait
         for it to bring up the GPU target and stop it."""
         self.setAsync(True)
-        self.cpu_target.GetProcess().Continue()
+        self.assertSuccess(self.cpu_process.Continue(), "continue CPU process")
         self.assertTrue(
             self.wait_for(lambda: self.gpu_target is not None),
             "GPU target was not created once the process ran",
@@ -61,7 +61,7 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
         breakpoint to bring up the GPU target."""
         self.setAsync(True)
         open(go_marker, "w").close()
-        self.cpu_target.GetProcess().Continue()
+        self.assertSuccess(self.cpu_process.Continue(), "continue CPU process")
         self.assertTrue(
             self.wait_for(lambda: self.gpu_target is not None),
             "GPU target was not created once the application initialized CUDA",
@@ -77,12 +77,7 @@ class TestNVGPUAttach(NVGPUTestCaseBase):
 
         self.attach_to_running_cuda_app(popen.pid)
 
-        self.select_gpu()
-        self.assertGreater(
-            len(self.gpu_process.threads),
-            0,
-            "expected the attached kernel's threads to appear in the thread list",
-        )
+        self.find_thread_by_function("spinKernel")
 
     def test_attach_without_waiting_for_the_gpu(self):
         """With wait-for-gpu-attach off, process attach returns as soon as the
