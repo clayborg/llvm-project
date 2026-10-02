@@ -50,8 +50,16 @@ int main(int argc, char **argv) {
   if (go_marker_path) {
     if (!WriteMarker(ready_marker_path))
       return 1;
-    while (access(go_marker_path, F_OK) != 0)
+    // The test creates the go marker once it has attached. The time limit
+    // (about 600 s, as below) only stops an orphan from waiting forever if
+    // that never happens.
+    for (int i = 0; access(go_marker_path, F_OK) != 0; ++i) {
+      if (i == 60000) {
+        fprintf(stderr, "go marker '%s' never appeared\n", go_marker_path);
+        return 1;
+      }
       usleep(10000);
+    }
   }
 
   int *d_keep_running = nullptr;
