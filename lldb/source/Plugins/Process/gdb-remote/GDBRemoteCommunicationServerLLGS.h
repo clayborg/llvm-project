@@ -104,11 +104,15 @@ public:
     m_plugin_instance = plugin;
   }
 
+  /// Run \a callback on this server's MainLoop thread, the only one allowed to
+  /// use its process. Unlike the rest of this server, this may be called from
+  /// any thread. A callback posted once the MainLoop has stopped never runs.
+  ///
   /// \return
-  ///     The MainLoop driving this server. GPU server plugins use it to run
-  ///     work on this server's thread, the only one allowed to use its
-  ///     process.
-  MainLoop &GetMainLoop() { return m_mainloop; }
+  ///     false if the MainLoop could not be woken up to run \a callback.
+  bool PostToMainLoop(const MainLoop::Callback &callback) {
+    return m_mainloop.AddPendingCallback(callback);
+  }
 
   struct DebuggedProcess {
     enum class Flag {
@@ -129,8 +133,8 @@ public:
 
   // Actions a server plugin takes on the debugged process through this server,
   // rather than through the process itself. Like the rest of this server, they
-  // may only be used on its MainLoop thread; other threads post them to
-  // GetMainLoop(). Those returning an error fail when there is no current
+  // may only be used on its MainLoop thread; other threads post them with
+  // PostToMainLoop(). Those returning an error fail when there is no current
   // process.
 
   /// Read exactly \a size bytes at \a addr, leaving out the breakpoint opcodes

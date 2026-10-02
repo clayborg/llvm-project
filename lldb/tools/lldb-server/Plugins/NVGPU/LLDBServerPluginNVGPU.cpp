@@ -617,8 +617,8 @@ LLDBServerPluginNVGPU::RunOnNativeMainLoop(std::function<llvm::Error()> work) {
       message = llvm::toString(std::move(err));
     shared->result.set_value(std::move(message));
   };
-  if (!m_native_process.GetMainLoop().AddPendingCallback(run))
-    return createStringError("the native MainLoop is no longer accepting work");
+  if (!m_native_process.PostToMainLoop(run))
+    return createStringError("could not wake the native MainLoop");
 
   const std::chrono::milliseconds timeout(kNativeWorkTimeoutMs);
   if (future.wait_for(timeout) != std::future_status::ready)
@@ -641,10 +641,9 @@ void LLDBServerPluginNVGPU::HaltNativeProcess() {
       LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
                      "HaltNativeProcess: {0}");
   };
-  if (!m_native_process.GetMainLoop().AddPendingCallback(halt))
+  if (!m_native_process.PostToMainLoop(halt))
     LLDB_LOG(GetLog(GDBRLog::Plugin),
-             "HaltNativeProcess: the native MainLoop is no longer accepting "
-             "work");
+             "HaltNativeProcess: could not wake the native MainLoop");
 }
 
 void LLDBServerPluginNVGPU::DetachCleanup() {
