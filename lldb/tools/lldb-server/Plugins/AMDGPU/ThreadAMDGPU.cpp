@@ -41,6 +41,25 @@ std::string ThreadAMDGPU::GetName() {
 
 lldb::StateType ThreadAMDGPU::GetState() { return lldb::eStateStopped; }
 
+bool ThreadAMDGPU::GetStopReason(ThreadStopInfo &stop_info,
+                                 std::string &description) {
+  if (!m_wave->GetStopReason(stop_info, description))
+    return false;
+
+  ProcessAMDGPU &process = GetProcess();
+  // amd_dbgapi reports no stop reason for waves stopped by a debugger request.
+  // During an interrupt, we synthesize SIGSTOP for only the selected
+  // representative thread, while preserving real stop reasons and leaving
+  // collateral stopped threads without a reason. This matches native
+  // debugging behavior.
+  if (stop_info.reason == lldb::eStopReasonNone &&
+      process.IsInterruptPending() && process.GetCurrentThreadID() == GetID()) {
+    stop_info.reason = lldb::eStopReasonSignal;
+    stop_info.signo = SIGSTOP;
+  }
+  return true;
+}
+
 Status ThreadAMDGPU::SetWatchpoint(lldb::addr_t addr, size_t size,
                                    uint32_t watch_flags, bool hardware) {
   return Status::FromErrorString("unimplemented");
