@@ -57,6 +57,7 @@ Status ProcessAMDGPU::Resume(const ResumeActionList &resume_actions) {
   // re-enabling wave creation fails.
   m_stopping_all_waves = false;
   m_waves_pending_stop.clear();
+  m_interrupt_pending = false;
 
   if (llvm::Error error = SetWaveCreationStopped(false))
     return Status::FromError(std::move(error));
@@ -216,7 +217,23 @@ Status ProcessAMDGPU::Signal(int signo) {
 ///
 /// \return
 ///     Returns an error object.
-Status ProcessAMDGPU::Interrupt() { return Status(); }
+Status ProcessAMDGPU::Interrupt() {
+  if (!IsRunning() || m_interrupt_pending)
+    return Status();
+
+  m_interrupt_pending = true;
+  llvm::Expected<bool> all_waves_stopped = AdvanceStopAllWaves();
+  if (!all_waves_stopped) {
+    m_interrupt_pending = false;
+    return Status::FromError(all_waves_stopped.takeError());
+  }
+
+  if (*all_waves_stopped) {
+    UpdateThreads();
+    Halt();
+  }
+  return Status();
+}
 
 Status ProcessAMDGPU::Kill() { return Status(); }
 
@@ -648,7 +665,8 @@ bool ProcessAMDGPU::handleWaveStop(amd_dbgapi_event_id_t eventId) {
   wave.SetExecMask(exec_mask);
   wave.UpdateStopReason(stop_reason);
   // A real breakpoint, step, or exception takes priority over a wave stopped
-  // only to complete an all-stop operation.
+  // only to complete an all-stop operation. For an interrupt, remember the
+  // first requested stop as the representative stop-reason wave.
   if (stop_reason != AMD_DBGAPI_WAVE_STOP_REASON_NONE ||
       !m_pending_notification_wave_id)
     m_pending_notification_wave_id = wave_id;
