@@ -363,6 +363,15 @@ static void ReleaseAndClearThreads(
   threads.clear();
 }
 
+ProcessNVGPU::~ProcessNVGPU() {
+  // m_threads holds pointers to threads this process does not own: the
+  // fallback thread is a member, and the GPU threads belong to m_devices.
+  // Release them so that NativeProcessProtocol's destructor does not delete
+  // them. The fallback thread is still in m_threads if the GPU never
+  // suspended, for example after the debug API failed to initialize.
+  ReleaseAndClearThreads(m_threads);
+}
+
 void ProcessNVGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
     std::function<void(llvm::StringRef message)> log_to_client_callback) {
