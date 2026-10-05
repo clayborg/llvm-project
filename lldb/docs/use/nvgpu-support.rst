@@ -146,6 +146,35 @@ Running the tests
   # Now you can run the tests
   ./bin/llvm-lit ../llvm-project/lldb/test/API/gpu/nvidia/ -a -v
 
+Running the tests under AddressSanitizer
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Configure a separate build with clang and ``-DLLVM_USE_SANITIZER=Address``,
+then build and run the tests with the commands above. No other setup is needed.
+
+A test file fails when lldb, lldb-server, or any other process the test started
+reports an ASan error. The report appears in the test output, with function
+names and source lines. Because lldb runs lldb-server with its output on
+``/dev/null``, ASan writes each report to a file named
+``report.<process>.<pid>``, in a directory next to lit's output for the test
+file:
+
+.. code-block:: text
+
+  <build>/tools/lldb/test/API/gpu/nvidia/<area>/Test<Name>.py.asan/
+
+On such a build, the NVIDIA test directories set up the rest:
+
+- They preload the ASan runtime into dotest's Python, which is not instrumented
+  but loads the instrumented liblldb.
+- They add ``protect_shadow_gap=0`` to ``ASAN_OPTIONS``. Without it, the CUDA
+  driver cannot initialize the debug API inside the instrumented lldb-server.
+- They turn off leak detection, so leaks are not reported.
+
+The CUDA test programs are not instrumented, so they are not checked. A report
+that lldb-server writes while it shuts down can be cut short, because lldb stops
+the server soon after it starts to exit. The test file still fails in that case.
+
 
 Remote platforms - Linux
 ^^^^^^^^^^^^^^^^^^^^^^^^
