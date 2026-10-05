@@ -117,6 +117,7 @@ public:
   llvm::Expected<bool> AdvanceStopAllWaves();
 
   bool IsStoppingAllWaves() const { return m_stopping_all_waves; }
+  bool IsInterruptPending() const { return m_interrupt_pending; }
 
   bool HasDyldChangesToReport() const {
     return m_gpu_module_manager.HasChangedCodeObjects();
@@ -167,6 +168,9 @@ private:
 
   // True while waiting for every live wave to stop.
   bool m_stopping_all_waves = false;
+
+  // True while an interrupt-driven all-stop operation is pending.
+  bool m_interrupt_pending = false;
 
   // Tracks whether dbgapi is currently preventing new waves from being
   // created.

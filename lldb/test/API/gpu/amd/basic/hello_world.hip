@@ -100,6 +100,18 @@ __global__ void all_stop_kernel(unsigned int *state) {
   }
 }
 
+__global__ void interrupt_kernel(volatile unsigned int *state) {
+  if (threadIdx.x == 0) {
+    state[1] = 1;
+    __threadfence_system();
+  }
+  __syncthreads();
+  while (state[0] == 0) {
+  }
+  unsigned int value = state[0]; // GPU INTERRUPT SENTINEL
+  (void)value;
+}
+
 int main() {
   // Allocate host vectors
   const size_t size = strlen("Hello, world!");
@@ -137,6 +149,23 @@ int main() {
   all_stop_kernel<<<2, all_stop_num_threads>>>(d_all_stop_state);
   HIP_CHECK(hipDeviceSynchronize());
   HIP_CHECK(hipFree(d_all_stop_state));
+
+  unsigned int *interrupt_state;
+  HIP_CHECK(hipHostMalloc(&interrupt_state, 2 * sizeof(*interrupt_state),
+                          hipHostMallocMapped));
+  interrupt_state[0] = 0;
+  interrupt_state[1] = 0;
+  unsigned int *device_interrupt_state;
+  HIP_CHECK(hipHostGetDevicePointer(
+      reinterpret_cast<void **>(&device_interrupt_state), interrupt_state,
+      0));
+  interrupt_kernel<<<1, 64>>>(device_interrupt_state);
+  while (static_cast<volatile unsigned int *>(interrupt_state)[1] == 0) {
+  }
+  printf("Interrupt kernel launched\n"); // CPU BREAKPOINT - INTERRUPT GPU
+  interrupt_state[0] = 1;
+  HIP_CHECK(hipDeviceSynchronize());
+  HIP_CHECK(hipHostFree(interrupt_state));
 
   // Free device memory
   HIP_CHECK(hipFree(d_str)); // CPU BREAKPOINT - AFTER FINISH
