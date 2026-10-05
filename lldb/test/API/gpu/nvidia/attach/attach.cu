@@ -1,19 +1,22 @@
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <unistd.h>
 
 #include <cuda_runtime.h>
 
 // A resident kernel that spins until the host clears keep_running (which it
-// never does; the kernel ends when the process exits). It sets *started to 1
-// once it is actually executing on an SM, so the host can confirm the kernel
-// is resident (rather than merely launched) before signalling readiness. This
-// keeps GPU work executing so a debugger can attach to an already-running CUDA
+// never does; the kernel ends when the process exits). Thread 0 counts the
+// loop's iterations in *progress, which the host reads to confirm the kernel
+// is resident (rather than merely launched) before signalling readiness, and
+// reports so a test can tell that the kernel keeps running. This keeps GPU
+// work executing so a debugger can attach to an already-running CUDA
 // application and enumerate the threads of the in-flight kernel.
-__global__ void spinKernel(volatile int *keep_running, volatile int *started) {
-  *started = 1;
+__global__ void spinKernel(volatile int *keep_running,
+                           volatile unsigned long long *progress) {
   while (*keep_running) {
-    // Busy-wait so the warps stay resident on the SM.
+    if (threadIdx.x == 0)
+      *progress = *progress + 1;
   }
 }
 
@@ -35,6 +38,23 @@ static bool WriteMarker(const char *path) {
   fputs("ready\n", marker);
   fclose(marker);
   return true;
+}
+
+// Replace the report at path with how many times the host has woken up, the
+// kernel's iteration count and that count's address. The report is written
+// aside and renamed into place, so a reader never sees half of one.
+static bool WriteProgress(const std::string &path, unsigned long host_ticks,
+                          volatile unsigned long long *gpu_progress) {
+  std::string tmp_path = path + ".tmp";
+  FILE *report = fopen(tmp_path.c_str(), "w");
+  if (!report) {
+    fprintf(stderr, "failed to open progress report '%s'\n", tmp_path.c_str());
+    return false;
+  }
+  fprintf(report, "%lu %llu %p\n", host_ticks, *gpu_progress,
+          (void *)gpu_progress);
+  fclose(report);
+  return rename(tmp_path.c_str(), path.c_str()) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -69,25 +89,36 @@ int main(int argc, char **argv) {
   CHECK_CUDA(
       cudaMemcpy(d_keep_running, &one, sizeof(int), cudaMemcpyHostToDevice));
 
-  // Pinned, host-mapped flag the kernel sets once it is resident. Zero-copy
+  // Pinned, host-mapped counter the kernel advances while it runs. Zero-copy
   // mapped memory is safe to poll from the host while the kernel runs.
-  int *h_started = nullptr;
-  CHECK_CUDA(
-      cudaHostAlloc((void **)&h_started, sizeof(int), cudaHostAllocMapped));
-  *h_started = 0;
-  int *d_started = nullptr;
-  CHECK_CUDA(cudaHostGetDevicePointer((void **)&d_started, h_started, 0));
+  unsigned long long *h_progress = nullptr;
+  CHECK_CUDA(cudaHostAlloc((void **)&h_progress, sizeof(*h_progress),
+                           cudaHostAllocMapped));
+  *h_progress = 0;
+  unsigned long long *d_progress = nullptr;
+  CHECK_CUDA(cudaHostGetDevicePointer((void **)&d_progress, h_progress, 0));
+  volatile unsigned long long *gpu_progress = h_progress;
 
   // Launch two warps worth of threads so the thread list is non-empty when a
   // debugger attaches.
-  spinKernel<<<1, 64>>>(d_keep_running, d_started);
+  spinKernel<<<1, 64>>>(d_keep_running, d_progress);
   // A launch failure is reported asynchronously via the next runtime call, but
   // cudaGetLastError surfaces immediate launch-configuration errors.
   CHECK_CUDA(cudaGetLastError());
 
   // Wait until the kernel is actually executing on the device.
-  while (*((volatile int *)h_started) == 0) {
+  while (*gpu_progress == 0) {
     usleep(1000);
+  }
+
+  // The progress report sits next to the readiness marker. It is written once
+  // before the marker below, so a test that waits for the marker never reads a
+  // report left by an earlier run.
+  std::string progress_path;
+  if (ready_marker_path) {
+    progress_path = std::string(ready_marker_path) + ".progress";
+    if (!WriteProgress(progress_path, 0, gpu_progress))
+      return 1;
   }
 
   // The kernel is confirmed resident. Write the readiness marker (if requested)
@@ -98,10 +129,14 @@ int main(int argc, char **argv) {
   fflush(stdout);
 
   // Keep the host process alive (and the kernel resident) so a debugger can
-  // attach. The test kills this process during teardown; the time limit only
-  // stops an orphan from occupying the GPU indefinitely if that never happens.
-  for (int i = 0; i < 600; ++i)
-    sleep(1);
+  // attach, and report progress every 100 ms. The test kills this process
+  // during teardown; the time limit only stops an orphan from occupying the GPU
+  // indefinitely if that never happens.
+  for (unsigned long tick = 1; tick <= 6000; ++tick) {
+    usleep(100000);
+    if (!progress_path.empty())
+      WriteProgress(progress_path, tick, gpu_progress);
+  }
 
   return 0;
 }

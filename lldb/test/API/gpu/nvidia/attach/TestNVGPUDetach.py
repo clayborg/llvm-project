@@ -1,3 +1,6 @@
+import struct
+import time
+
 import lldb
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -10,9 +13,10 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
     and the GPU detach must let the driver clean up and reset its handshake
     flags. The GPU target can detach on its own, while detaching the CPU target
     detaches the GPU target first. Either way the application must keep
-    running, and a second attach to the same pid must then succeed, which is
-    what proves the cleanup was complete: a driver still believing a debugger
-    is attached makes the re-attach fail or wedge.
+    running, which the host thread and the kernel each report, and a second
+    attach to the same pid must then succeed, which is what proves the cleanup
+    was complete: a driver still believing a debugger is attached makes the
+    re-attach fail or wedge.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
@@ -37,11 +41,40 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.build()
         exe = self.getBuildArtifact("a.out")
         ready_marker = self.getBuildArtifact("kernel_ready.marker")
+        # attach.cu reports its progress next to its readiness marker.
+        self._progress_report = ready_marker + ".progress"
         self._popen = self.start_resident_kernel(exe, ready_marker)
 
         self.attach_to_running_cuda_app(self._popen.pid)
         self.select_gpu()
         self.runCmd("breakpoint set -n spinKernel")
+
+        # The debugger keeps the kernel suspended while the GPU target is
+        # attached, so its count only moves once the kernel runs again.
+        gpu_before = self._read_gpu_count()
+        time.sleep(0.5)
+        self.assertEqual(
+            self._read_gpu_count(),
+            gpu_before,
+            "the kernel ran while the GPU target was attached",
+        )
+
+    def _read_progress(self):
+        """The application's last progress report: how many times its host
+        thread has woken up, the kernel's iteration count and that count's
+        address."""
+        with open(self._progress_report) as report:
+            host_ticks, gpu_count, gpu_count_address = report.read().split()
+        return int(host_ticks), int(gpu_count), int(gpu_count_address, 16)
+
+    def _read_gpu_count(self):
+        """Read the kernel's iteration count from the application's memory,
+        which works while its host thread is stopped. lldb would answer from its
+        memory cache, which only refreshes when the process resumes."""
+        _, _, address = self._read_progress()
+        with open("/proc/%d/mem" % self._popen.pid, "rb") as mem:
+            mem.seek(address)
+            return struct.unpack("<Q", mem.read(8))[0]
 
     def _check_detached_and_reattach(self):
         """Check that the application kept running with nothing attached, then
@@ -55,6 +88,13 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
             self.wait_for_no_tracer(self._popen.pid),
             "lldb-server was still attached to the inferior after detach",
         )
+        host_before, gpu_before, _ = self._read_progress()
+        time.sleep(1)
+        host_after, gpu_after, _ = self._read_progress()
+        self.assertGreater(
+            host_after, host_before, "the host thread did not run after detach"
+        )
+        self.assertGreater(gpu_after, gpu_before, "the kernel did not run after detach")
 
         # Drop both detached targets. They linger in the debugger otherwise, and
         # because cpu_target/gpu_target match on triple, a later re-attach would
@@ -69,8 +109,9 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
         self.find_thread_by_function("spinKernel")
 
     def test_detach_from_the_gpu_target(self):
-        """Detaching the GPU target leaves the CPU target attached, and the
-        application keeps running once that detaches too."""
+        """Detaching the GPU target leaves the CPU target attached while the
+        kernel runs again, and the application keeps running once the CPU
+        target detaches too."""
         self._attach_and_set_gpu_breakpoint()
         cpu_process = self.cpu_process
         gpu_process = self.gpu_process
@@ -84,6 +125,13 @@ class TestNVGPUDetach(NVGPUTestCaseBase):
             cpu_process.GetState(),
             lldb.eStateStopped,
             "the GPU detach did not leave the CPU attached and stopped",
+        )
+        gpu_before = self._read_gpu_count()
+        time.sleep(1)
+        self.assertGreater(
+            self._read_gpu_count(),
+            gpu_before,
+            "the kernel did not run once the GPU target detached",
         )
 
         self.select_cpu()
