@@ -57,6 +57,8 @@ public:
   ///     Delegate for handling process events and notifications.
   ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate);
 
+  ~ProcessNVGPU() override;
+
   void SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
