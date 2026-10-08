@@ -601,6 +601,88 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
             self, listener, self.cpu_process, [lldb.eStateExited]
         )
 
+    def test_gpu_async_interrupt_and_resume(self):
+        """Test interrupting a running GPU process and resuming it."""
+        self.build()
+
+        source = "hello_world.hip"
+        target = lldbutil.run_to_breakpoint_make_target(self)
+        cpu_breakpoint = target.BreakpointCreateBySourceRegex(
+            "// CPU BREAKPOINT - INTERRUPT GPU", lldb.SBFileSpec(source)
+        )
+        self.assertEqual(1, cpu_breakpoint.GetNumLocations())
+
+        launch_info = target.GetLaunchInfo()
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        process = target.Launch(launch_info, error)
+        self.assertTrue(process, "Could not create a valid process")
+        self.assertSuccess(error, "launch process")
+        self.assertTrue(self.gpu_target.IsValid(), "GPU target should be created")
+
+        sentinel_breakpoint_id = self.set_gpu_source_breakpoint(
+            source, "// GPU INTERRUPT SENTINEL"
+        )
+
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+
+        self.select_gpu()
+        error = self.gpu_process.Continue()
+        self.assertSuccess(error, "continue GPU process")
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateRunning]
+        )
+
+        self.select_cpu()
+        error = self.cpu_process.Continue()
+        self.assertSuccess(error, "continue CPU process")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.cpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        self.assertState(self.gpu_process.GetState(), lldb.eStateRunning)
+
+        error = self.gpu_process.Stop()
+        self.assertSuccess(error, "interrupt GPU process")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateStopped],
+            timeout=5,
+        )
+        self.assertStopReason(
+            self.gpu_process.GetSelectedThread().GetStopReason(),
+            lldb.eStopReasonSignal,
+        )
+
+        self.select_gpu()
+        error = self.gpu_process.Continue()
+        self.assertSuccess(error, "resume interrupted GPU process")
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateRunning]
+        )
+
+        self.select_cpu()
+        error = self.cpu_process.Continue()
+        self.assertSuccess(error, "release interrupt kernel")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateRunning]
+        )
+
+        lldbutil.expect_state_changes(
+            self, listener, self.gpu_process, [lldb.eStateStopped]
+        )
+        self.assertTrue(
+            lldbutil.get_threads_stopped_at_breakpoint_id(
+                self.gpu_process, sentinel_breakpoint_id
+            ),
+            "GPU should hit the sentinel breakpoint after resuming",
+        )
+
     def test_num_threads(self):
         """Test that we get the expected number of threads."""
         self.build()
