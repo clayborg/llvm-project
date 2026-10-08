@@ -2885,12 +2885,15 @@ void AMDGPUSymbolizer::tryAddingPcLoadReferenceComment(raw_ostream &cStream,
 // Initialization
 //===----------------------------------------------------------------------===//
 
-static MCSymbolizer *createAMDGPUSymbolizer(const Triple &/*TT*/,
-                              LLVMOpInfoCallback /*GetOpInfo*/,
-                              LLVMSymbolLookupCallback /*SymbolLookUp*/,
-                              void *DisInfo,
-                              MCContext *Ctx,
-                              std::unique_ptr<MCRelocationInfo> &&RelInfo) {
+static MCSymbolizer *
+createAMDGPUSymbolizer(const Triple &TT, LLVMOpInfoCallback GetOpInfo,
+                       LLVMSymbolLookupCallback SymbolLookUp, void *DisInfo,
+                       MCContext *Ctx,
+                       std::unique_ptr<MCRelocationInfo> &&RelInfo) {
+  if (GetOpInfo || SymbolLookUp)
+    return llvm::createMCSymbolizer(TT, GetOpInfo, SymbolLookUp, DisInfo, Ctx,
+                                    std::move(RelInfo));
+
   return new AMDGPUSymbolizer(*Ctx, std::move(RelInfo), DisInfo);
 }
 
