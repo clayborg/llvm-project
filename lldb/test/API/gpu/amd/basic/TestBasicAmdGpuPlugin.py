@@ -44,6 +44,32 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
         gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
         self.assertNotEqual(None, gpu_threads, "GPU should be stopped at breakpoint")
 
+    def test_gpu_breakpoint_stops_all_waves(self):
+        """Test that a breakpoint stop interrupts every running GPU wave."""
+        self.build()
+
+        source = "hello_world.hip"
+        breakpoint_threads = self.run_to_gpu_breakpoint(
+            source, "// ALL WAVES STOP BREAKPOINT"
+        )
+        self.assertTrue(breakpoint_threads)
+        self.assertIn(
+            self.gpu_process.GetSelectedThread().GetThreadID(),
+            [thread.GetThreadID() for thread in breakpoint_threads],
+            "selected thread should belong to the wave that hit the breakpoint",
+        )
+
+        lane_threads = [
+            self.gpu_process.GetThreadAtIndex(index)
+            for index in range(self.gpu_process.GetNumThreads())
+            if self.gpu_process.GetThreadAtIndex(index).GetName() != SHADOW_THREAD_NAME
+        ]
+        self.assertEqual(2 * 64, len(lane_threads))
+        self.assertTrue(
+            all(thread.IsActive() for thread in lane_threads),
+            "all lanes should be active after every wave is stopped",
+        )
+
     def test_gpu_basic_step_over(self):
         """Test that a GPU thread can step over a source line."""
         self.build()

@@ -84,6 +84,22 @@ __global__ void helloworld_kernel(char *str, size_t size) {
   }
 }
 
+__global__ void all_stop_kernel(unsigned int *state) {
+  unsigned int block_idx = blockIdx.x;
+
+  if (block_idx == 0) {
+    while (atomicAdd(&state[0], 0) != blockDim.x) {
+    }
+
+    state[2 + threadIdx.x] = threadIdx.x; // ALL WAVES STOP BREAKPOINT
+    atomicExch(&state[1], 1);
+  } else {
+    atomicAdd(&state[0], 1);
+    while (atomicAdd(&state[1], 0) == 0) {
+    }
+  }
+}
+
 int main() {
   // Allocate host vectors
   const size_t size = strlen("Hello, world!");
@@ -110,6 +126,17 @@ int main() {
   // Copy data from device to host
   printf("Copying data to host...\n");   // CPU BREAKPOINT - AFTER LAUNCH
   HIP_CHECK(hipMemcpy(h_str.data(), d_str, h_str.size(), hipMemcpyDeviceToHost));
+
+  constexpr unsigned int all_stop_num_threads = 64;
+  constexpr unsigned int all_stop_state_size = 2 + all_stop_num_threads;
+  unsigned int *d_all_stop_state;
+  HIP_CHECK(hipMalloc(&d_all_stop_state,
+                      all_stop_state_size * sizeof(*d_all_stop_state)));
+  HIP_CHECK(hipMemset(d_all_stop_state, 0,
+                      all_stop_state_size * sizeof(*d_all_stop_state)));
+  all_stop_kernel<<<2, all_stop_num_threads>>>(d_all_stop_state);
+  HIP_CHECK(hipDeviceSynchronize());
+  HIP_CHECK(hipFree(d_all_stop_state));
 
   // Free device memory
   HIP_CHECK(hipFree(d_str)); // CPU BREAKPOINT - AFTER FINISH

@@ -337,10 +337,32 @@ void LLDBServerPluginAMDGPU::HandleNotifierDataReady() {
                    "Failed to disable forward progress: {0}");
 
   AmdDbgApiEventSet events = process_event_queue(AMD_DBGAPI_EVENT_KIND_NONE);
-  if (events.HasWaveStopEvent()) {
-    auto *process = GetGPUProcess();
-    process->UpdateThreads();
-    process->Halt();
+  auto *process = GetGPUProcess();
+
+  // A wave-stop event starts an all-stop operation. Later notifier callbacks
+  // continue it until every asynchronous wave-stop request has completed.
+  const bool start_all_stop = events.HasWaveStopEvent();
+  const bool continue_all_stop = process->IsStoppingAllWaves();
+  if (start_all_stop || continue_all_stop) {
+    llvm::Expected<bool> all_waves_stopped = process->AdvanceStopAllWaves();
+    bool should_report_stop;
+    if (!all_waves_stopped) {
+      LLDB_LOG_ERROR(log, all_waves_stopped.takeError(),
+                     "Failed to stop all GPU waves: {0}");
+
+      // Preserve the original stop instead of waiting indefinitely after an
+      // error. Some waves may still be running in this fallback case.
+      should_report_stop = true;
+    } else {
+      // A successful false means that asynchronous wave-stop requests are
+      // still pending. Their events will wake the notifier and retry here.
+      should_report_stop = *all_waves_stopped;
+    }
+
+    if (should_report_stop) {
+      process->UpdateThreads();
+      process->Halt();
+    }
   }
 
   if (llvm::Error err = RunAmdDbgApiCommand([this]() {
