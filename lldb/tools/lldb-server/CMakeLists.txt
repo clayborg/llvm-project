@@ -47,7 +47,15 @@ if(APPLE_EMBEDDED)
 endif()
 
 option(LLDB_ENABLE_AMDGPU_PLUGIN "Enable support for the AMD GPU plugin" OFF)
+option(LLDB_ENABLE_INTELGT_PLUGIN "Enable support for the Intel GT GPU plugin" OFF)
 option(LLDB_ENABLE_MOCK_GPU_PLUGIN "Enable support for the Mock GPU plugin" OFF)
+
+if(LLDB_ENABLE_INTELGT_PLUGIN)
+  list(APPEND CMAKE_MODULE_PATH
+    "${CMAKE_CURRENT_SOURCE_DIR}/Plugins/IntelGT")
+  add_definitions(-DLLDB_ENABLE_INTELGT_PLUGIN=1)
+  list(APPEND LLDB_PLUGINS lldbServerPluginIntelGT)
+endif()
 
 if(LLDB_ENABLE_AMDGPU_PLUGIN)
   if(NOT DEFINED ROCM_PATH)
@@ -101,5 +109,21 @@ add_dependencies(lldb-server
 )
 target_include_directories(lldb-server PRIVATE "${LLDB_SOURCE_DIR}/source")
 target_link_libraries(lldb-server PRIVATE ${LLDB_SYSTEM_LIBS})
+
+# Force link all symbols from IntelGT plugin to ensure Level Zero gets linked
+# Remove from normal link list and add with --whole-archive to force all symbols
+if(LLDB_ENABLE_INTELGT_PLUGIN)
+  # Remove lldbServerPluginIntelGT from the target's link libraries
+  get_target_property(LLDB_SERVER_LINK_LIBS lldb-server LINK_LIBRARIES)
+  list(REMOVE_ITEM LLDB_SERVER_LINK_LIBS lldbServerPluginIntelGT)
+  set_target_properties(lldb-server PROPERTIES LINK_LIBRARIES "${LLDB_SERVER_LINK_LIBS}")
+
+  # Now add it back with --whole-archive
+  target_link_libraries(lldb-server PRIVATE
+    -Wl,--whole-archive
+    lldbServerPluginIntelGT
+    -Wl,--no-whole-archive
+  )
+endif()
 
 add_subdirectory(Plugins)

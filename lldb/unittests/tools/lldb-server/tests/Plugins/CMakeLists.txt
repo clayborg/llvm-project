@@ -1,3 +1,6 @@
 if(LLDB_ENABLE_AMDGPU_PLUGIN)
   add_subdirectory(AMDGPU)
 endif()
+if(LLDB_ENABLE_INTELGT_PLUGIN)
+  add_subdirectory(IntelGT)
+endif()

@@ -54,7 +54,8 @@ public:
                              const uint8_t op) const = 0;
     virtual bool
     ParseVendorDWARFOpcode(uint8_t op, const DataExtractor &opcodes,
-                           lldb::offset_t &offset, RegisterContext *reg_ctx,
+                           lldb::offset_t &offset,
+                           ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
                            lldb::RegisterKind reg_kind, Stack &stack) const = 0;
 
     Delegate(const Delegate &) = delete;

@@ -1,0 +1,163 @@
+=== How to Run IntelGT GPU Tests ===
+
+## Prerequisites
+
+1. Build LLDB with IntelGT plugin:
+   cd ~/dev/llvm-project-intelgt/build
+   ninja lldb lldb-server
+
+2. Source oneAPI environment:
+   source ~/intel/oneapi/setvars.sh
+
+3. Enable GPU debugging:
+   export ZET_ENABLE_PROGRAM_DEBUGGING=1
+   echo 1 | sudo tee /sys/class/drm/card*/prelim_enable_eu_debug
+
+## Run All Tests (dotest.py)
+
+cd ~/dev/llvm-project-intelgt
+
+LLVM_AR=/usr/bin/ar ZET_ENABLE_PROGRAM_DEBUGGING=1 \
+python3 lldb/test/API/dotest.py \
+  --executable build/bin/lldb \
+  --build-dir build \
+  --cmake-build-type RelWithDebInfo \
+  --llvm-tools-dir build/bin \
+  --compiler icpx \
+  --make /usr/bin/make \
+  lldb/test/API/gpu/intelgt/basic/
+
+Expected output:
+  Ran 7 tests in ~60s
+  OK
+  SUCCESS: Hit GPU breakpoint at simple_kernel.cpp:18
+
+## Run Single Test
+
+# Just the MVP breakpoint hit test:
+LLVM_AR=/usr/bin/ar ZET_ENABLE_PROGRAM_DEBUGGING=1 \
+python3 lldb/test/API/dotest.py \
+  --executable build/bin/lldb \
+  --build-dir build \
+  --cmake-build-type RelWithDebInfo \
+  --llvm-tools-dir build/bin \
+  --compiler icpx \
+  --make /usr/bin/make \
+  -p TestBreakpointHit.py \
+  lldb/test/API/gpu/intelgt/basic/
+
+## Run Manually (Command Line)
+
+cd ~/dev/llvm-project-intelgt/lldb/test/API/gpu/intelgt/basic
+
+# Build test app (if needed):
+icpx -o simple_kernel -std=c++17 -fsycl -g -O0 \
+  --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/11 \
+  simple_kernel.cpp
+
+# Run with lldb:
+ZET_ENABLE_PROGRAM_DEBUGGING=1 lldb simple_kernel
+
+(lldb) breakpoint set -f simple_kernel.cpp -l 18
+Breakpoint 1: where = simple_kernel`..., address = 0x0000000000404248
+
+(lldb) run
+SYCL: Using device: Intel(R) Data Center GPU Max 1550
+Process 123456 stopped
+* thread #2: IntelGT EU {0,49,4,0} lane 0, stop reason = breakpoint 1.1
+    frame #0: simple_kernel.cpp:18:21
+   18      acc[0] = 42; // GPU BREAKPOINT
+           ^
+
+(lldb) thread list
+  thread #1: tid = 0x0001, name = 'IntelGT Shadow Thread'
+* thread #2: tid = 0x2300040100, IntelGT EU {0,49,4,0} lane 0, stop reason = breakpoint 1.1
+
+(lldb) frame info
+frame #0: 0x00008000ffXXXfa0 simple_kernel.cpp:18:21
+
+(lldb) quit
+
+## Expected Results
+
+✓ GPU target created (spirv64 architecture)
+✓ GPU breakpoint resolves to address 0x00008000*
+✓ Process stops at GPU breakpoint (line 18)
+✓ Thread shows "IntelGT EU {slice,subslice,eu,thread} lane N"
+✓ Stop reason is "breakpoint"
+
+## Troubleshooting
+
+If test fails:
+1. Check ZET_ENABLE_PROGRAM_DEBUGGING=1 is set
+2. Check prelim_enable_eu_debug is 1:
+   cat /sys/class/drm/card*/prelim_enable_eu_debug
+3. Check oneAPI is sourced:
+   which icpx  # should show /opt/intel/oneapi/...
+4. Check lldb-server has IntelGT plugin:
+   strings build/bin/lldb-server | grep IntelGT
+
+## Test Migration Plan: GDB SYCL → LLDB IntelGT
+
+### Phase 1: DONE ✓
+
+Infrastructure and basic tests are working:
+- ✓ IntelGtTestCaseBase class (intelgt_testcase.py)
+- ✓ lit.local.cfg guard for test discovery
+- ✓ Basic test suite (7 tests passing)
+  - TestBreakpointHit.py: MVP GPU breakpoint hit test
+  - TestBasicIntelGtPlugin.py: GPU target, breakpoint, modules, threads
+  - TestBasicManual.py: Simple SYCL binary test
+- ✓ SYCL test application (simple_kernel.cpp)
+- ✓ Build integration (Makefile with icpx)
+- ✓ Documentation (this README)
+
+### Phase 2: TODO
+
+Port GDB SYCL tests from `/home/kgerlich/dev/gdb/gdb/testsuite/gdb.sycl/`:
+
+**Source programs to adapt (in src/ directory):**
+- single-task.cpp: Single-task kernel with tagged lines
+- call-stack.cpp: Deep call chain for backtrace testing
+- parallel-for-1D.cpp: 1024-element parallel_for
+- parallel-for-2D.cpp: 128×64 2-D parallel_for
+
+**Adaptation rules:**
+1. Remove `#include "../lib/sycl-util.cpp"` and `argc/argv` from main
+2. Replace `get_sycl_queue(argc, argv)` with `sycl::queue{sycl::gpu_selector_v}`
+3. Add `// CPU BREAKPOINT` comment after `deviceQueue.submit(...)`
+
+**Tests to implement:**
+
+break/ directory:
+- TestBreakIntelGT.py (from break.exp): 4 kernel + 1 host BP before run
+- TestBreak2IntelGT.py (from break2.exp): Set BP while inside kernel
+- TestParallelFor1DIntelGT.py (from parallel-for-1D.exp): BP hit 5 times
+- TestParallelFor2DIntelGT.py (from parallel-for-2D.exp): 2-D range BP
+
+step/ directory:
+- TestStepIntelGT.py (from step.exp): `next` × 3 from kernel-line-1
+- TestStepIntoFunctionIntelGT.py (from step-into-function.exp): `step` into first()
+- TestStepParallelForIntelGT.py (from step-parallel-for.exp): `next` × 3, 5 trips
+
+variables/ directory:
+- TestInfoLocalsAndArgsIntelGT.py (from info-locals-and-args.exp): frame variable in kernel
+
+backtrace/ directory:
+- TestCallStackIntelGT.py (from call-stack.exp): Backtrace at nested calls, stepi loop
+
+scheduler-locking/ directory:
+- TestSchedulerLockingIntelGT.py (from scheduler-locking.exp): @skip until LLDB equivalent
+
+**GDB → LLDB command translation:**
+- `gdb_breakpoint` → `target.BreakpointCreateBySourceRegex()` or `lldbutil.run_to_source_breakpoint()`
+- `gdb_continue_to_breakpoint` → `process.Continue()` + verify stop reason
+- `gdb_test "next"` → `thread.StepOver()` or `self.runCmd("next")`
+- `gdb_test "step"` → `thread.StepInto()` or `self.runCmd("step")`
+- `gdb_test "backtrace"` → `thread.GetNumFrames()` + frame iteration
+- `gdb_test "info locals"` → `frame.GetVariables()` or `self.runCmd("frame variable")`
+- `gdb_test "info args"` → `frame.GetArguments()`
+
+**Known gaps:**
+- No `scheduler-locking` equivalent in LLDB (tests will be @skip)
+- `get_current_gpu_thread()` may need to be added to intelgt_testcase.py
