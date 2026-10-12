@@ -99,17 +99,17 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
 
   if (!lane_or || !warp_or || !dev_or || !cta_or) {
     if (!lane_or)
-      LLDB_LOG(log, "RegisterContextNVGPUCore: lane decode failed: {0}",
-               llvm::toString(lane_or.takeError()));
+      LLDB_LOG_ERROR(log, lane_or.takeError(),
+                     "RegisterContextNVGPUCore: lane decode failed: {0}");
     if (!warp_or)
-      LLDB_LOG(log, "RegisterContextNVGPUCore: warp decode failed: {0}",
-               llvm::toString(warp_or.takeError()));
+      LLDB_LOG_ERROR(log, warp_or.takeError(),
+                     "RegisterContextNVGPUCore: warp decode failed: {0}");
     if (!dev_or)
-      LLDB_LOG(log, "RegisterContextNVGPUCore: device decode failed: {0}",
-               llvm::toString(dev_or.takeError()));
+      LLDB_LOG_ERROR(log, dev_or.takeError(),
+                     "RegisterContextNVGPUCore: device decode failed: {0}");
     if (!cta_or)
-      LLDB_LOG(log, "RegisterContextNVGPUCore: cta decode failed: {0}",
-               llvm::toString(cta_or.takeError()));
+      LLDB_LOG_ERROR(log, cta_or.takeError(),
+                     "RegisterContextNVGPUCore: cta decode failed: {0}");
     return;
   }
 
@@ -163,8 +163,8 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
   llvm::Expected<nvgpu_core::GridEntry> grid_or =
       FindThreadGrid(dev_sp, cta_or->gridId64, core);
   if (!grid_or) {
-    LLDB_LOG(log, "RegisterContextNVGPUCore: grid lookup failed: {0}",
-             llvm::toString(grid_or.takeError()));
+    LLDB_LOG_ERROR(log, grid_or.takeError(),
+                   "RegisterContextNVGPUCore: grid lookup failed: {0}");
     return;
   }
 
