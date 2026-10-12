@@ -136,6 +136,44 @@ against, say, CUDA 13.x supports every 13.x driver/coredump, but not 12.x or
 - The version of your driver can be obtained via the `DRIVER version` section
   of the `nvidia-smi --version` output.
 
+The GPU target
+^^^^^^^^^^^^^^
+
+When the program initializes CUDA, LLDB adds a second target, for the GPU, next
+to the CPU target. The GPU target has no executable of its own, so
+``target list`` and stop messages show it by its session name, which is also the
+name lldb-dap gives the GPU session:
+
+.. code-block:: text
+
+  (lldb) target list
+  Current targets:
+    target #0: /path/to/a.out ( arch=x86_64-unknown-linux-gnu, platform=host, pid=12345, state=stopped )
+  * target #1: NVIDIA GPU Session ( arch=nvptx64-nvidia-cuda, platform=nvgpu, pid=1, state=stopped )
+
+GPU modules
+^^^^^^^^^^^
+
+Each cubin that the driver loads becomes a module of the GPU target. A cubin
+built with device debug information (``-G``) is named after the source file it
+was compiled from: the cubin for ``main.cu`` is ``main.cubin``. Any other cubin,
+including one built with ``-lineinfo`` alone, whose line table does not say
+which file is the main one, is named after the first kernel in its symbol table.
+The kernel's name is demangled without parameters, template arguments, or
+anonymous namespaces, as in ``vectorAdd.cubin`` or ``physics::integrate.cubin``.
+A cubin with no kernels is named after its first global function.
+
+If an earlier cubin in the process already has the name, LLDB appends ``-2``,
+``-3``, and so on. A cubin with nothing to name it after, or whose function name
+does not demangle, is named after the driver's handle for it, as in
+``cuda_elf_93825011057424.cubin``.
+
+A cubin with several kernels is named after only one of them, and a cubin
+built from several source files, such as one device-linked with ``-rdc``, after
+only the first. The name is a label for display and may change. It does not
+identify a kernel or a source file: use the module's symbols and line tables
+for that.
+
 Running the tests
 ^^^^^^^^^^^^^^^^^
 
