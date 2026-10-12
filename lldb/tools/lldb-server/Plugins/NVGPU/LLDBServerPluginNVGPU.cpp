@@ -243,6 +243,7 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
 
   GPUActions actions = GetNewGPUAction();
   actions.connect_info = std::move(*connection_info);
+  actions.session_name = "NVIDIA GPU Session";
   GPUPluginBreakpointHitResponse response(std::move(actions));
   response.disable_bp = true;
   return response;

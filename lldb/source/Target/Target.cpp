@@ -251,6 +251,12 @@ void Target::Dump(Stream *s, lldb::DescriptionLevel description_level) {
     m_breakpoint_list.Dump(s);
     m_internal_breakpoint_list.Dump(s);
     s->IndentLess();
+  } else if (GetNativeTargetForGPU() && !m_target_session_name.empty()) {
+    // [NVIDIA] A GPU target that a plug-in made for a native process has no
+    // executable of its own, so describe it by the session name the plug-in
+    // gave it rather than by the first module it loaded. Other targets only
+    // have the default "Session <id>".
+    s->PutCString(m_target_session_name);
   } else {
     Module *exe_module = GetExecutableModulePointer();
     if (exe_module)

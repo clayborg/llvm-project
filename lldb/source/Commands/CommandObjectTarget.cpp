@@ -89,6 +89,15 @@ static void DumpTargetInfo(uint32_t target_idx, Target *target,
   if (!exe_valid)
     ::strcpy(exe_path, "<none>");
 
+  // [NVIDIA] A GPU target that a plug-in made for a native process has no
+  // executable of its own, so the module above is just the first one it
+  // loaded. Describe it by the session name the plug-in gave it. Other targets
+  // only have the default "Session <id>".
+  llvm::StringRef session_name = target->GetTargetSessionName();
+  if (target->GetNativeTargetForGPU() && !session_name.empty())
+    ::snprintf(exe_path, sizeof(exe_path), "%.*s",
+               static_cast<int>(session_name.size()), session_name.data());
+
   std::string formatted_label = "";
   const std::string &label = target->GetLabel();
   if (!label.empty()) {
