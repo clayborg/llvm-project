@@ -310,8 +310,8 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
           ExtractSmArchFromModule(base_addr)) {
     sm_arch = *sm_arch_or;
   } else {
-    LLDB_LOG(log, "Failed to extract SM architecture: {0}",
-             llvm::toString(sm_arch_or.takeError()));
+    LLDB_LOG_ERROR(log, sm_arch_or.takeError(),
+                   "Failed to extract SM architecture: {0}");
     // TODO DTCLLDB-63: Add a fallback here that the user can configure
     return llvm::createStringError(
         "Failed to extract SM architecture from CUDA module");
@@ -342,8 +342,8 @@ llvm::Expected<size_t> DisassemblerSASS::ParseNvdisasmJsonOutput(
 
   llvm::Expected<json::Value> json_value = json::parse(json_output);
   if (!json_value) {
-    LLDB_LOG(log, "Failed to parse JSON output from nvdisasm: {0}",
-             llvm::toString(json_value.takeError()));
+    LLDB_LOG_ERROR(log, json_value.takeError(),
+                   "Failed to parse JSON output from nvdisasm: {0}");
     return llvm::createStringError("Failed to parse JSON output from nvdisasm");
   }
 

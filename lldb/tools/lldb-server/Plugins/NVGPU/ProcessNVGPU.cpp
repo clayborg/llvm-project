@@ -275,9 +275,9 @@ GetLoadSectionsForCubin(const llvm::object::ELF64LEObjectFile &elf) {
         elf_file.getSectionName(section);
 
     if (!name_or_err) {
-      LLDB_LOGV(log,
-                "GetLoadSectionsForCubin(). Failed to get section name: {}",
-                llvm::toString(name_or_err.takeError()));
+      LLDB_LOG_ERRORV(
+          log, name_or_err.takeError(),
+          "GetLoadSectionsForCubin(). Failed to get section name: {0}");
       continue;
     }
 
@@ -287,7 +287,7 @@ GetLoadSectionsForCubin(const llvm::object::ELF64LEObjectFile &elf) {
 
     // For NVIDIA cubin images, section virtual addresses are encoded as
     // absolute addresses
-    LLDB_LOGV(log, "  Section: {}, Virtual Address: {1:x}, Size: {}",
+    LLDB_LOGV(log, "  Section: {0}, Virtual Address: {1:x}, Size: {2}",
               *name_or_err, section.sh_addr, section.sh_size);
 
     // Add the section to the loaded sections list
