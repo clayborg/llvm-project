@@ -18,11 +18,18 @@
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
+#include <optional>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -242,24 +249,17 @@ ProcessNVGPU::Manager::Attach(
 /// about loaded sections, including their virtual addresses and names. Only
 /// sections with non-zero addresses are included in the result.
 ///
-/// \param[in] elf_buffer_ref
-///     Memory buffer reference containing the ELF data to parse.
+/// \param[in] elf
+///     The parsed cubin.
 ///
 /// \return
 ///     Vector of GPUSectionInfo structures containing section details.
 static std::vector<GPUSectionInfo>
-GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
+GetLoadSectionsForCubin(const llvm::object::ELF64LEObjectFile &elf) {
   Log *log = GetLog(GDBRLog::Plugin);
   std::vector<GPUSectionInfo> loaded_sections;
 
-  llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
-      llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
-  if (!elf_or_err) {
-    logAndReportFatalError("GetLoadSectionsForCubin(). Failed to parse ELF: {}",
-                           llvm::toString(elf_or_err.takeError()));
-  }
-
-  const llvm::object::ELF64LEFile &elf_file = elf_or_err->getELFFile();
+  const llvm::object::ELF64LEFile &elf_file = elf.getELFFile();
   llvm::Expected<llvm::object::ELF64LEFile::Elf_Shdr_Range> sections_or_err =
       elf_file.sections();
   if (!sections_or_err) {
@@ -300,6 +300,132 @@ GetLoadSectionsForCubin(const llvm::MemoryBufferRef &elf_buffer_ref) {
   return loaded_sections;
 }
 
+/// st_other bit that marks a kernel entry in a cubin's symbol table, from the
+/// CUDA ABI. On a data symbol the same bit means STO_CUDA_UNIFIED_OBJECT, so
+/// only test it on functions.
+static constexpr uint8_t STO_CUDA_ENTRY = 0x10;
+
+/// Get the name of the source file a cubin was compiled from, without its
+/// directory or extension, from the name of its first compile unit.
+///
+/// Only a cubin built with -G has a compile unit. The line table of a cubin
+/// built with -lineinfo alone does not say which of its files is the main one,
+/// and a header can come first.
+///
+/// \param[in] elf
+///     The parsed cubin.
+///
+/// \return
+///     The name, or std::nullopt if the cubin has no compile unit.
+static std::optional<std::string>
+GetCubinSourceName(const llvm::object::ELF64LEObjectFile &elf) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  auto log_error = [log](llvm::Error error) {
+    LLDB_LOG_ERROR(log, std::move(error), "GetCubinSourceName(). {0}");
+  };
+  // The image is already relocated, and LLVM does not know R_CUDA relocations.
+  std::unique_ptr<llvm::DWARFContext> dwarf = llvm::DWARFContext::create(
+      elf, llvm::DWARFContext::ProcessDebugRelocations::Ignore,
+      /*L=*/nullptr, /*DWPName=*/"", log_error, log_error);
+  llvm::DWARFContext::compile_unit_range units = dwarf->compile_units();
+  if (units.empty())
+    return std::nullopt;
+  const char *path = llvm::dwarf::toString(
+      (*units.begin())->getUnitDIE().find(llvm::dwarf::DW_AT_name), nullptr);
+  if (!path)
+    return std::nullopt;
+  llvm::StringRef name = llvm::sys::path::stem(path);
+  if (name.empty())
+    return std::nullopt;
+  return name.str();
+}
+
+/// Get the qualified name of a function, without its parameters, template
+/// arguments, or anonymous namespaces, to name a cubin after.
+///
+/// \param[in] symbol_name
+///     The function's symbol name, mangled or not.
+///
+/// \return
+///     The demangled name, \a symbol_name itself if it is not an Itanium
+///     mangled name, or std::nullopt if it is one that does not demangle.
+static std::optional<std::string>
+GetCubinFunctionName(llvm::StringRef symbol_name) {
+  if (!symbol_name.starts_with("_Z"))
+    return symbol_name.str();
+
+  // The demangler points into the name it parsed until it is destroyed.
+  std::string mangled_name = symbol_name.str();
+  llvm::ItaniumPartialDemangler demangler;
+  if (demangler.partialDemangle(mangled_name.c_str()))
+    return std::nullopt;
+  std::unique_ptr<char, llvm::FreeDeleter> base_name(
+      demangler.getFunctionBaseName(nullptr, nullptr));
+  if (!base_name)
+    return std::nullopt;
+  std::unique_ptr<char, llvm::FreeDeleter> context(
+      demangler.getFunctionDeclContextName(nullptr, nullptr));
+  std::string name =
+      context && *context
+          ? llvm::formatv("{0}::{1}", context.get(), base_name.get()).str()
+          : std::string(base_name.get());
+  // An anonymous namespace would put spaces and parentheses in the name.
+  constexpr llvm::StringLiteral anonymous_namespace = "(anonymous namespace)::";
+  for (size_t pos = name.find(anonymous_namespace); pos != std::string::npos;
+       pos = name.find(anonymous_namespace))
+    name.erase(pos, anonymous_namespace.size());
+  llvm::replace(name, '/', '_');
+  return name;
+}
+
+/// Get the name to show a cubin by: the source file it was compiled from if
+/// it has a compile unit, or else its first kernel entry, or else its first
+/// defined global function.
+///
+/// The name is only a label for users. Nothing may map it back to a kernel or
+/// source file, or find a cubin by a name derived from one.
+///
+/// \param[in] elf
+///     The parsed cubin.
+///
+/// \return
+///     The name, without a file extension, or std::nullopt if the cubin has
+///     nothing to name it after or that function's name does not demangle.
+static std::optional<std::string>
+GetCubinBaseName(const llvm::object::ELF64LEObjectFile &elf) {
+  if (std::optional<std::string> source_name = GetCubinSourceName(elf))
+    return source_name;
+
+  Log *log = GetLog(GDBRLog::Plugin);
+  std::optional<llvm::StringRef> first_global;
+  for (const llvm::object::ELFSymbolRef &symbol : elf.symbols()) {
+    if (symbol.getELFType() != llvm::ELF::STT_FUNC)
+      continue;
+    llvm::Expected<uint32_t> flags = symbol.getFlags();
+    if (!flags) {
+      LLDB_LOG_ERROR(log, flags.takeError(),
+                     "GetCubinBaseName(). Failed to get symbol flags: {0}");
+      continue;
+    }
+    // A cubin must not be named after a function it only calls, like vprintf.
+    if (*flags & llvm::object::SymbolRef::SF_Undefined)
+      continue;
+    llvm::Expected<llvm::StringRef> name = symbol.getName();
+    if (!name) {
+      LLDB_LOG_ERROR(log, name.takeError(),
+                     "GetCubinBaseName(). Failed to get symbol name: {0}");
+      continue;
+    }
+    if (symbol.getOther() & STO_CUDA_ENTRY)
+      return GetCubinFunctionName(*name);
+    if (!first_global && symbol.getBinding() != llvm::ELF::STB_LOCAL)
+      first_global = *name;
+  }
+  if (!first_global)
+    return std::nullopt;
+  return GetCubinFunctionName(*first_global);
+}
+
 void ProcessNVGPU::OnElfImageLoaded(
     const CUDBGEvent::cases_st::elfImageLoaded_st &event) {
   const auto &[dev_id, context_id, module_id, elf_image_size, handle,
@@ -328,14 +454,33 @@ void ProcessNVGPU::OnElfImageLoaded(
 
   // Create a MemoryBufferRef from the data buffer
   llvm::MemoryBufferRef elf_buffer_ref(*data_buffer);
+  llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
+      llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
+  if (!elf_or_err) {
+    logAndReportFatalError(
+        "NVGPU::OnElfImageLoaded(). Failed to parse elf image: {}",
+        llvm::toString(elf_or_err.takeError()));
+    return;
+  }
 
+  // The client finds a cubin's module by this name, and keeps the modules of
+  // cubins that were unloaded, so a name is never given out twice.
+  std::string base_name = GetCubinBaseName(*elf_or_err)
+                              .value_or("cuda_elf_" + std::to_string(handle));
+  uint32_t &times_named = m_cubin_name_counts[base_name];
+  ++times_named;
   GPUDynamicLoaderLibraryInfo lib1;
-  lib1.pathname = "cuda_elf_" + std::to_string(handle) + ".cubin";
+  lib1.pathname =
+      times_named == 1
+          ? base_name + ".cubin"
+          : llvm::formatv("{0}-{1}.cubin", base_name, times_named).str();
+  LLDB_LOG(log, "NVGPU::OnElfImageLoaded(). Elf image {0:x} is {1}", handle,
+           lib1.pathname);
   lib1.load = true;
   lib1.elf_image_base64_sp = std::make_shared<std::string>(
       llvm::encodeBase64(elf_buffer_ref.getBuffer()));
   // Parse ELF sections to extract load addresses
-  lib1.loaded_sections = GetLoadSectionsForCubin(elf_buffer_ref);
+  lib1.loaded_sections = GetLoadSectionsForCubin(*elf_or_err);
 
   m_unreported_libraries.push_back(lib1);
   m_all_libraries.push_back(lib1);

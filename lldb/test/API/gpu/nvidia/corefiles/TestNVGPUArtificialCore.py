@@ -347,6 +347,13 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         )
         self.assertIn("nvptx", self.core_target.GetTriple())
 
+    def test_target_named_after_core_file(self):
+        """The target is described by its core file, not by a session name."""
+        description = lldb.SBStream()
+        self.core_target.GetDescription(description, lldb.eDescriptionLevelBrief)
+        self.assertEqual(description.GetData(), "artificial.nvcudmp")
+        self.expect("target list", substrs=["artificial.nvcudmp ( arch=nvptx64"])
+
     def test_all_general_registers(self):
         """R0-R254 read back per-thread formula values; RZ reads 0."""
         for spec in self.reg_threads:

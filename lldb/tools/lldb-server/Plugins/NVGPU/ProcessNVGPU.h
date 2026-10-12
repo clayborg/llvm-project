@@ -15,6 +15,7 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/GPUGDBRemotePackets.h"
 #include "lldb/Utility/ProcessInfo.h"
+#include "llvm/ADT/StringMap.h"
 
 #include "cudadebugger.h"
 
@@ -364,6 +365,9 @@ private:
   /// The list of all the cubins loaded by the GPU that haven't been reported
   /// to the client yet.
   std::vector<GPUDynamicLoaderLibraryInfo> m_unreported_libraries;
+  /// How many cubins have been given each base name, so that the next one gets
+  /// a "-<n>" suffix.
+  llvm::StringMap<uint32_t> m_cubin_name_counts;
 
   /// A flag that indicates that we are faking a stop to the client to report
   /// dyld events. A fake stop means that we don't actually stop the GPU, but
