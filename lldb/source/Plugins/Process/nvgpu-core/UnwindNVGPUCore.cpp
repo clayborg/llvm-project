@@ -76,9 +76,9 @@ BuildBacktracePCs(lldb::SectionSP lane_section_sp, ObjectFile *core) {
   llvm::Expected<llvm::SmallVector<nvgpu_core::BacktraceEntry, 8>> entries_or =
       DecodeBacktraceTable(*lane_section_sp, core);
   if (!entries_or) {
-    LLDB_LOG(GetLog(LLDBLog::Unwind),
-             "NVGPU backtrace table unusable, falling back to DWARF-CFI: {0}",
-             llvm::toString(entries_or.takeError()));
+    LLDB_LOG_ERROR(
+        GetLog(LLDBLog::Unwind), entries_or.takeError(),
+        "NVGPU backtrace table unusable, falling back to DWARF-CFI: {0}");
     return std::nullopt;
   }
   if (entries_or->empty())
@@ -87,9 +87,8 @@ BuildBacktracePCs(lldb::SectionSP lane_section_sp, ObjectFile *core) {
   llvm::Expected<nvgpu_core::LaneEntry> lane_or =
       nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(lane_section_sp, core);
   if (!lane_or) {
-    LLDB_LOG(GetLog(LLDBLog::Unwind),
-             "NVGPU lane decode failed, falling back to DWARF-CFI: {0}",
-             llvm::toString(lane_or.takeError()));
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Unwind), lane_or.takeError(),
+                   "NVGPU lane decode failed, falling back to DWARF-CFI: {0}");
     return std::nullopt;
   }
 
