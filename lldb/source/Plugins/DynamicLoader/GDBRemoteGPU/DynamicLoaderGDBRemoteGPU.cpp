@@ -164,9 +164,25 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
       continue;
     }
 
-    // Get or create the module from the module spec.
-    ModuleSP module_sp = target.GetOrCreateModule(module_spec,
-                                                  /*notify=*/true);
+    ModuleSP module_sp;
+    if (data_sp) {
+      // [NVIDIA] Keep in-memory images out of the shared module cache. It
+      // matches a module made from a data buffer by name alone and never sees
+      // it change, so a later image with the same name, from another run or
+      // target, would get this one's module. Look in this target's image list
+      // instead, so a library reported twice still becomes one module.
+      module_sp = target.GetImages().FindFirstModule(module_spec);
+      if (!module_sp) {
+        module_sp = std::make_shared<Module>(module_spec);
+        if (module_sp->GetObjectFile())
+          target.GetImages().Append(module_sp, /*notify=*/true);
+        else
+          module_sp.reset();
+      }
+    } else {
+      // Get or create the module from the module spec.
+      module_sp = target.GetOrCreateModule(module_spec, /*notify=*/true);
+    }
     if (module_sp) {
       LLDB_LOG(log, "Created module for \"{0}\": {1:x}", info.pathname,
                module_sp.get());
