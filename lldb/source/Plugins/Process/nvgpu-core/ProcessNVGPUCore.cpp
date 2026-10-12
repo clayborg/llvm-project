@@ -315,8 +315,9 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
       llvm::Expected<nvgpu_core::WarpEntry> warp_or =
           nvgpu_core::ReadAndDecode<nvgpu_core::WarpEntry>(warp, core);
       if (!warp_or) {
-        LLDB_LOG(log, "ProcessNVGPUCore: skipping warp at {0}: {1}",
-                 warp->GetName(), llvm::toString(warp_or.takeError()));
+        LLDB_LOG_ERROR(log, warp_or.takeError(),
+                       "ProcessNVGPUCore: skipping warp at {1}: {0}",
+                       warp->GetName());
         continue;
       }
 
@@ -353,8 +354,9 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
     llvm::Expected<nvgpu_core::SMEntry> sm_or =
         nvgpu_core::ReadAndDecode<nvgpu_core::SMEntry>(sm, core);
     if (!sm_or) {
-      LLDB_LOG(log, "ProcessNVGPUCore: skipping SM at {0}: {1}", sm->GetName(),
-               llvm::toString(sm_or.takeError()));
+      LLDB_LOG_ERROR(log, sm_or.takeError(),
+                     "ProcessNVGPUCore: skipping SM at {1}: {0}",
+                     sm->GetName());
       continue;
     }
     if (sm_or->exception == 0)
