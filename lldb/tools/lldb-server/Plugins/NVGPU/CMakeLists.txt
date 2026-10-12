@@ -7,6 +7,10 @@ add_lldb_library(lldbServerPluginNVGPU
   ProcessNVGPU.cpp
   RegisterContextNVGPU.cpp
   ThreadNVGPU.cpp
+
+  LINK_COMPONENTS
+    DebugInfoDWARF
+    Demangle
 )
 
 # Include shared CUDA setup

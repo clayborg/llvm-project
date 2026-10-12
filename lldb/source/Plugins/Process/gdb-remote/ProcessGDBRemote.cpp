@@ -1162,6 +1162,10 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (!gpu_target_sp)
     return Status::FromErrorString("failed to create target");
 
+  // [NVIDIA] Stop messages and `target list` describe a GPU target by its
+  // session name, so set it before connecting, which can already report a stop.
+  gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
+
   // Associate the GPU target with with this target. We need to do this before
   // we connect in case the DynamicLoaderGDBRemoteGPU needs to call through the
   // native CPU GDB connection to fetch the initial shared libraries as the
@@ -1222,8 +1226,6 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
                 "created process");
   // The GPU process exists, so keep the group membership.
   restore_target_group.release();
-  // Set the session name on the GPU target so it can be retrieved later
-  gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
   // Tell the new GPU process its plug-in's name. ConnectProcess() made it with
   // this plug-in, so it is a ProcessGDBRemote.
   std::static_pointer_cast<ProcessGDBRemote>(process_sp)
