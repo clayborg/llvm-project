@@ -5,11 +5,13 @@ add_lldb_library(lldbUtilityNVGPU
   CUDADebuggerAPIVersion.cpp
   CUDAException.cpp
   SASSRegisterInfo.cpp
+  ThreadCoords.cpp
   ThreadName.cpp
 
   LINK_COMPONENTS
     Support
   LINK_LIBS
+    lldbUtility
     ${LLDB_SYSTEM_LIBS}
   )
 

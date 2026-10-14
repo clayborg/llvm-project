@@ -16,6 +16,7 @@
 #include "DeviceState.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 
+using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
@@ -31,7 +32,7 @@ static uint64_t CalculateFlatThreadIdx(const CuDim3 &base_thread_idx,
 /// and the block dimension.
 static ThreadIdx CalculateThreadIdx(uint64_t flat_thread_idx,
                                     const CuDim3 &block_dim) {
-  ThreadIdx thread_idx;
+  ThreadIdx thread_idx{};
   if (block_dim.x == 0 || block_dim.y == 0 || block_dim.z == 0)
     return thread_idx;
 
@@ -77,7 +78,7 @@ size_t ThreadState::DecodeThreadInfoBuffer(
   m_pc = thread_info.virtualPC;
   m_thread_idx = thread_idx;
   m_thread_nvgpu.GetRegisterContext().InvalidateAllRegisters();
-  m_is_active = is_active;
+  SetIsActive(is_active);
 
   // Is this thread is active, then we know exactly its stop reason, otherwise
   // we just set it to stopped without a particular reason.
@@ -115,12 +116,12 @@ size_t WarpState::DecodeWarpInfoBuffer(
       std::numeric_limits<uint32_t>::max());
   bool thread_attributes_present = false;
 
-  m_block_idx = warp_info.blockIdx;
-  m_grid_id = warp_info.gridId;
   m_regs_calculated = false;
   m_current_num_regular_registers = std::nullopt;
   m_exception = std::nullopt;
   std::optional<uint64_t> errorPC;
+  std::optional<nvgpu::Dim3u> cluster_idx;
+  std::optional<nvgpu::Dim3u> cluster_dim;
 
   CUDBGException_t exception = CUDBG_EXCEPTION_NONE;
 
@@ -142,7 +143,13 @@ size_t WarpState::DecodeWarpInfoBuffer(
       break;
     }
     case CUDBG_WARP_ATTRIBUTE_CLUSTERIDX: {
-      // TODO: store the warp cluster index.
+      cluster_idx = nvgpu::ToDim3u(
+          *reinterpret_cast<const CuDim3 *>(buffer + buffer_offset));
+      break;
+    }
+    case CUDBG_WARP_ATTRIBUTE_CLUSTERDIM: {
+      cluster_dim = nvgpu::ToDim3u(
+          *reinterpret_cast<const CuDim3 *>(buffer + buffer_offset));
       break;
     }
     case CUDBG_WARP_ATTRIBUTE_LANE_UPDATE_MASK: {
@@ -172,6 +179,15 @@ size_t WarpState::DecodeWarpInfoBuffer(
     m_exception = ExceptionInfo(exception, errorPC);
 
   const CUDBGGridInfo &grid_info = get_grid_info(warp_info.gridId);
+  m_logical_coords.context_id = grid_info.context;
+  m_logical_coords.grid_id = warp_info.gridId;
+  // The driver omits both cluster attributes for a warp outside a cluster,
+  // whose grid has zero cluster dimensions.
+  m_logical_coords.cluster = nvgpu::ClusterInfo{
+      cluster_idx.value_or(nvgpu::Dim3u{0, 0, 0}),
+      cluster_dim.value_or(nvgpu::ToDim3u(grid_info.clusterDim))};
+  m_logical_coords.block_idx = nvgpu::ToDim3u(warp_info.blockIdx);
+  m_logical_coords.thread_idx.reset();
 
   uint64_t flat_thread_idx =
       CalculateFlatThreadIdx(warp_info.baseThreadIdx, grid_info.blockDim);
@@ -187,6 +203,9 @@ size_t WarpState::DecodeWarpInfoBuffer(
   for (uint32_t thread_id = 0; thread_id < m_threads.size(); ++thread_id) {
     bool is_valid = valid_threads[thread_id];
     m_threads[thread_id].SetIsValid(is_valid);
+    bool is_active = active_threads[thread_id];
+    if (is_valid)
+      m_threads[thread_id].SetIsActive(is_active);
 
     bool is_updated = thread_update_mask[thread_id];
     if (is_updated) {
@@ -197,7 +216,7 @@ size_t WarpState::DecodeWarpInfoBuffer(
             thread_attributes_present,
             m_exception ? &m_exception.value() : nullptr,
             CalculateThreadIdx(flat_thread_idx + thread_id, grid_info.blockDim),
-            at_breakpoint, active_threads[thread_id]);
+            at_breakpoint, is_active);
       }
       // An invalid thread in this case means that the thread has exited.
       // We don't do anything because it won't be reported.

@@ -358,8 +358,8 @@ def u32_words(words):
 
 
 def _padded(row, size):
-    """Zero-fill a row prefix out to its full decoded size."""
-    return row.ljust(size, b"\x00")
+    """Truncate or zero-fill a row to its recorded table-entry size."""
+    return row[:size].ljust(size, b"\x00")
 
 
 def _table(rows, size):
@@ -403,6 +403,7 @@ class _Device:
     idx: int
     row_bytes: bytes
     num_regs_per_lane: int = 0
+    grid_entry_size: int = GRID_ROW_SIZE
     sms: list = field(default_factory=list)
     grids: list = field(default_factory=list)
     contexts: list = field(default_factory=list)
@@ -437,6 +438,7 @@ class _SM:
     device: _Device
     row_index: int
     row_bytes: bytes
+    cta_entry_size: int = CTA_ROW_SIZE
     ctas: list = field(default_factory=list)
 
     @property
@@ -517,6 +519,7 @@ class NVGPUCoreBuilder:
     def add_device(
         self,
         *,
+        dev_id=None,
         sm_major=8,
         sm_minor=0,
         num_sms=1,
@@ -536,7 +539,9 @@ class NVGPUCoreBuilder:
         dev_name_off = self._intern_string(dev_name)
         dev_type_off = self._intern_string(dev_type)
         sm_type_off = self._intern_string(sm_type)
-        dev_id = len(self.devices)
+        device_idx = len(self.devices)
+        if dev_id is None:
+            dev_id = device_idx
         row = pack_row(
             "CudbgDeviceTableEntry",
             devName=dev_name_off,  # string-table index
@@ -556,7 +561,7 @@ class NVGPUCoreBuilder:
         )
         # Remember the advertised register count so warp rows can default
         # numRegs to it.
-        dev = _Device(dev_id, row, num_regs_per_lane=num_regs_per_lane)
+        dev = _Device(device_idx, row, num_regs_per_lane=num_regs_per_lane)
         self.devices.append(dev)
         return dev
 
@@ -584,12 +589,31 @@ class NVGPUCoreBuilder:
         params_offset=0,
         grid_dim=(1, 1, 1),
         block_dim=(1, 1, 1),
+        cluster_dim=(0, 0, 0),
+        preferred_cluster_dim=(0, 0, 0),
+        table_entry_size=None,
         grid_status=None,
         kernel_type=0,
     ):
-        """Add a full CudbgGridTableEntry. ``context`` ties the grid to its
-        context and module so a thread's grid resolves to its kernel; the
-        grid/block dimensions and ACTIVE status describe the launch."""
+        """Add a CudbgGridTableEntry. ``context`` ties the grid to its context
+        and module so a thread's grid resolves to its kernel; the grid/block
+        dimensions and ACTIVE status describe the launch.
+
+        ``table_entry_size`` is a test-only override for emitting historical
+        or deliberately partial row prefixes. It applies to the device's
+        complete grid table, whose rows must all have one ELF ``sh_entsize``.
+        """
+        if table_entry_size is not None:
+            if not 0 < table_entry_size <= GRID_ROW_SIZE:
+                raise ValueError(
+                    f"grid table entry size must be in [1, {GRID_ROW_SIZE}]"
+                )
+            if device.grids and device.grid_entry_size != table_entry_size:
+                raise ValueError(
+                    "all grid rows under a device must have one entry size"
+                )
+            device.grid_entry_size = table_entry_size
+
         context_id = context.context_id if context is not None else 0
         status = (
             CUDBG_GRID_STATUS_ACTIVE if grid_status is None else grid_status
@@ -610,6 +634,12 @@ class NVGPUCoreBuilder:
             blockDimX=block_dim[0],
             blockDimY=block_dim[1],
             blockDimZ=block_dim[2],
+            clusterDimX=cluster_dim[0],
+            clusterDimY=cluster_dim[1],
+            clusterDimZ=cluster_dim[2],
+            preferredClusterDimX=preferred_cluster_dim[0],
+            preferredClusterDimY=preferred_cluster_dim[1],
+            preferredClusterDimZ=preferred_cluster_dim[2],
         )
         grid = _Grid(len(device.grids), row)
         device.grids.append(grid)
@@ -648,13 +678,44 @@ class NVGPUCoreBuilder:
         context.modules.append(mod)
         return mod
 
-    def add_cta(self, sm, *, grid_id=1, block_idx=(0, 0, 0)):
+    def add_cta(
+        self,
+        sm,
+        *,
+        grid_id=1,
+        block_idx=(0, 0, 0),
+        cluster_idx=(0, 0, 0),
+        cluster_dim=(0, 0, 0),
+        table_entry_size=None,
+    ):
+        """Add a CudbgCTATableEntry.
+
+        ``table_entry_size`` is a test-only override for emitting historical
+        row prefixes. It applies to the SM's complete CTA table, whose rows
+        must all have one ELF ``sh_entsize``.
+        """
+        if table_entry_size is not None:
+            if not 0 < table_entry_size <= CTA_ROW_SIZE:
+                raise ValueError(
+                    f"CTA table entry size must be in [1, {CTA_ROW_SIZE}]"
+                )
+            if sm.ctas and sm.cta_entry_size != table_entry_size:
+                raise ValueError(
+                    "all CTA rows under an SM must have one entry size"
+                )
+            sm.cta_entry_size = table_entry_size
         row = pack_row(
             "CudbgCTATableEntry",
             gridId64=grid_id,
             blockIdxX=block_idx[0],
             blockIdxY=block_idx[1],
             blockIdxZ=block_idx[2],
+            clusterIdxX=cluster_idx[0],
+            clusterIdxY=cluster_idx[1],
+            clusterIdxZ=cluster_idx[2],
+            clusterDimX=cluster_dim[0],
+            clusterDimY=cluster_dim[1],
+            clusterDimZ=cluster_dim[2],
         )
         cta = _CTA(sm, len(sm.ctas), row)
         sm.ctas.append(cta)
@@ -927,8 +988,8 @@ class NVGPUCoreBuilder:
         parameter-memory and constant-bank leaves hanging off it."""
         gridtbl = f".cudbg.gridtbl.{dev.tag}"
         emit(gridtbl, CUDBG_SHT_GRID_TABLE,
-             _table((g.row_bytes for g in dev.grids), GRID_ROW_SIZE),
-             link=devtbl, info=dev.idx, entsize=GRID_ROW_SIZE)
+             _table((g.row_bytes for g in dev.grids), dev.grid_entry_size),
+             link=devtbl, info=dev.idx, entsize=dev.grid_entry_size)
         for grid in dev.grids:
             emit(
                 f".cudbg.param.{dev.tag}.grid{grid.row_index}",
@@ -950,8 +1011,8 @@ class NVGPUCoreBuilder:
             return
         ctatbl = f".cudbg.ctatbl.{sm.tag}"
         emit(ctatbl, CUDBG_SHT_CTA_TABLE,
-             _table((c.row_bytes for c in sm.ctas), CTA_ROW_SIZE),
-             link=smtbl, info=sm.row_index, entsize=CTA_ROW_SIZE)
+             _table((c.row_bytes for c in sm.ctas), sm.cta_entry_size),
+             link=smtbl, info=sm.row_index, entsize=sm.cta_entry_size)
 
         for cta in sm.ctas:
             self._emit_cta(emit, cta, ctatbl)

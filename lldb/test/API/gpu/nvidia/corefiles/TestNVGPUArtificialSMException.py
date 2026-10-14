@@ -13,6 +13,7 @@ cudaDeviceSynchronize() against context destruction; an artificial core
 reproduces the resulting state deterministically and without a GPU.
 """
 
+import json
 import pathlib
 import re
 import struct
@@ -54,7 +55,7 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
     GRID_ID = 1
     MODULE_HANDLE = 0x2000
 
-    def _builder(self, *, with_grid=False):
+    def _builder(self, *, with_grid=False, device_id=None):
         """A device carrying the cubin fixture and one global region, with no
         SMs yet. Returns the builder and the device to hang SMs off.
 
@@ -69,7 +70,7 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
         threads, which do resolve their launch dimensions through a grid.
         """
         b = NVGPUCoreBuilder()
-        dev = b.add_device(num_regs_per_lane=32)
+        dev = b.add_device(dev_id=device_id, num_regs_per_lane=32)
         if with_grid:
             context = b.add_context(dev, context_id=self.CONTEXT_ID)
             b.add_grid(
@@ -106,6 +107,13 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
     @staticmethod
     def _thread_names(process):
         return [thread.GetName() for thread in process]
+
+    def _json_info(self, thread):
+        self.runCmd(f"thread info --json {thread.GetIndexID()}")
+        output = self.res.GetOutput()
+        json_start = output.find("{")
+        self.assertNotEqual(json_start, -1, output)
+        return json.loads(output[json_start:])
 
     @staticmethod
     def _disassembled_pcs(output):
@@ -155,6 +163,26 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
         )
         self.assertEqual(
             frame.FindRegister("errorPC").GetValueAsUnsigned(), self.ERROR_PC
+        )
+
+    def test_stand_in_exposes_only_recorded_device_and_sm(self):
+        """A lane-less stand-in still knows the hardware IDs recorded by its
+        device and SM rows, including when the device ID differs from the
+        hierarchy row index. It has no launch, lane, or activity state."""
+        b, dev = self._builder(device_id=42)
+        b.add_sm(
+            dev,
+            sm_id=17,
+            exception=self.DEVICE_ILLEGAL_ADDRESS,
+            error_pc=self.ERROR_PC,
+        )
+        _, process = self.generate_and_load_artificial_core(
+            b, name="standin-coordinates.nvcudmp"
+        )
+
+        self.assertEqual(
+            self._json_info(process.GetThreadAtIndex(0)),
+            {"cuda": {"device": 42, "sm": 17}},
         )
 
     def test_only_the_fault_pc_is_readable(self):

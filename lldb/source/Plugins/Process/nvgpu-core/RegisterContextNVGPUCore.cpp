@@ -29,26 +29,6 @@
 using namespace lldb;
 using namespace lldb_private;
 
-// TODO: refactor this with constmem grid access.
-static llvm::Expected<nvgpu_core::GridEntry>
-FindThreadGrid(const SectionSP &dev_sp, uint64_t grid_id, ObjectFile *core) {
-  if (!dev_sp)
-    return llvm::createStringError("no device section for grid lookup");
-
-  for (const SectionSP &grid_sp :
-       nvgpu_core::FindChildrenByType(*dev_sp, eSectionTypeNVGPUGrid)) {
-    llvm::Expected<nvgpu_core::GridEntry> grid_or =
-        nvgpu_core::ReadAndDecode<nvgpu_core::GridEntry>(grid_sp, core);
-    if (!grid_or) {
-      llvm::consumeError(grid_or.takeError());
-      continue;
-    }
-    if (grid_or->gridId64 == grid_id)
-      return grid_or;
-  }
-  return llvm::createStringError("no grid section matched the CTA grid id");
-}
-
 RegisterContextNVGPUCore::RegisterContextNVGPUCore(
     Thread &thread, ObjectFile *core, uint32_t concrete_frame_idx,
     std::optional<lldb::addr_t> pc_override)
@@ -160,17 +140,17 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
   // no grid row, and that must cost the caller only blockDim / gridDim.
   // Giving up any earlier would also discard the lane's PC, and with it any
   // chance of symbolicating the fault site.
-  llvm::Expected<nvgpu_core::GridEntry> grid_or =
-      FindThreadGrid(dev_sp, cta_or->gridId64, core);
+  llvm::Expected<nvgpu_core::GridLookupResult> grid_or =
+      nvgpu_core::FindGridByID(dev_sp, cta_or->gridId64, core);
   if (!grid_or) {
     LLDB_LOG_ERROR(log, grid_or.takeError(),
                    "RegisterContextNVGPUCore: grid lookup failed: {0}");
     return;
   }
 
-  llvm::copy(llvm::ArrayRef(&grid_or->blockDimX, sass::kNumXYZComponents),
+  llvm::copy(llvm::ArrayRef(&grid_or->entry.blockDimX, sass::kNumXYZComponents),
              m_register_data.block_dim);
-  llvm::copy(llvm::ArrayRef(&grid_or->gridDimX, sass::kNumXYZComponents),
+  llvm::copy(llvm::ArrayRef(&grid_or->entry.gridDimX, sass::kNumXYZComponents),
              m_register_data.grid_dim);
 }
 

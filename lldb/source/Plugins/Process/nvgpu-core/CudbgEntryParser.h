@@ -16,7 +16,8 @@
 /// that constructs a fully-populated entry from a sliced
 /// DataExtractor. Reads past the slice return zero, so older corefile
 /// versions that omit later-added fields naturally default those fields to
-/// zero.
+/// zero. Coordinate-bearing wrappers also retain the encoded row size so
+/// callers can distinguish an explicitly recorded zero from an absent field.
 ///
 /// This header is the only place in the corefile plugin that includes
 /// `cudacoredump.h`; everything else navigates the section tree via
@@ -47,6 +48,7 @@
 #include "lldb/Utility/NVGPU/ThreadName.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -70,6 +72,13 @@ struct DeviceEntry : CudbgDeviceTableEntry {
   static llvm::Expected<DeviceEntry> Decode(const DataExtractor &data,
                                             lldb::offset_t *offset_ptr,
                                             uint64_t entry_size);
+
+  bool HasDeviceID() const {
+    return encoded_size >=
+           offsetof(CudbgDeviceTableEntry, devId) + sizeof(devId);
+  }
+
+  uint64_t encoded_size = 0;
 };
 
 /// One row of a nvgpu-context-table.
@@ -84,6 +93,12 @@ struct SMEntry : CudbgSmTableEntry {
   static llvm::Expected<SMEntry> Decode(const DataExtractor &data,
                                         lldb::offset_t *offset_ptr,
                                         uint64_t entry_size);
+
+  bool HasSMID() const {
+    return encoded_size >= offsetof(CudbgSmTableEntry, smId) + sizeof(smId);
+  }
+
+  uint64_t encoded_size = 0;
 };
 
 /// One row of a nvgpu-grid-table.
@@ -91,6 +106,18 @@ struct GridEntry : CudbgGridTableEntry {
   static llvm::Expected<GridEntry> Decode(const DataExtractor &data,
                                           lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
+
+  bool HasContextID() const {
+    return encoded_size >=
+           offsetof(CudbgGridTableEntry, contextId) + sizeof(contextId);
+  }
+
+  bool HasClusterDimensions() const {
+    return encoded_size >=
+           offsetof(CudbgGridTableEntry, clusterDimZ) + sizeof(clusterDimZ);
+  }
+
+  uint64_t encoded_size = 0;
 };
 
 /// One row of a nvgpu-cta-table.
@@ -98,6 +125,34 @@ struct CTAEntry : CudbgCTATableEntry {
   static llvm::Expected<CTAEntry> Decode(const DataExtractor &data,
                                          lldb::offset_t *offset_ptr,
                                          uint64_t entry_size);
+
+  bool HasGridID() const {
+    return encoded_size >=
+           offsetof(CudbgCTATableEntry, gridId64) + sizeof(gridId64);
+  }
+
+  bool HasBlockIndex() const {
+    return encoded_size >=
+           offsetof(CudbgCTATableEntry, blockIdxZ) + sizeof(blockIdxZ);
+  }
+
+  bool HasClusterIndex() const {
+    return encoded_size >=
+           offsetof(CudbgCTATableEntry, clusterIdxZ) + sizeof(clusterIdxZ);
+  }
+
+  bool HasClusterDimensions() const {
+    return encoded_size >=
+           offsetof(CudbgCTATableEntry, clusterDimZ) + sizeof(clusterDimZ);
+  }
+
+  uint64_t encoded_size = 0;
+};
+
+/// A decoded grid row and the synthetic section that owns its bytes.
+struct GridLookupResult {
+  lldb::SectionSP section_sp;
+  GridEntry entry;
 };
 
 /// One row of a nvgpu-warp-table.
@@ -114,12 +169,23 @@ struct WarpEntry : CudbgWarpTableEntry {
     return validLanesMask & (1u << lane_idx);
   }
 
-  /// True if `lane_idx` was active at the moment this warp's `errorPC`
-  /// was captured. Caller is responsible for first checking
-  /// `errorPCValid`. Same precondition on `lane_idx` as `IsLaneValid`.
+  /// True if `lane_idx` was active (non-diverged) at dump time. Same
+  /// precondition on `lane_idx` as `IsLaneValid`.
   bool IsLaneActive(uint32_t lane_idx) const {
     return activeLanesMask & (1u << lane_idx);
   }
+
+  bool HasWarpID() const {
+    return encoded_size >=
+           offsetof(CudbgWarpTableEntry, warpId) + sizeof(warpId);
+  }
+
+  bool HasActiveLanesMask() const {
+    return encoded_size >= offsetof(CudbgWarpTableEntry, activeLanesMask) +
+                               sizeof(activeLanesMask);
+  }
+
+  uint64_t encoded_size = 0;
 };
 
 /// One row of a nvgpu-lane (thread) table.
@@ -127,6 +193,13 @@ struct LaneEntry : CudbgThreadTableEntry {
   static llvm::Expected<LaneEntry> Decode(const DataExtractor &data,
                                           lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
+
+  bool HasThreadIndex() const {
+    return encoded_size >=
+           offsetof(CudbgThreadTableEntry, threadIdxZ) + sizeof(threadIdxZ);
+  }
+
+  uint64_t encoded_size = 0;
 };
 
 /// One row of a nvgpu-constbank-table: a single constant bank's global
@@ -167,46 +240,23 @@ llvm::Expected<EntryT> ReadAndDecode(lldb::SectionSP section_sp,
   return EntryT::Decode(data, &off, section_sp->GetFileSize());
 }
 
+/// Find and decode the grid with `grid_id` under `device_section_sp`.
+///
+/// Malformed grid rows are logged and skipped so a later valid row can still
+/// match.
+///
+/// \return
+///     The matching section and decoded row, or an error if no match remains.
+llvm::Expected<GridLookupResult> FindGridByID(lldb::SectionSP device_section_sp,
+                                              uint64_t grid_id,
+                                              ObjectFile *core);
+
 /// Compose a human-readable thread name from a CTA + lane row pair, of
 /// the form "blockIdx(x=0 y=0 z=0) threadIdx(x=3 y=0 z=0)". Delegates to
 /// `nvgpu::FormatThreadName` for the actual formatting; this overload
 /// just exists so consumer code doesn't have to unpack the six SDK
 /// fields by hand.
 std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane);
-
-/// Why a corefile lane stopped. Most lanes were merely suspended when
-/// the dump was taken and carry no stop reason; the fields below are
-/// the ways a lane can claim one.
-struct StopAttribution {
-  /// `CUDBGException_t` attributed to this lane, or 0 if none.
-  uint32_t attributed_exception;
-  /// Lane stopped at an inline `trap;` / `__trap()`. The CUDA SDK
-  /// reports this via `warp.isWarpBroken` rather than an exception
-  /// code, gated by the warp's active-lane mask so unrelated lanes on
-  /// the same warp don't claim the trap.
-  bool at_trap;
-  /// If the warp or SM row failed to decode (typically a truncated
-  /// corefile), a human-readable description of the failure. Surfaced
-  /// as the lane's stop reason so the user sees the corruption in
-  /// `thread list` instead of the lane silently appearing healthy.
-  std::string decode_error;
-};
-
-/// Compute stop attribution for `lane_idx`, or `std::nullopt` if the
-/// lane has no stop reason. Exception precedence:
-///
-///   1. `lane.exception` is definitive when non-zero.
-///   2. Otherwise, if `warp.errorPCValid` AND the lane was active at
-///      fault time, borrow `sm.exception`.
-///   3. Otherwise no exception.
-///
-/// Warp/SM read failures populate `decode_error` (and are also logged
-/// via the Process log channel) so the failure surfaces to the user as
-/// a stop reason rather than silently disappearing.
-std::optional<StopAttribution>
-ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
-                       lldb::SectionSP warp_section_sp,
-                       lldb::SectionSP sm_section_sp, ObjectFile *core);
 
 } // namespace lldb_private::nvgpu_core
 
