@@ -1,3 +1,4 @@
+import json
 import re
 
 import lldb
@@ -8,6 +9,31 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 class TestNVGPUThreads(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
+
+    def _thread_info_json(self, thread):
+        self.runCmd(f"thread info -j {thread.GetIndexID()}")
+        output = self.res.GetOutput()
+        json_start = output.find("{")
+        self.assertNotEqual(json_start, -1, output)
+        return json.loads(output[json_start:])["cuda"]
+
+    def _assert_complete_coords(self, cuda):
+        self.assertTrue(
+            {
+                "device",
+                "sm",
+                "warp",
+                "lane",
+                "context_id",
+                "grid_id",
+                "cluster_idx",
+                "cluster_dim",
+                "block_idx",
+                "thread_idx",
+                "is_active",
+            }.issubset(cuda.keys()),
+            cuda,
+        )
 
     def test_thread_in_a_single_block(self):
         """Test that we can read all threads in a single block, and one of them has excepted."""
@@ -29,9 +55,106 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
 
         thread_with_exception = self.find_thread_by_name("threadIdx(x=5 y=0 z=0)")
         self.assertEqual(thread_with_exception.GetStopReason(), lldb.eStopReasonException)
+        cuda = self._thread_info_json(thread_with_exception)
+        self._assert_complete_coords(cuda)
+        self.assertEqual(cuda["block_idx"], {"x": 0, "y": 0, "z": 0})
+        self.assertEqual(cuda["thread_idx"], {"x": 5, "y": 0, "z": 0})
+        self.assertIs(cuda["is_active"], True)
+        self.assertEqual(cuda["cluster_idx"], {"x": 0, "y": 0, "z": 0})
+        self.assertEqual(cuda["cluster_dim"], {"x": 0, "y": 0, "z": 0})
 
         thread_without_exception = self.find_thread_by_name("threadIdx(x=511 y=0 z=0)")
         self.assertEqual(thread_without_exception.GetStopReason(), lldb.eStopReasonNone)
+        cuda_without_exception = self._thread_info_json(thread_without_exception)
+        self._assert_complete_coords(cuda_without_exception)
+        self.assertEqual(
+            cuda_without_exception["cluster_idx"], {"x": 0, "y": 0, "z": 0}
+        )
+        self.assertEqual(
+            cuda_without_exception["cluster_dim"], {"x": 0, "y": 0, "z": 0}
+        )
+
+        self.addTearDownHook(
+            lambda: self.runCmd("settings clear thread-format")
+        )
+        self.runCmd(
+            "settings set thread-format "
+            "'device=${thread.info.cuda.device%%02llu} "
+            "lane=${thread.info.cuda.lane%%02llu} "
+            "block.x=${thread.info.cuda.block_idx.x%%03llu} "
+            "thread.x=${thread.info.cuda.thread_idx.x%%03llu} "
+            "grid=${thread.info.cuda.grid_id%%llu}\\n'"
+        )
+        self.expect(
+            "thread list -v",
+            substrs=[
+                f"device={cuda['device']:02d} lane={cuda['lane']:02d} "
+                f"block.x=000 thread.x=005 grid={cuda['grid_id']}",
+                f"device={cuda_without_exception['device']:02d} "
+                f"lane={cuda_without_exception['lane']:02d} "
+                "block.x=000 thread.x=511 "
+                f"grid={cuda_without_exception['grid_id']}",
+            ],
+        )
+
+    def _test_clustered_thread_coordinates(self, cluster_x):
+        self.killCPUOnTeardown()
+
+        source = "clustered_threads.cu"
+        executable = f"clustered_threads_{cluster_x}.out"
+        self.build(
+            dictionary={
+                "NVCC_SOURCES": source,
+                "EXE": executable,
+                "CFLAGS_EXTRAS": f"-DCLUSTER_X={cluster_x}",
+            }
+        )
+
+        # TODO: Replace this check with capability support in NVGPUTestCaseBase.
+        # Do not copy this check into other tests.
+        capability_line = line_number(
+            source, "// capability queried before cluster launch"
+        )
+        _, _, cpu_thread, _ = lldbutil.run_to_line_breakpoint(
+            self,
+            lldb.SBFileSpec(source),
+            capability_line,
+            exe_name=executable,
+        )
+        frame = cpu_thread.GetFrameAtIndex(0)
+        major_value = frame.FindVariable("device_major")
+        self.assertTrue(major_value.IsValid())
+        major = major_value.GetValueAsSigned()
+        if major < 9:
+            self.skipTest(
+                f"thread-block clusters require compute capability 9.0; got {major}"
+            )
+
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        self.select_gpu()
+
+        for block in range(4):
+            thread = self.find_thread_by_name(
+                f"blockIdx(x={block} y=0 z=0) threadIdx(x=0 y=0 z=0)"
+            )
+            cuda = self._thread_info_json(thread)
+            self._assert_complete_coords(cuda)
+            self.assertEqual(cuda["block_idx"], {"x": block, "y": 0, "z": 0})
+            self.assertEqual(cuda["thread_idx"], {"x": 0, "y": 0, "z": 0})
+            self.assertEqual(
+                cuda["cluster_idx"], {"x": block // cluster_x, "y": 0, "z": 0}
+            )
+            self.assertEqual(
+                cuda["cluster_dim"], {"x": cluster_x, "y": 1, "z": 1}
+            )
+
+    def test_clustered_thread_coordinates(self):
+        """Test live transport of Hopper thread-block cluster coordinates."""
+        self._test_clustered_thread_coordinates(2)
+
+    def test_singleton_cluster_is_still_clustered(self):
+        """An explicit 1x1x1 cluster must not look like a normal launch."""
+        self._test_clustered_thread_coordinates(1)
 
     def test_thread_list_aggregation(self):
         """Test that `thread list` aggregates GPU threads by source line and that

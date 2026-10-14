@@ -71,8 +71,8 @@ public:
   /// those (appended) slots and reading the pointer would be out of bounds.
   nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
 
-  /// Resume the GPU, change its state and the state of each thread, then
-  /// report the state change to the delegate, which will notify the client.
+  /// Mark the GPU process and its threads running, notify the delegate, then
+  /// resume GPU execution.
   ///
   /// \param[in] resume_actions
   ///     List of resume actions to apply to threads.
@@ -315,6 +315,10 @@ public:
   /// \return the registry of all devices.
   DeviceStateRegistry &GetAllDevices() { return m_devices; }
 
+  /// \return true if the device registry contains a complete snapshot for the
+  /// current real GPU stop.
+  bool IsDeviceStateCurrent() const;
+
   std::vector<AddressSpaceInfo> GetAddressSpaces() override;
 
   /// Handle the native process exit event.
@@ -375,7 +379,7 @@ private:
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
 
-  /// Snapshot of the information of all devices. It's updated upon every stop.
+  /// Cached device information, updated at every real GPU stop.
   DeviceStateRegistry m_devices;
 
   /// A fallback thread that is used to report the state of the GPU when no

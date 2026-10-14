@@ -451,45 +451,6 @@ static size_t ReadFromSectionData(SectionSP section, offset_t offset, void *buf,
   return data.CopyData(offset, bytes_to_read, buf);
 }
 
-struct GridSectionInfo {
-  SectionSP section;
-  nvgpu_core::GridEntry entry;
-};
-
-/// Locate the grid container that `gpu_thread` is part of by matching the
-/// thread's CTA `gridId64` against the device's grid children (the grid
-/// subtree is a sibling of the SM subtree under each device).
-static std::optional<GridSectionInfo>
-FindGridSection(ThreadNVGPUCore &gpu_thread, ObjectFile *core) {
-  Log *log = GetLog(LLDBLog::Process);
-  SectionSP cta_sp = gpu_thread.GetCTASection();
-  SectionSP dev_sp = gpu_thread.GetDeviceSection();
-  if (!cta_sp || !dev_sp)
-    return std::nullopt;
-
-  llvm::Expected<nvgpu_core::CTAEntry> cta_or =
-      nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(cta_sp, core);
-  if (!cta_or) {
-    LLDB_LOG_ERROR(log, cta_or.takeError(),
-                   "grid lookup: failed to decode CTA row: {0}");
-    return std::nullopt;
-  }
-
-  for (const SectionSP &grid_sp :
-       nvgpu_core::FindChildrenByType(*dev_sp, eSectionTypeNVGPUGrid)) {
-    llvm::Expected<nvgpu_core::GridEntry> grid_or =
-        nvgpu_core::ReadAndDecode<nvgpu_core::GridEntry>(grid_sp, core);
-    if (!grid_or) {
-      LLDB_LOG_ERROR(log, grid_or.takeError(),
-                     "grid lookup: failed to decode grid row: {0}");
-      continue;
-    }
-    if (grid_or->gridId64 == cta_or->gridId64)
-      return GridSectionInfo{grid_sp, *grid_or};
-  }
-  return std::nullopt;
-}
-
 /// Test whether `addr` falls within one of the grid's constant banks. Each
 /// constbank table row is its own `eSectionTypeNVGPUConstBank` leaf (fanned
 /// out by `ObjectFileELF::BuildNVGPUSectionList`), so the row stride is the
@@ -628,13 +589,27 @@ size_t ProcessNVGPUCore::DoReadMemory(const ProcessAddress &process_addr,
     return 0;
   }
 
-  std::optional<GridSectionInfo> grid = FindGridSection(*gpu_thread, core);
-  if (!grid)
+  llvm::Expected<nvgpu_core::CTAEntry> cta_or =
+      nvgpu_core::ReadAndDecode<nvgpu_core::CTAEntry>(cta_sp, core);
+  if (!cta_or) {
+    LLDB_LOG_ERROR(log, cta_or.takeError(),
+                   "address-space grid lookup: failed to decode CTA row: {0}");
     return FailAddressSpaceRead(info, addr, error);
+  }
+
+  llvm::Expected<nvgpu_core::GridLookupResult> grid_or =
+      nvgpu_core::FindGridByID(dev_sp, cta_or->gridId64, core);
+  if (!grid_or) {
+    LLDB_LOG_ERROR(log, grid_or.takeError(),
+                   "address-space grid lookup failed: {0}");
+    return FailAddressSpaceRead(info, addr, error);
+  }
+
+  const nvgpu_core::GridLookupResult &grid = *grid_or;
 
   switch (info.space_id) {
   case nvgpu::ConstStorage: {
-    if (!AddressInGridConstBanks(*grid->section, core, addr)) {
+    if (!AddressInGridConstBanks(*grid.section_sp, core, addr)) {
       error = Status::FromErrorStringWithFormat(
           "address 0x%" PRIx64 " is not within any constant bank", addr);
       return 0;
@@ -646,12 +621,12 @@ size_t ProcessNVGPUCore::DoReadMemory(const ProcessAddress &process_addr,
   }
 
   case nvgpu::ParamStorage: {
-    if (addr < grid->entry.paramsOffset)
+    if (addr < grid.entry.paramsOffset)
       return FailAddressSpaceRead(info, addr, error);
     SectionSP param_sp = nvgpu_core::FindChildByType(
-        *grid->section, eSectionTypeNVGPUParamMemory);
-    size_t bytes = ReadFromSectionData(
-        param_sp, addr - grid->entry.paramsOffset, buf, size, core);
+        *grid.section_sp, eSectionTypeNVGPUParamMemory);
+    size_t bytes = ReadFromSectionData(param_sp, addr - grid.entry.paramsOffset,
+                                       buf, size, core);
     if (bytes != 0)
       return bytes;
     return FailAddressSpaceRead(info, addr, error);
@@ -664,7 +639,7 @@ size_t ProcessNVGPUCore::DoReadMemory(const ProcessAddress &process_addr,
     if (!dev_sp)
       return FailAddressSpaceRead(info, addr, error);
     std::optional<nvgpu_core::ContextEntry> context =
-        FindContextEntry(*dev_sp, grid->entry.contextId, core);
+        FindContextEntry(*dev_sp, grid.entry.contextId, core);
     if (!context)
       return FailAddressSpaceRead(info, addr, error);
 

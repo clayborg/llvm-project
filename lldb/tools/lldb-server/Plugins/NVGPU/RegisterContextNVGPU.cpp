@@ -27,6 +27,10 @@ using sass::kNumUPRegs;
 using sass::kNumURRegs;
 using namespace sass::regnum;
 
+static bool AllComponentsValid(const bool (&valid)[sass::kNumXYZComponents]) {
+  return valid[0] && valid[1] && valid[2];
+}
+
 RegisterContextNVGPU::RegisterContextNVGPU(ThreadNVGPU &thread)
     : NativeRegisterContext(thread) {}
 
@@ -41,9 +45,16 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
 }
 
 static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
-                                           const ThreadCoords &thread_coords,
+                                           const nvgpu::PhysicalCoords &coords,
                                            ThreadRegisterCache &regs) {
-  uint32_t num_regs_read = warp_state.GetCurrentNumRegularRegisters();
+  if (!warp_state.GetCurrentNumRegularRegisters().has_value())
+    return;
+
+  if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
+    return;
+
+  const uint32_t num_regs_read = *warp_state.GetCurrentNumRegularRegisters();
+
   if (num_regs_read > sass::kNumRRegs)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
                            "device reported {} regular registers, but only {} "
@@ -55,9 +66,9 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // needed. CTK 13.2 (CUDBG API revision 168) renamed it to
   // readRegisterRange60 and appended a new 8-arg readRegisterRange we do not
   // use.
-  CUDBGResult res = api->readRegisterRange60(
-      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
-      thread_coords.thread_id, 0, num_regs_read, regs.val.regular);
+  CUDBGResult res = api->readRegisterRange60(*coords.device, *coords.sm,
+                                             *coords.warp, *coords.lane, 0,
+                                             num_regs_read, regs.val.regular);
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
                            "readRegisterRange failed: {}",
@@ -66,10 +77,13 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
     regs.is_valid.regular[i] = true;
 }
 
-static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
-                                             CUDBGAPI api,
-                                             const ThreadCoords &thread_coords,
-                                             ThreadRegisterCache &regs) {
+static void
+ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                                 const nvgpu::PhysicalCoords &coords,
+                                 ThreadRegisterCache &regs) {
+  if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
+    return;
+
   size_t num_regs = device_info.GetNumPredicateRegisters();
   if (num_regs == 0)
     return;
@@ -80,9 +94,9 @@ static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
                            "{} are supported",
                            num_regs, sass::kNumPRegs);
 
-  CUDBGResult res = api->readPredicates(
-      thread_coords.dev_id, thread_coords.sm_id, thread_coords.warp_id,
-      thread_coords.thread_id, num_regs, regs.val.predicate);
+  CUDBGResult res =
+      api->readPredicates(*coords.device, *coords.sm, *coords.warp,
+                          *coords.lane, num_regs, regs.val.predicate);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
@@ -93,41 +107,46 @@ static void ReadPredicateRegistersFromDevice(DeviceState &device_info,
     regs.is_valid.predicate[i] = true;
 }
 
-static void ReadCUDABuiltinsFromDevice(CUDBGAPI api,
-                                       const WarpState &warp_state,
+static void ReadCUDABuiltinsFromDevice(const WarpState &warp_state,
                                        const ThreadState &thread_state,
                                        ThreadRegisterCache &regs) {
-  const CUDBGGridInfo &grid_info =
-      warp_state.GetSMState().GetDeviceState().GetGridInfo(
-          warp_state.GetGridId());
+  if (const std::optional<ThreadIdx> &thread_idx =
+          thread_state.GetThreadIdx()) {
+    regs.val.thread_idx[0] = thread_idx->x;
+    regs.val.thread_idx[1] = thread_idx->y;
+    regs.val.thread_idx[2] = thread_idx->z;
+    regs.is_valid.thread_idx[0] = true;
+    regs.is_valid.thread_idx[1] = true;
+    regs.is_valid.thread_idx[2] = true;
+  }
 
-  regs.val.thread_idx[0] = thread_state.GetThreadIdx().x;
-  regs.val.thread_idx[1] = thread_state.GetThreadIdx().y;
-  regs.val.thread_idx[2] = thread_state.GetThreadIdx().z;
-  regs.is_valid.thread_idx[0] = true;
-  regs.is_valid.thread_idx[1] = true;
-  regs.is_valid.thread_idx[2] = true;
+  const nvgpu::LogicalCoords &logical = warp_state.GetLogicalCoords();
+  if (logical.block_idx) {
+    regs.val.block_idx[0] = logical.block_idx->x;
+    regs.val.block_idx[1] = logical.block_idx->y;
+    regs.val.block_idx[2] = logical.block_idx->z;
+    regs.is_valid.block_idx[0] = true;
+    regs.is_valid.block_idx[1] = true;
+    regs.is_valid.block_idx[2] = true;
+  }
 
-  regs.val.block_idx[0] = warp_state.GetBlockIdx().x;
-  regs.val.block_idx[1] = warp_state.GetBlockIdx().y;
-  regs.val.block_idx[2] = warp_state.GetBlockIdx().z;
-  regs.is_valid.block_idx[0] = true;
-  regs.is_valid.block_idx[1] = true;
-  regs.is_valid.block_idx[2] = true;
+  if (logical.grid_id) {
+    const CUDBGGridInfo &grid_info =
+        warp_state.GetSMState().GetDeviceState().GetGridInfo(*logical.grid_id);
+    regs.val.block_dim[0] = grid_info.blockDim.x;
+    regs.val.block_dim[1] = grid_info.blockDim.y;
+    regs.val.block_dim[2] = grid_info.blockDim.z;
+    regs.is_valid.block_dim[0] = true;
+    regs.is_valid.block_dim[1] = true;
+    regs.is_valid.block_dim[2] = true;
 
-  regs.val.block_dim[0] = grid_info.blockDim.x;
-  regs.val.block_dim[1] = grid_info.blockDim.y;
-  regs.val.block_dim[2] = grid_info.blockDim.z;
-  regs.is_valid.block_dim[0] = true;
-  regs.is_valid.block_dim[1] = true;
-  regs.is_valid.block_dim[2] = true;
-
-  regs.val.grid_dim[0] = grid_info.gridDim.x;
-  regs.val.grid_dim[1] = grid_info.gridDim.y;
-  regs.val.grid_dim[2] = grid_info.gridDim.z;
-  regs.is_valid.grid_dim[0] = true;
-  regs.is_valid.grid_dim[1] = true;
-  regs.is_valid.grid_dim[2] = true;
+    regs.val.grid_dim[0] = grid_info.gridDim.x;
+    regs.val.grid_dim[1] = grid_info.gridDim.y;
+    regs.val.grid_dim[2] = grid_info.gridDim.z;
+    regs.is_valid.grid_dim[0] = true;
+    regs.is_valid.grid_dim[1] = true;
+    regs.is_valid.grid_dim[2] = true;
+  }
 
   regs.val.warp_size =
       warp_state.GetSMState().GetDeviceState().GetNumThreadsPerWarp();
@@ -138,8 +157,7 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
   if (m_regs)
     return *m_regs;
 
-  m_regs.emplace();
-  ThreadRegisterCache &regs = *m_regs;
+  ThreadRegisterCache &regs = m_regs.emplace();
   ThreadNVGPU &thread = GetGPUThread();
   const ThreadState *thread_state = thread.GetThreadState();
 
@@ -152,7 +170,7 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
   }
 
   CUDBGAPI api = GetDebuggerAPI();
-  const ThreadCoords &thread_coords = thread_state->GetCoords();
+  const nvgpu::PhysicalCoords &physical = thread_state->GetPhysicalCoords();
 
   {
     regs.val.PC = thread_state->GetPC();
@@ -168,11 +186,10 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
   }
 
   WarpState &warp_state = thread_state->GetWarpState();
-  DeviceState &device_info =
-      thread.GetGPU().GetAllDevices()[thread_coords.dev_id];
+  DeviceState &device_info = warp_state.GetSMState().GetDeviceState();
 
-  ReadRegularRegistersFromDevice(api, warp_state, thread_coords, regs);
-  ReadPredicateRegistersFromDevice(device_info, api, thread_coords, regs);
+  ReadRegularRegistersFromDevice(api, warp_state, physical, regs);
+  ReadPredicateRegistersFromDevice(device_info, api, physical, regs);
 
   const WarpSharedRegisterCache &warp_regs = warp_state.GetRegisters();
 
@@ -197,7 +214,7 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
     regs.is_valid.uniform_zero = true;
   }
 
-  ReadCUDABuiltinsFromDevice(api, warp_state, *thread_state, regs);
+  ReadCUDABuiltinsFromDevice(warp_state, *thread_state, regs);
 
   return regs;
 }
@@ -250,6 +267,18 @@ Status RegisterContextNVGPU::ReadRegister(const RegisterInfo *reg_info,
     if (!regs.is_valid.regular[SASS_RA_LO] ||
         !regs.is_valid.regular[SASS_RA_HI])
       return Status("RA register is invalid");
+  } else if (reg_num == LLDB_VREG_THREAD_IDX) {
+    if (!AllComponentsValid(regs.is_valid.thread_idx))
+      return Status("threadIdx register is invalid");
+  } else if (reg_num == LLDB_VREG_BLOCK_IDX) {
+    if (!AllComponentsValid(regs.is_valid.block_idx))
+      return Status("blockIdx register is invalid");
+  } else if (reg_num == LLDB_VREG_BLOCK_DIM) {
+    if (!AllComponentsValid(regs.is_valid.block_dim))
+      return Status("blockDim register is invalid");
+  } else if (reg_num == LLDB_VREG_GRID_DIM) {
+    if (!AllComponentsValid(regs.is_valid.grid_dim))
+      return Status("gridDim register is invalid");
   } else if (reg_num >= static_cast<int>(LLDB_REG_COUNT)) {
     return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
   } else if (IsUniformPredicateLLDB(reg_num)) {

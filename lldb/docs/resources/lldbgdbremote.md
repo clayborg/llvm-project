@@ -715,6 +715,47 @@ jThreadExtendedInfo:{"thread":612910}]
 **Priority To Implement:** Low. This packet is only needed if the gdb remote stub
 wants to provide interesting additional information about a thread for the user.
 
+### CUDA thread coordinates
+
+NVGPU servers return CUDA thread coordinates in an optional `cuda` object:
+
+```json
+{
+  "cuda": {
+    "device": 0,
+    "sm": 3,
+    "warp": 1,
+    "lane": 7,
+    "context_id": 42,
+    "grid_id": 100,
+    "block_idx": {"x": 1, "y": 0, "z": 0},
+    "thread_idx": {"x": 14, "y": 0, "z": 0},
+    "cluster_idx": {"x": 0, "y": 0, "z": 0},
+    "cluster_dim": {"x": 2, "y": 1, "z": 1},
+    "is_active": true
+  }
+}
+```
+
+Coordinate components and physical coordinates are unsigned 32-bit integers;
+`context_id` and `grid_id` are unsigned 64-bit integers. All integers are
+decimal. `is_active` is a boolean.
+
+The `cuda` object is a partial snapshot. Unknown fields are omitted rather than
+encoded as JSON `null`; a present zero or `false` is known data and is emitted.
+Each present coordinate object is atomic and contains `x`, `y`, and `z`.
+
+`cluster_idx` and `cluster_dim` are emitted together when cluster information
+is known. Their coordinate components are reported without classification or
+validation, including zero or mixed-zero values. For example, a nonzero index
+is preserved alongside all-zero dimensions. Live threads use zero for an
+unreported index and fall back to the grid's dimensions when warp dimensions
+are not reported. For core-file threads, a CTA cluster index is required;
+per-CTA cluster dimensions take precedence, and an older CTA row without
+dimensions falls back to the grid's dimensions when available. If either the
+CTA index or dimensions are unavailable, both fields are omitted. The server
+returns `{}` when no current thread snapshot is available.
+
 ## jThreadsInfo
 
 Ask for the server for thread stop information of all threads.

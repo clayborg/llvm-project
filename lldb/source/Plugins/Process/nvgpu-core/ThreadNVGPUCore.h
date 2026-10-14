@@ -9,14 +9,19 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_THREADNVGPUCORE_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_NVGPU_CORE_THREADNVGPUCORE_H
 
-#include "CudbgEntryParser.h"
-
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/lldb-forward.h"
 
+#include <cstdint>
 #include <optional>
+#include <string>
 
 namespace lldb_private {
+
+namespace nvgpu_core {
+struct SMEntry;
+}
 
 /// One thread per active GPU lane, plus one stand-in thread per faulted SM
 /// that has no surviving lane.
@@ -124,7 +129,27 @@ protected:
 
   bool CalculateStopInfo() override;
 
+  StructuredData::ObjectSP FetchThreadExtendedInfo() override;
+
 private:
+  /// Why a corefile lane stopped. Most lanes were merely suspended when
+  /// the dump was taken and carry no stop reason; the fields below are
+  /// the ways a lane can claim one.
+  struct StopAttribution {
+    /// `CUDBGException_t` attributed to this lane, or 0 if none.
+    uint32_t attributed_exception;
+    /// Lane stopped at an inline `trap;` / `__trap()`. The CUDA SDK
+    /// reports this via `warp.isWarpBroken` rather than an exception
+    /// code, gated by the warp's active-lane mask so unrelated lanes on
+    /// the same warp don't claim the trap.
+    bool at_trap;
+    /// If the warp or SM row failed to decode (typically a truncated
+    /// corefile), a human-readable description of the failure. Surfaced
+    /// as the lane's stop reason so the user sees the corruption in
+    /// `thread list` instead of the lane silently appearing healthy.
+    std::string decode_error;
+  };
+
   /// Lane container for this thread's lane, or null for the SM-exception
   /// stand-in.
   lldb::SectionSP m_lane_section_sp;
@@ -136,7 +161,8 @@ private:
   uint32_t m_lane_idx;
   std::optional<lldb::addr_t> m_error_pc;
   std::string m_name;
-  std::optional<nvgpu_core::StopAttribution> m_stop_attribution;
+  nvgpu::ThreadCoords m_cuda_thread_coords;
+  std::optional<StopAttribution> m_stop_attribution;
 };
 
 } // namespace lldb_private
