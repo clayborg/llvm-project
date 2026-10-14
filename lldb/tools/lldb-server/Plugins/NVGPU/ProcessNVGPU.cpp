@@ -64,6 +64,12 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
   LLDB_LOG(log, "NVGPU::Resume(). Pre-resume state: {}",
            StateToString(GetState()));
 
+  // Make stop-derived device state unavailable before GPU execution resumes.
+  for (ThreadNVGPU &thread : GPUThreads())
+    thread.SetRunning();
+
+  SetState(StateType::eStateRunning, true);
+
   if (m_is_faking_a_stop_for_dyld) {
     m_is_faking_a_stop_for_dyld = false;
     // Ack'ing here is fine because the next call to OnDebuggerAPIEvent will
@@ -82,11 +88,6 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
                                cudbgGetErrorString(res));
     }
   }
-
-  for (ThreadNVGPU &thread : GPUThreads())
-    thread.SetRunning();
-
-  SetState(StateType::eStateRunning, true);
 
   return Status();
 }
@@ -130,6 +131,12 @@ void ProcessNVGPU::ChangeStateToStopped() {
   }
 
   SetState(StateType::eStateStopped, true);
+}
+
+bool ProcessNVGPU::IsDeviceStateCurrent() const {
+  std::lock_guard<std::recursive_mutex> guard(m_state_mutex);
+  return m_state == eStateStopped && !m_is_faking_a_stop_for_dyld &&
+         m_devices.HasSnapshotForStopID(m_stop_id);
 }
 
 Status ProcessNVGPU::Detach() {
@@ -494,9 +501,9 @@ void ProcessNVGPU::ReportDyldStop() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::ReportDyldStop()");
 
+  m_is_faking_a_stop_for_dyld = true;
   ThreadNVGPU &thread = *GPUThreads().begin();
   thread.SetStoppedByDynamicLoader();
-  m_is_faking_a_stop_for_dyld = true;
   SetState(StateType::eStateStopped, true);
 }
 
@@ -523,7 +530,7 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
-  m_devices.BatchUpdate(log_to_client_callback);
+  m_devices.BatchUpdate(GetNextStopID(), log_to_client_callback);
   LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
 
   ReleaseAndClearThreads(m_threads);
@@ -605,6 +612,7 @@ std::vector<AddressSpaceInfo> ProcessNVGPU::GetAddressSpaces() {
 
 Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
                                 size_t size, size_t &bytes_read) {
+  bytes_read = 0;
   const lldb::addr_t addr = process_addr.GetValue();
   const lldb::addr_space_t addr_space =
       process_addr.IsInDefaultAddressSpace()
@@ -628,49 +636,62 @@ Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
   LLDB_LOGV(log, "NVGPU::ReadMemory(). addr: {}, address space: {}, size: {}",
             addr, addr_space, size);
 
-  if (!thread && info->is_thread_specific)
-    return Status::FromErrorStringWithFormatv(
-        "Reading from address space '{}' requires a thread", addr_space);
-
-  auto GetPhysicalCoords = [thread]() -> const ThreadCoords & {
-    ThreadNVGPU &nv_thread = *static_cast<ThreadNVGPU *>(thread);
-    const ThreadState *thread_state = nv_thread.GetThreadState();
-    if (!thread_state)
-      logAndReportFatalError("NVGPU::ReadMemory(). ThreadState is null");
-    return thread_state->GetCoords();
-  };
-  CUDBGResult res;
-
-  switch (addr_space) {
-  case AddressSpace::ConstStorage:
-  case AddressSpace::GlobalStorage: {
+  if (!info->is_thread_specific) {
     // Const storage can be read as global storage.
-    res = GetCudaAPI().readGlobalMemory(addr, buf, size);
-    break;
+    CUDBGResult res = GetCudaAPI().readGlobalMemory(addr, buf, size);
+    if (res != CUDBG_SUCCESS)
+      return Status::FromErrorString(cudbgGetErrorString(res));
+
+    bytes_read = size;
+    return Status();
   }
+
+  auto *nv_thread = static_cast<ThreadNVGPU *>(thread);
+  if (!nv_thread || !nv_thread->GetThreadState()) {
+    return Status::FromErrorStringWithFormatv(
+        "Reading from address space '{}' requires a current CUDA thread",
+        addr_space);
+  }
+
+  const nvgpu::PhysicalCoords &physical =
+      nv_thread->GetThreadState()->GetPhysicalCoords();
+  if (!physical.device || !physical.sm || !physical.warp) {
+    return Status::FromErrorStringWithFormatv(
+        "Reading from address space '{}' requires known CUDA device, SM, and "
+        "warp coordinates",
+        addr_space);
+  }
+
+  if ((addr_space == AddressSpace::LocalStorage ||
+       addr_space == AddressSpace::GenericStorage) &&
+      !physical.lane) {
+    return Status::FromErrorStringWithFormatv(
+        "Reading from address space '{}' requires a known CUDA lane "
+        "coordinate",
+        addr_space);
+  }
+
+  CUDBGResult res;
+  switch (addr_space) {
   case AddressSpace::LocalStorage: {
-    const ThreadCoords &coords = GetPhysicalCoords();
-    res = GetCudaAPI().readLocalMemory(coords.dev_id, coords.sm_id,
-                                       coords.warp_id, coords.thread_id, addr,
+    res = GetCudaAPI().readLocalMemory(*physical.device, *physical.sm,
+                                       *physical.warp, *physical.lane, addr,
                                        buf, size);
     break;
   }
   case AddressSpace::ParamStorage: {
-    const ThreadCoords &coords = GetPhysicalCoords();
-    res = GetCudaAPI().readParamMemory(coords.dev_id, coords.sm_id,
-                                       coords.warp_id, addr, buf, size);
+    res = GetCudaAPI().readParamMemory(*physical.device, *physical.sm,
+                                       *physical.warp, addr, buf, size);
     break;
   }
   case AddressSpace::SharedStorage: {
-    const ThreadCoords &coords = GetPhysicalCoords();
-    res = GetCudaAPI().readSharedMemory(coords.dev_id, coords.sm_id,
-                                        coords.warp_id, addr, buf, size);
+    res = GetCudaAPI().readSharedMemory(*physical.device, *physical.sm,
+                                        *physical.warp, addr, buf, size);
     break;
   }
   case AddressSpace::GenericStorage: {
-    const ThreadCoords &coords = GetPhysicalCoords();
-    res = GetCudaAPI().readGenericMemory(coords.dev_id, coords.sm_id,
-                                         coords.warp_id, coords.thread_id, addr,
+    res = GetCudaAPI().readGenericMemory(*physical.device, *physical.sm,
+                                         *physical.warp, *physical.lane, addr,
                                          buf, size);
     break;
   }
@@ -679,10 +700,8 @@ Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
                                               addr_space);
   }
 
-  if (res != CUDBG_SUCCESS) {
-    bytes_read = 0;
+  if (res != CUDBG_SUCCESS)
     return Status::FromErrorString(cudbgGetErrorString(res));
-  }
 
   bytes_read = size;
   return Status();
@@ -692,6 +711,7 @@ void ProcessNVGPU::OnNativeProcessExit(const WaitStatus &exit_status) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::OnNativeProcessExit(). exit_status: {}", exit_status);
   // Set our exit status to match the native process and notify delegates.
+  std::lock_guard<std::recursive_mutex> guard(m_state_mutex);
   SetExitStatus(exit_status, /*bNotifyStateChange=*/true);
 }
 

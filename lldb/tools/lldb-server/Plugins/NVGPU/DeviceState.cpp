@@ -14,22 +14,18 @@
 #include "lldb/Utility/StreamString.h"
 #include <numeric>
 
+using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 using namespace lldb_private::sass;
 
-std::string ThreadCoords::Dump() const {
-  return llvm::formatv("dev_id = {} sm_id = {} warp_id = {} thread_id = {}",
-                       dev_id, sm_id, warp_id, thread_id);
-}
-
-ThreadState::ThreadState(ProcessNVGPU &gpu, const ThreadCoords &thread_coords,
+ThreadState::ThreadState(ProcessNVGPU &gpu, nvgpu::PhysicalCoords physical,
                          WarpState &warp_state)
-    : m_thread_coords(thread_coords), m_thread_nvgpu(gpu, this),
+    : m_physical_coords(physical), m_thread_nvgpu(gpu, this),
       m_warp_state(&warp_state) {}
 
 ThreadState::ThreadState(ThreadState &&other)
-    : m_thread_coords(other.GetCoords()),
+    : m_physical_coords(other.GetPhysicalCoords()),
       m_thread_nvgpu(other.m_thread_nvgpu.GetGPU(), this),
       m_warp_state(other.m_warp_state) {
   logAndReportFatalError("ThreadState is not movable. Ensure that this "
@@ -37,12 +33,24 @@ ThreadState::ThreadState(ThreadState &&other)
                          "appropriate amount of space in parent container.");
 }
 
+nvgpu::ThreadCoords ThreadState::GetThreadCoords() const {
+  nvgpu::ThreadCoords coords{m_physical_coords,
+                             GetWarpState().GetLogicalCoords(), m_is_active};
+  coords.logical.thread_idx = m_thread_idx;
+  return coords;
+}
+
 void ThreadState::Dump(Stream &s) {
+  if (m_thread_idx) {
+    s.Indent();
+    s.Format("x = {}, y = {}, z = {}\n", m_thread_idx->x, m_thread_idx->y,
+             m_thread_idx->z);
+  }
   s.Indent();
-  s.Format("x = {}, y = {}, z = {}\n", m_thread_idx.x, m_thread_idx.y,
-           m_thread_idx.z);
-  s.Indent();
-  s.Format("pc = 0x{:x}, is_active = {}, stop_reason = {}\n", m_pc, m_is_active,
+  s.Format("pc = 0x{:x}", m_pc);
+  if (m_is_active)
+    s.Format(", is_active = {}", *m_is_active ? "true" : "false");
+  s.Format(", stop_reason = {}\n",
            StopReasonToString(m_thread_nvgpu.GetStopReason()));
   if (m_exception) {
     s.Indent();
@@ -57,11 +65,12 @@ void ThreadState::Dump(Stream &s) {
 WarpState::WarpState(ProcessNVGPU &gpu, uint32_t num_threads,
                      uint32_t device_id, uint32_t sm_id, uint32_t warp_id,
                      SMState &sm_state)
-    : m_sm_state(&sm_state), m_grid_id(0) {
+    : m_physical_coords{device_id, sm_id, warp_id, std::nullopt},
+      m_sm_state(&sm_state) {
   m_threads.reserve(num_threads);
-  for (uint32_t thread_id = 0; thread_id < num_threads; ++thread_id)
+  for (uint32_t lane = 0; lane < num_threads; ++lane)
     m_threads.emplace_back(
-        gpu, ThreadCoords(device_id, sm_id, warp_id, thread_id), *this);
+        gpu, nvgpu::PhysicalCoords{device_id, sm_id, warp_id, lane}, *this);
 }
 
 void WarpState::Dump(Stream &s) {
@@ -83,28 +92,36 @@ void WarpState::Dump(Stream &s) {
   s.IndentLess();
 }
 
-size_t WarpState::GetCurrentNumRegularRegisters() {
+static bool HasRequiredWarpCoords(const nvgpu::PhysicalCoords &physical) {
+  return physical.device && physical.sm && physical.warp;
+}
+
+std::optional<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
   if (m_current_num_regular_registers)
-    return *m_current_num_regular_registers;
+    return m_current_num_regular_registers;
+
+  const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
+  if (!HasRequiredWarpCoords(physical))
+    return std::nullopt;
 
   CUDBGWarpResources resources;
-  const WarpCoords &warp_coords = GetWarpCoords();
-
   CUDBGResult res = GetSMState().GetDeviceState().GetAPI()->readWarpResources(
-      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, &resources);
+      *physical.device, *physical.sm, *physical.warp, &resources);
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("WarpState::GetCurrentNumRegularRegisters(). "
                            "readWarpResources failed: {}",
                            cudbgGetErrorString(res));
 
   m_current_num_regular_registers = resources.numRegisters;
-  return *m_current_num_regular_registers;
+  return m_current_num_regular_registers;
 }
 
-static void ReadUniformRegistersFromDevice(DeviceState &device_info,
-                                           CUDBGAPI api,
-                                           const WarpCoords &warp_coords,
-                                           WarpSharedRegisterCache &regs) {
+static void
+ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+                               const nvgpu::PhysicalCoords &physical,
+                               WarpSharedRegisterCache &regs) {
+  if (!HasRequiredWarpCoords(physical))
+    return;
   size_t num_regs = device_info.GetNumUniformRegisters();
   if (num_regs == 0)
     return;
@@ -115,7 +132,7 @@ static void ReadUniformRegistersFromDevice(DeviceState &device_info,
                            num_regs, kNumURRegs);
 
   CUDBGResult res = api->readUniformRegisterRange(
-      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, 0, num_regs,
+      *physical.device, *physical.sm, *physical.warp, 0, num_regs,
       regs.val.uniform);
 
   if (res != CUDBG_SUCCESS)
@@ -129,8 +146,10 @@ static void ReadUniformRegistersFromDevice(DeviceState &device_info,
 
 static void
 ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                        const WarpCoords &warp_coords,
+                                        const nvgpu::PhysicalCoords &physical,
                                         WarpSharedRegisterCache &regs) {
+  if (!HasRequiredWarpCoords(physical))
+    return;
   size_t num_regs = device_info.GetNumUniformPredicateRegisters();
   if (num_regs == 0)
     return;
@@ -141,9 +160,9 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                            "supported",
                            num_regs, kNumUPRegs);
 
-  CUDBGResult res = api->readUniformPredicates(
-      warp_coords.dev_id, warp_coords.sm_id, warp_coords.warp_id, num_regs,
-      regs.val.uniform_predicate);
+  CUDBGResult res =
+      api->readUniformPredicates(*physical.device, *physical.sm, *physical.warp,
+                                 num_regs, regs.val.uniform_predicate);
 
   if (res != CUDBG_SUCCESS)
     logAndReportFatalError("WarpState::GetRegisters(). "
@@ -160,12 +179,19 @@ const WarpSharedRegisterCache &WarpState::GetRegisters() {
   if (m_regs_calculated)
     return m_shared_registers;
 
-  WarpCoords coords = GetWarpCoords();
+  const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
+  if (!HasRequiredWarpCoords(physical)) {
+    m_shared_registers = {};
+    m_regs_calculated = true;
+    return m_shared_registers;
+  }
+
   DeviceState &device_info = GetSMState().GetDeviceState();
   CUDBGAPI api = device_info.GetAPI();
 
-  ReadUniformRegistersFromDevice(device_info, api, coords, m_shared_registers);
-  ReadUniformPredicateRegistersFromDevice(device_info, api, coords,
+  ReadUniformRegistersFromDevice(device_info, api, physical,
+                                 m_shared_registers);
+  ReadUniformPredicateRegistersFromDevice(device_info, api, physical,
                                           m_shared_registers);
 
   m_regs_calculated = true;
@@ -255,7 +281,7 @@ size_t DeviceState::GetNumPredicateRegisters() {
                            cudbgGetErrorString(res));
   }
   m_num_predicate_registers = static_cast<size_t>(num_predicate_registers);
-  return *m_num_predicate_registers;
+  return num_predicate_registers;
 }
 
 size_t DeviceState::GetNumUniformPredicateRegisters() {
@@ -273,7 +299,7 @@ size_t DeviceState::GetNumUniformPredicateRegisters() {
   }
   m_num_uniform_predicate_registers =
       static_cast<size_t>(num_uniform_predicate_registers);
-  return *m_num_uniform_predicate_registers;
+  return num_uniform_predicate_registers;
 }
 
 size_t DeviceState::GetNumUniformRegisters() {
@@ -289,7 +315,7 @@ size_t DeviceState::GetNumUniformRegisters() {
                            cudbgGetErrorString(res));
   }
   m_num_uniform_registers = static_cast<size_t>(num_uniform_registers);
-  return *m_num_uniform_registers;
+  return num_uniform_registers;
 }
 
 size_t DeviceState::GetMaxNumSupportedRegularRegister() {
@@ -304,7 +330,7 @@ size_t DeviceState::GetMaxNumSupportedRegularRegister() {
                            cudbgGetErrorString(res));
   }
   m_num_r_registers = static_cast<size_t>(num_r_registers);
-  return *m_num_r_registers;
+  return num_r_registers;
 }
 
 void DeviceState::Dump(Stream &s) {
@@ -367,9 +393,12 @@ DeviceStateRegistry::DeviceStateRegistry(ProcessNVGPU &gpu) {
 }
 
 void DeviceStateRegistry::BatchUpdate(
+    uint32_t stop_id,
     std::function<void(llvm::StringRef message)> log_to_client_callback) {
+  m_snapshot_stop_id.reset();
   for (DeviceState &device : m_devices)
     device.BatchUpdate(log_to_client_callback);
+  m_snapshot_stop_id = stop_id;
 }
 
 void DeviceStateRegistry::Dump(Stream &s) {

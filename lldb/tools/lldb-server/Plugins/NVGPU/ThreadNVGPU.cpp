@@ -8,6 +8,7 @@
 #include "ThreadNVGPU.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "ProcessNVGPU.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/NVGPU/ThreadName.h"
 
 using namespace lldb_private;
@@ -31,10 +32,14 @@ std::string ThreadNVGPU::GetName() {
   if (!m_thread_state)
     return "Invalid thread";
 
-  const ThreadIdx &thread_idx = m_thread_state->GetThreadIdx();
-  const BlockIdx &block_idx = m_thread_state->GetWarpState().GetBlockIdx();
-  return nvgpu::FormatThreadName(block_idx.x, block_idx.y, block_idx.z,
-                                 thread_idx.x, thread_idx.y, thread_idx.z);
+  const WarpState &warp_state = m_thread_state->GetWarpState();
+  const std::optional<ThreadIdx> &thread_idx = m_thread_state->GetThreadIdx();
+  const std::optional<BlockIdx> &block_idx = warp_state.GetBlockIdx();
+  if (!thread_idx || !block_idx)
+    return "CUDA thread coordinates unavailable";
+
+  return nvgpu::FormatThreadName(block_idx->x, block_idx->y, block_idx->z,
+                                 thread_idx->x, thread_idx->y, thread_idx->z);
 }
 
 lldb::StateType ThreadNVGPU::GetState() { return m_state; }
@@ -44,6 +49,18 @@ bool ThreadNVGPU::GetStopReason(ThreadStopInfo &stop_info,
   stop_info = m_stop_info;
   description = m_stop_description;
   return true;
+}
+
+std::optional<llvm::json::Value>
+ThreadNVGPU::GetExtendedInfo(const llvm::json::Value &) {
+  std::optional<nvgpu::ThreadCoords> coords = GetCurrentThreadCoords();
+  // An engaged empty object advertises jThreadExtendedInfo support while the
+  // fallback thread has no device snapshot during initialization.
+  if (!coords)
+    return llvm::json::Value(llvm::json::Object{});
+
+  return llvm::json::Value(
+      llvm::json::Object{{"cuda", nvgpu::toJSON(*coords)}});
 }
 
 lldb::StopReason ThreadNVGPU::GetStopReason() const {
@@ -56,6 +73,17 @@ ProcessNVGPU &ThreadNVGPU::GetGPU() {
 
 const ProcessNVGPU &ThreadNVGPU::GetGPU() const {
   return static_cast<const ProcessNVGPU &>(m_process);
+}
+
+std::optional<nvgpu::ThreadCoords> ThreadNVGPU::GetCurrentThreadCoords() const {
+  if (!GetGPU().IsDeviceStateCurrent())
+    return std::nullopt;
+
+  const ThreadState *thread_state = GetThreadState();
+  if (!thread_state || !thread_state->IsValid())
+    return std::nullopt;
+
+  return thread_state->GetThreadCoords();
 }
 
 void ThreadNVGPU::SetStoppedBySignal(int signo) {

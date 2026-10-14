@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CudbgEntryParser.h"
+#include "SectionUtils.h"
 
 #include "llvm/Support/Error.h"
 
@@ -21,6 +22,7 @@ llvm::Expected<DeviceEntry> DeviceEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated device table entry");
   DeviceEntry out{};
+  out.encoded_size = entry_size;
   out.devName = data.GetU64(offset_ptr);
   out.devType = data.GetU64(offset_ptr);
   out.smType = data.GetU64(offset_ptr);
@@ -65,6 +67,7 @@ llvm::Expected<SMEntry> SMEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated SM table entry");
   SMEntry out{};
+  out.encoded_size = entry_size;
   out.smId = data.GetU32(offset_ptr);
   out.padding0 = data.GetU32(offset_ptr);
   // Since CUDA driver r555.
@@ -86,6 +89,7 @@ llvm::Expected<GridEntry> GridEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated grid table entry");
   GridEntry out{};
+  out.encoded_size = entry_size;
   out.gridId64 = data.GetU64(offset_ptr);
   out.contextId = data.GetU64(offset_ptr);
   out.function = data.GetU64(offset_ptr);
@@ -125,6 +129,7 @@ llvm::Expected<CTAEntry> CTAEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated CTA table entry");
   CTAEntry out{};
+  out.encoded_size = entry_size;
   out.gridId64 = data.GetU64(offset_ptr);
   out.blockIdxX = data.GetU32(offset_ptr);
   out.blockIdxY = data.GetU32(offset_ptr);
@@ -142,12 +147,38 @@ llvm::Expected<CTAEntry> CTAEntry::Decode(const DataExtractor &data,
   return out;
 }
 
+llvm::Expected<GridLookupResult>
+FindGridByID(SectionSP device_section_sp, uint64_t grid_id, ObjectFile *core) {
+  if (!device_section_sp)
+    return llvm::createStringError("no device section for grid lookup");
+  if (!core)
+    return llvm::createStringError("no core object file for grid lookup");
+
+  Log *log = GetLog(LLDBLog::Process);
+  for (const SectionSP &grid_sp :
+       FindChildrenByType(*device_section_sp, eSectionTypeNVGPUGrid)) {
+    llvm::Expected<GridEntry> grid_or = ReadAndDecode<GridEntry>(grid_sp, core);
+    if (!grid_or) {
+      LLDB_LOG_ERROR(log, grid_or.takeError(),
+                     "grid lookup: skipping malformed row {1}: {0}",
+                     grid_sp->GetName());
+      continue;
+    }
+    if (grid_or->gridId64 == grid_id)
+      return GridLookupResult{grid_sp, std::move(*grid_or)};
+  }
+
+  return llvm::createStringError(
+      llvm::formatv("no grid section matched grid ID {0}", grid_id).str());
+}
+
 llvm::Expected<WarpEntry> WarpEntry::Decode(const DataExtractor &data,
                                             offset_t *offset_ptr,
                                             uint64_t entry_size) {
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated warp table entry");
   WarpEntry out{};
+  out.encoded_size = entry_size;
   out.errorPC = data.GetU64(offset_ptr);
   out.warpId = data.GetU32(offset_ptr);
   out.validLanesMask = data.GetU32(offset_ptr);
@@ -179,6 +210,7 @@ llvm::Expected<LaneEntry> LaneEntry::Decode(const DataExtractor &data,
   if (!data.ValidOffsetForDataOfSize(*offset_ptr, entry_size))
     return llvm::createStringError("truncated lane table entry");
   LaneEntry out{};
+  out.encoded_size = entry_size;
   out.virtualPC = data.GetU64(offset_ptr);
   out.physPC = data.GetU64(offset_ptr);
   out.ln = data.GetU32(offset_ptr);
@@ -245,51 +277,6 @@ std::string FormatThreadName(const CTAEntry &cta, const LaneEntry &lane) {
   return nvgpu::FormatThreadName(cta.blockIdxX, cta.blockIdxY, cta.blockIdxZ,
                                  lane.threadIdxX, lane.threadIdxY,
                                  lane.threadIdxZ);
-}
-
-std::optional<StopAttribution>
-ComputeStopAttribution(const LaneEntry &lane, uint32_t lane_idx,
-                       lldb::SectionSP warp_section_sp,
-                       lldb::SectionSP sm_section_sp, ObjectFile *core) {
-  if (lane.exception != 0)
-    return StopAttribution{lane.exception, false, ""};
-
-  Log *log = GetLog(LLDBLog::Process);
-  llvm::Expected<WarpEntry> warp_or =
-      ReadAndDecode<WarpEntry>(warp_section_sp, core);
-  if (!warp_or) {
-    std::string err =
-        llvm::formatv("failed to decode GPU warp data for lane {0}: {1}",
-                      lane_idx, llvm::toString(warp_or.takeError()))
-            .str();
-    LLDB_LOG(log, "{0}", err);
-    return StopAttribution{0, false, std::move(err)};
-  }
-
-  // The SDK has no `CUDBG_EXCEPTION_TRAP`; an inline trap surfaces as
-  // `isWarpBroken`. Gate by active lane so unrelated lanes on the same
-  // warp don't claim the trap.
-  const bool at_trap = warp_or->isWarpBroken && warp_or->IsLaneActive(lane_idx);
-
-  uint32_t attributed_exception = 0;
-  std::string decode_error;
-  if (warp_or->errorPCValid && warp_or->IsLaneActive(lane_idx)) {
-    llvm::Expected<SMEntry> sm_or = ReadAndDecode<SMEntry>(sm_section_sp, core);
-    if (!sm_or) {
-      decode_error =
-          llvm::formatv("failed to decode GPU SM data for lane {0}: {1}",
-                        lane_idx, llvm::toString(sm_or.takeError()))
-              .str();
-      LLDB_LOG(log, "{0}", decode_error);
-    } else {
-      attributed_exception = sm_or->exception;
-    }
-  }
-
-  if (attributed_exception == 0 && !at_trap && decode_error.empty())
-    return std::nullopt;
-  return StopAttribution{attributed_exception, at_trap,
-                         std::move(decode_error)};
 }
 
 } // namespace lldb_private::nvgpu_core
