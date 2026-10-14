@@ -13,7 +13,9 @@
 #include "RegisterContextNVGPU.h"
 #include "forward-declarations.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/lldb-private-forward.h"
+#include <optional>
 #include <string>
 
 namespace lldb_private::lldb_server {
@@ -31,6 +33,9 @@ public:
 
   bool GetStopReason(ThreadStopInfo &stop_info,
                      std::string &description) override;
+
+  std::optional<llvm::json::Value>
+  GetExtendedInfo(const llvm::json::Value &args) override;
 
   RegisterContextNVGPU &GetRegisterContext() override { return m_reg_context; }
 
@@ -60,6 +65,10 @@ public:
   /// \return the ThreadState object associated with this thread. It might be
   /// null.
   const ThreadState *GetThreadState() const { return m_thread_state; }
+
+  /// Return the current coordinates when the device snapshot and thread state
+  /// are valid.
+  std::optional<nvgpu::ThreadCoords> GetCurrentThreadCoords() const;
 
   /// Change the state of this thread and update its stop info accordingly.
   void SetStoppedByDynamicLoader();

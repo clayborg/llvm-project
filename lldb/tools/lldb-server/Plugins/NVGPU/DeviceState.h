@@ -12,6 +12,7 @@
 #include "../Utils/Bitset.h"
 #include "ThreadNVGPU.h"
 #include "cudadebugger.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/Stream.h"
 #include <functional>
 #include <optional>
@@ -21,55 +22,8 @@
 
 namespace lldb_private::lldb_server {
 
-/// This struct represents the coordinates of a warp in a GPU.
-struct WarpCoords {
-  int64_t dev_id;
-  int64_t sm_id;
-  int64_t warp_id;
-
-  WarpCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id)
-      : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id) {}
-};
-
-/// This struct represents the physical coordinates of a HW thread in a GPU.
-struct ThreadCoords {
-  int64_t dev_id;
-  int64_t sm_id;
-  int64_t warp_id;
-  int64_t thread_id;
-
-  ThreadCoords(int64_t dev_id, int64_t sm_id, int64_t warp_id,
-               int64_t thread_id)
-      : dev_id(dev_id), sm_id(sm_id), warp_id(warp_id), thread_id(thread_id) {}
-
-  /// \return
-  ///     A corresponding warp coordinates structure.
-  WarpCoords GetWarpCoords() const {
-    return WarpCoords(dev_id, sm_id, warp_id);
-  }
-
-  /// \return
-  //    A string representation of the coordinates used for logging.
-  std::string Dump() const;
-};
-
-/// A 3D index object.
-struct Index3D {
-  uint32_t x;
-  uint32_t y;
-  uint32_t z;
-
-  Index3D(uint32_t x, uint32_t y, uint32_t z) : x(x), y(y), z(z) {}
-
-  Index3D(const CuDim3 &dim3) : x(dim3.x), y(dim3.y), z(dim3.z) {}
-
-  Index3D() : x(0), y(0), z(0) {}
-
-  const CuDim3 &ToCuDim3() const { return *(const CuDim3 *)(this); }
-};
-
-using ThreadIdx = Index3D;
-using BlockIdx = Index3D;
+using ThreadIdx = nvgpu::Dim3u;
+using BlockIdx = nvgpu::Dim3u;
 
 /// Represents the state of a single CUDA thread.
 class ThreadState {
@@ -78,10 +32,10 @@ public:
   ///
   /// \param[in] gpu
   ///     The GPU that this thread state belongs to.
-  /// \param[in] thread_coords
-  ///     This physical coordinates won't change for the lifetime of this
+  /// \param[in] physical
+  ///     These physical coordinates won't change for the lifetime of this
   ///     object.
-  ThreadState(ProcessNVGPU &gpu, const ThreadCoords &thread_coords,
+  ThreadState(ProcessNVGPU &gpu, nvgpu::PhysicalCoords physical,
               WarpState &warp_state);
 
   /// Non-copyable.
@@ -133,12 +87,26 @@ public:
   void Dump(Stream &s);
 
   /// \return
-  ///     A reference to the physical coordinates structure.
-  const ThreadCoords &GetCoords() const { return m_thread_coords; }
+  ///     A reference to the immutable physical coordinates.
+  const nvgpu::PhysicalCoords &GetPhysicalCoords() const {
+    return m_physical_coords;
+  }
 
   /// \return
-  ///     A reference to the 3D thread index.
-  const ThreadIdx &GetThreadIdx() const { return m_thread_idx; }
+  ///     The 3D thread index, or nullopt if it is unknown.
+  const std::optional<ThreadIdx> &GetThreadIdx() const { return m_thread_idx; }
+
+  /// \return
+  ///     A snapshot of the currently available CUDA thread coordinates.
+  nvgpu::ThreadCoords GetThreadCoords() const;
+
+  /// \return
+  ///     Whether this thread is in the active thread set, or nullopt if it is
+  ///     unknown.
+  std::optional<bool> IsActive() const { return m_is_active; }
+
+  /// Set whether this thread is in the active thread set.
+  void SetIsActive(bool is_active) { m_is_active = is_active; }
 
   /// \return
   ///     Exception information of this thread, or nullptr if no exception
@@ -165,8 +133,8 @@ private:
   /// Whether this thread is valid in the GPU.
   bool m_is_valid = false;
 
-  /// Whether this thread is in the active thread set.
-  bool m_is_active = false;
+  /// Whether this thread is in the active thread set, if known.
+  std::optional<bool> m_is_active;
 
   /// The program counter value for this thread.
   uint64_t m_pc = 0;
@@ -174,11 +142,11 @@ private:
   /// Exception information if the parent warp encountered an exception.
   const ExceptionInfo *m_exception = nullptr;
 
-  /// The 3D thread index within the thread block.
-  ThreadIdx m_thread_idx;
+  /// The 3D thread index within the thread block, if known.
+  std::optional<ThreadIdx> m_thread_idx;
 
-  /// The physical coordinates of this thread on the device.
-  ThreadCoords m_thread_coords;
+  /// The immutable physical coordinates of this thread on the device.
+  const nvgpu::PhysicalCoords m_physical_coords;
 
   /// The ThreadNVGPU object associated with this thread. This object is the
   /// interface LLGS wants to interact with.
@@ -262,7 +230,7 @@ public:
   ///
   /// \return
   ///     The number of regular registers currently used by this warp.
-  size_t GetCurrentNumRegularRegisters();
+  std::optional<uint32_t> GetCurrentNumRegularRegisters();
 
   /// Get the registers for this warp. The result is cached until the warp state
   /// changes.
@@ -271,7 +239,16 @@ public:
   ///     A reference to the registers for this warp.
   const WarpSharedRegisterCache &GetRegisters();
 
-  const BlockIdx &GetBlockIdx() const { return m_block_idx; }
+  const std::optional<BlockIdx> &GetBlockIdx() const {
+    return m_logical_coords.block_idx;
+  }
+
+  /// \return
+  ///     The logical coordinates shared by threads in this warp. The thread
+  ///     index is always disengaged.
+  const nvgpu::LogicalCoords &GetLogicalCoords() const {
+    return m_logical_coords;
+  }
 
   /// \return
   ///     A reference to the streaming multiprocessor state that this warp
@@ -279,15 +256,17 @@ public:
   SMState &GetSMState() const { return *m_sm_state; }
 
   /// \return
-  ///     The warp coordinates of this warp.
-  WarpCoords GetWarpCoords() const {
-    // We use the first thread in the warp to get the warp coordinates.
-    return m_threads[0].GetCoords().GetWarpCoords();
+  ///     The immutable physical coordinates of this warp. The lane is always
+  ///     disengaged.
+  const nvgpu::PhysicalCoords &GetPhysicalCoords() const {
+    return m_physical_coords;
   }
 
   /// \return
-  ///     The grid ID for this warp.
-  uint64_t GetGridId() const { return m_grid_id; }
+  ///     The grid ID for this warp, or nullopt if it is unknown.
+  const std::optional<uint64_t> &GetGridId() const {
+    return m_logical_coords.grid_id;
+  }
 
 private:
   /// Whether this warp is valid in the GPU.
@@ -304,19 +283,20 @@ private:
   std::optional<uint32_t> m_current_num_regular_registers;
 
   /// The registers shared by all threads in this warp.
-  WarpSharedRegisterCache m_shared_registers;
+  WarpSharedRegisterCache m_shared_registers{};
 
   /// Whether the registers for this warp have been calculated.
   bool m_regs_calculated = false;
 
-  /// The block index for this warp.
-  BlockIdx m_block_idx;
+  /// Logical coordinates shared by threads in this warp. The thread index is
+  /// always disengaged.
+  nvgpu::LogicalCoords m_logical_coords;
+
+  /// The immutable physical coordinates of this warp on the device.
+  const nvgpu::PhysicalCoords m_physical_coords;
 
   /// The streaming multiprocessor state that this warp belongs to.
   SMState *m_sm_state;
-
-  /// The grid ID for this warp.
-  uint64_t m_grid_id;
 };
 
 /// Represents the state of a CUDA Streaming Multiprocessor (SM).
@@ -559,9 +539,21 @@ public:
   ///     The GPU that this device state registry belongs to.
   DeviceStateRegistry(ProcessNVGPU &gpu);
 
-  /// Update state information for all registered devices.
+  /// Update state information for all registered devices and associate the
+  /// complete snapshot with \p stop_id.
+  ///
+  /// The snapshot is invalid while any device is being updated.
+  ///
+  /// \param[in] stop_id
+  ///     The process stop ID that owns the completed snapshot.
   void BatchUpdate(
+      uint32_t stop_id,
       std::function<void(llvm::StringRef message)> log_to_client_callback);
+
+  /// Return whether the cached device snapshot belongs to \p stop_id.
+  bool HasSnapshotForStopID(uint32_t stop_id) const {
+    return m_snapshot_stop_id == stop_id;
+  }
 
   /// Output registry state information to a stream for debugging.
   void Dump(Stream &s);
@@ -592,6 +584,9 @@ public:
 private:
   /// Collection of device states for all CUDA devices in the system.
   std::vector<DeviceState> m_devices;
+
+  /// The process stop that owns the complete cached device snapshot.
+  std::optional<uint32_t> m_snapshot_stop_id;
 };
 
 } // namespace lldb_private::lldb_server
