@@ -1,3 +1,5 @@
+import json
+
 import lldb
 from lldbsuite.test import lldbutil
 from lldbsuite.test.lldbtest import line_number
@@ -6,6 +8,13 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 class TestNVGPUBreakpoints(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
+
+    def get_cuda_info(self, thread):
+        self.runCmd(f"thread info -j {thread.GetIndexID()}")
+        output = self.res.GetOutput()
+        json_start = output.find("{")
+        self.assertNotEqual(json_start, -1, output)
+        return json.loads(output[json_start:])["cuda"]
 
     def test_before_kernel_launch(self):
         """Test that we can set a breakpoint before the kernel launch."""
@@ -29,6 +38,12 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
         self.select_gpu()
+        tracked_thread = self.find_thread_by_name(
+            "blockIdx(x=0 y=0 z=0) threadIdx(x=1 y=0 z=0)"
+        )
+        tid = tracked_thread.GetThreadID()
+        first_snapshot = self.get_cuda_info(tracked_thread)
+        self.assertIs(first_snapshot["is_active"], True)
 
         # Use `thread list -v` to opt out of the GPU-specific aggregation so
         # each (blockIdx, threadIdx) row is rendered separately. This lets us
@@ -47,6 +62,21 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
         self.dbg.SetAsync(False)
         self.select_gpu()
         self.gpu_process.Continue()
+
+        tracked_thread = self.gpu_process.GetThreadByID(tid)
+        self.assertTrue(tracked_thread.IsValid())
+        second_snapshot = self.get_cuda_info(tracked_thread)
+
+        # The first breakpoint is unconditional, while the second is inside
+        # `threadIdx.x == 0`. Track lane 1 by TID across the stops. A stale
+        # extended-info response would incorrectly leave this lane active.
+        self.assertIs(second_snapshot["is_active"], False)
+        stable_fields = ("device", "sm", "warp", "lane", "block_idx", "thread_idx")
+        self.assertEqual(
+            tuple(first_snapshot[field] for field in stable_fields),
+            tuple(second_snapshot[field] for field in stable_fields),
+        )
+
         self.expect(
             "thread list -v",
             substrs=[
