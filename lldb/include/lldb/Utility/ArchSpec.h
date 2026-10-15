@@ -310,6 +310,12 @@ public:
     eCore_nvidia_nvptx,
     eCore_nvidia_nvptx64,
 
+    eCore_intel_gpu_xe_HP,
+    eCore_intel_gpu_xe_HPG,
+    eCore_intel_gpu_xe_HPC,
+    eCore_intel_gpu_xe_XE2,
+    eCore_intel_gpu_xe_unknown,  ///< Intel GPU (XE/Arc family, EM_INTELGT=205)
+
     kNumCores,
 
     kCore_invalid,

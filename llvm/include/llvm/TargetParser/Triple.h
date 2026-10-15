@@ -75,6 +75,7 @@ public:
     ppc64le,     // PPC64LE: powerpc64le
     r600,        // R600: AMD GPUs HD2XXX - HD6XXX
     amdgcn,      // AMDGCN: AMD GCN GPUs
+    intelgt,     // Intel GT GPUs
     riscv32,     // RISC-V (32-bit, little endian): riscv32
     riscv64,     // RISC-V (64-bit, little endian): riscv64
     riscv32be,   // RISC-V (32-bit, big endian): riscv32be
@@ -229,6 +230,7 @@ public:
     CUDA,   // NVIDIA CUDA
     NVCL,   // NVIDIA OpenCL
     AMDHSA, // AMD HSA Runtime
+    LevelZero, // Intel Level Zero GPU runtime
     PS4,
     PS5,
     ELFIAMCU,
@@ -927,6 +929,9 @@ public:
   bool isAMDGCN() const { return getArch() == Triple::amdgcn; }
 
   bool isAMDGPU() const { return getArch() == Triple::r600 || isAMDGCN(); }
+
+  /// Tests whether the target is Intel GPU
+  bool isIntelGPU() const { return getArch() == Triple::intelgt; }
 
   /// Tests whether the target is Thumb (little and big endian).
   bool isThumb() const {

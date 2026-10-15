@@ -42,6 +42,7 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
   case hexagon:        return "hexagon";
   case hsail64:        return "hsail64";
   case hsail:          return "hsail";
+  case intelgt:        return "intelgt";
   case kalimba:        return "kalimba";
   case lanai:          return "lanai";
   case loongarch32:    return "loongarch32";
@@ -236,6 +237,8 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
   case spirv32:
   case spirv64:     return "spv";
 
+  case intelgt:     return "intel";
+
   case kalimba:     return "kalimba";
   case lanai:       return "lanai";
   case shave:       return "shave";
@@ -306,6 +309,7 @@ StringRef Triple::getOSTypeName(OSType Kind) {
   case HermitCore: return "hermit";
   case Hurd: return "hurd";
   case IOS: return "ios";
+  case LevelZero: return "levelzero";
   case KFreeBSD: return "kfreebsd";
   case Linux: return "linux";
   case Lv2: return "lv2";
@@ -497,6 +501,7 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
       .Case("spirv", spirv)
       .Case("spirv32", spirv32)
       .Case("spirv64", spirv64)
+      .Case("intelgt", intelgt)
       .Case("kalimba", kalimba)
       .Case("lanai", lanai)
       .Case("shave", shave)
@@ -645,6 +650,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
           .Cases({"spirv64", "spirv64v1.0", "spirv64v1.1", "spirv64v1.2",
                   "spirv64v1.3", "spirv64v1.4", "spirv64v1.5", "spirv64v1.6"},
                  Triple::spirv64)
+          .Case("intelgt", Triple::intelgt)
           .StartsWith("kalimba", Triple::kalimba)
           .Case("lanai", Triple::lanai)
           .Case("renderscript32", Triple::renderscript32)
@@ -722,6 +728,7 @@ static Triple::OSType parseOS(StringRef OSName) {
       .StartsWith("cuda", Triple::CUDA)
       .StartsWith("nvcl", Triple::NVCL)
       .StartsWith("amdhsa", Triple::AMDHSA)
+      .StartsWith("levelzero", Triple::LevelZero)
       .StartsWith("ps4", Triple::PS4)
       .StartsWith("ps5", Triple::PS5)
       .StartsWith("elfiamcu", Triple::ELFIAMCU)
@@ -981,6 +988,7 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   case Triple::hexagon:
   case Triple::hsail64:
   case Triple::hsail:
+  case Triple::intelgt:
   case Triple::kalimba:
   case Triple::lanai:
   case Triple::loongarch32:
@@ -1748,6 +1756,7 @@ unsigned Triple::getArchPointerBitWidth(llvm::Triple::ArchType Arch) {
   case llvm::Triple::bpfeb:
   case llvm::Triple::bpfel:
   case llvm::Triple::hsail64:
+  case llvm::Triple::intelgt:
   case llvm::Triple::loongarch64:
   case llvm::Triple::mips64:
   case llvm::Triple::mips64el:
@@ -1808,6 +1817,7 @@ Triple Triple::get32BitArchVariant() const {
   case Triple::avr:
   case Triple::bpfeb:
   case Triple::bpfel:
+  case Triple::intelgt:
   case Triple::msp430:
   case Triple::systemz:
   case Triple::ve:
@@ -1913,6 +1923,7 @@ Triple Triple::get64BitArchVariant() const {
   case Triple::bpfeb:
   case Triple::bpfel:
   case Triple::hsail64:
+  case Triple::intelgt:
   case Triple::loongarch64:
   case Triple::mips64:
   case Triple::mips64el:
@@ -1981,6 +1992,7 @@ Triple Triple::getBigEndianArchVariant() const {
   case Triple::hexagon:
   case Triple::hsail64:
   case Triple::hsail:
+  case Triple::intelgt:
   case Triple::kalimba:
   case Triple::loongarch32:
   case Triple::loongarch64:
@@ -2094,6 +2106,7 @@ bool Triple::isLittleEndian() const {
   case Triple::hexagon:
   case Triple::hsail64:
   case Triple::hsail:
+  case Triple::intelgt:
   case Triple::kalimba:
   case Triple::loongarch32:
   case Triple::loongarch64:

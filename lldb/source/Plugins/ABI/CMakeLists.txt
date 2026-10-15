@@ -9,3 +9,6 @@ foreach(target AArch64 ARM ARC Hexagon LoongArch Mips MSP430 PowerPC RISCV Syste
     add_subdirectory(${target})
   endif()
 endforeach()
+
+# IntelGT is not an LLVM target, add it separately
+add_subdirectory(IntelGT)
