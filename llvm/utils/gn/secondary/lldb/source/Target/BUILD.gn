@@ -76,6 +76,8 @@ static_library("Target") {
     "SyntheticFrameProvider.cpp",
     "SystemRuntime.cpp",
     "Target.cpp",
+    "TargetGroup.cpp",
+    "TargetGroupList.cpp",
     "TargetList.cpp",
     "Thread.cpp",
     "ThreadCollection.cpp",

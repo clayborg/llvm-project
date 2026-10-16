@@ -13,13 +13,16 @@ add_lldb_unittest(TargetTests
   RemoteAwarePlatformTest.cpp
   StackFrameRecognizerTest.cpp
   SummaryStatisticsTest.cpp
+  TargetGroupTest.cpp
   FindFileTest.cpp
 
   LINK_COMPONENTS
       Support
   LINK_LIBS
+      lldbCommands
       lldbCore
       lldbHost
+      lldbInterpreter
       lldbPluginObjectFileBreakpad
       lldbPluginObjectFileELF
       lldbPluginPlatformLinux
@@ -31,6 +34,7 @@ add_lldb_unittest(TargetTests
       lldbSymbol
       lldbUtility
       lldbUtilityHelpers
+      LLVMTestingSupport
   )
 
 set(test_inputs
