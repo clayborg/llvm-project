@@ -1301,11 +1301,15 @@ DisassemblerLLVMC::MCDisasmInstance::Create(const char *triple_name,
   if (!rel_info_up)
     return Instance();
 
-  std::unique_ptr<llvm::MCSymbolizer> symbolizer_up(
-      curr_target->createMCSymbolizer(
-          triple, nullptr, DisassemblerLLVMC::SymbolLookupCallback, &owner,
-          context_up.get(), std::move(rel_info_up)));
-  disasm_up->setSymbolizer(std::move(symbolizer_up));
+  // AMDGPU's MCSymbolizer reads DisInfo as llvm-objdump's SectionSymbolsTy
+  // rather than handing it to our callback, so it must not receive &owner.
+  if (!triple.isAMDGPU()) {
+    std::unique_ptr<llvm::MCSymbolizer> symbolizer_up(
+        curr_target->createMCSymbolizer(
+            triple, nullptr, DisassemblerLLVMC::SymbolLookupCallback, &owner,
+            context_up.get(), std::move(rel_info_up)));
+    disasm_up->setSymbolizer(std::move(symbolizer_up));
+  }
 
   unsigned asm_printer_variant =
       flavor == ~0U ? asm_info_up->getAssemblerDialect() : flavor;
