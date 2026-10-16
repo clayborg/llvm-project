@@ -41,9 +41,7 @@ public:
   lldb::StateType GetState() override;
 
   bool GetStopReason(ThreadStopInfo &stop_info,
-                     std::string &description) override {
-    return m_wave->GetStopReason(stop_info, description);
-  }
+                     std::string &description) override;
 
   void SetStopReason(lldb::StopReason reason) { m_wave->SetStopReason(reason); }
 
