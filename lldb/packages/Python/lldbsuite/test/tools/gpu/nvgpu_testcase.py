@@ -3,12 +3,30 @@ from typing import Any, Callable, List, Optional
 
 import lldb
 from lldbsuite.test import lldbutil
+from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 
 # A stop matcher receives the stopped GPU process and returns what the caller
 # wants from that stop (a thread, a list of threads, ...) or None when the stop
 # is not the one expected. Return None, not an empty list, for "no match".
 StopMatcher = Callable[[lldb.SBProcess], Optional[Any]]
+
+
+def _with_gpu_check(setup):
+    """Wrap a test's setUp. A test that needs a GPU is skipped before setUp
+    runs, on a machine that cannot run a CUDA program, so that the base setUp
+    does not delete the build directory of the last run. After setUp, it fails
+    if the configured nvcc cannot build for this machine's GPUs."""
+
+    def checked_setUp(self):
+        needs_gpu = nvgpu_decorators.needs_gpu(self)
+        if needs_gpu:
+            self.skip_without_gpu()
+        setup(self)
+        if needs_gpu:
+            self.fail_on_unusable_nvcc()
+
+    return checked_setUp
 
 
 class NVGPUTestCaseBase(GpuTestCaseBase):
@@ -47,6 +65,38 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     # NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1. Once the plugin stops the CPU on a
     # GPU stop, continue_gpu_until must resume the CPU (or drain its stop event)
     # before resuming the GPU.
+
+    # Tests on this base class debug a live CUDA program, so they need a GPU.
+    # NVGPUCoreTestBase sets this to False. A test class can set it too, and
+    # @skipUnlessNVGPUDevice from nvgpu_decorators marks one method of a class
+    # that needs no GPU.
+    NEEDS_GPU = True
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Many LLDB tests define setUp and call TestBase.setUp(self) directly,
+        # which would bypass the check in setUp below, so wrap theirs too.
+        if "setUp" in cls.__dict__:
+            cls.setUp = _with_gpu_check(cls.__dict__["setUp"])
+
+    @_with_gpu_check
+    def setUp(self):
+        super().setUp()
+
+    def skip_without_gpu(self):
+        """Skip this test on a machine that cannot run a CUDA program on a
+        GPU, and on a remote platform."""
+        reason = nvgpu_decorators.device_skip_reason()
+        if reason:
+            self.skipTest(reason)
+
+    def fail_on_unusable_nvcc(self):
+        """Fail this test if the configured nvcc cannot build a CUDA program for
+        this machine's GPUs: a misconfigured machine must not look like one
+        without a GPU."""
+        error = nvgpu_decorators.nvcc_error()
+        if error:
+            self.fail(error)
 
     def killCPUOnTeardown(self):
         # TestBase.tearDown deletes all targets (and kills their processes)

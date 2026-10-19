@@ -184,6 +184,29 @@ Running the tests
   # Now you can run the tests
   ./bin/llvm-lit ../llvm-project/lldb/test/API/gpu/nvidia/ -a -v
 
+lit prints the GPUs it finds in a ``nvgpu:`` note. Where the tests that need a
+GPU cannot run (no GPU or driver, or a driver of another CUDA major), they are
+reported UNSUPPORTED, and ``-a`` shows why. They run only on the machine that
+runs lit, so they are also UNSUPPORTED on a remote platform
+(``LLDB_TEST_PLATFORM_URL``). If the configured nvcc
+(``NVGPU_NVCC_PATH``) cannot build for the machine's GPUs, those tests fail
+instead. ``--param nvgpu-no-device`` hides the GPUs, to run on a GPU machine
+what a machine without one would.
+
+Writing GPU tests
+^^^^^^^^^^^^^^^^^
+
+A test that debugs a live CUDA program, or makes a core file by running one,
+needs a GPU and is skipped on a machine that cannot run it. A test that only
+reads core files or other files from disk needs no GPU and runs anywhere. The
+test base classes in ``lldbsuite.test.tools.gpu`` apply this by default; its
+``nvgpu_decorators`` module describes how to mark a test that differs.
+
+A test that needs no GPU but builds a CUDA program sets the GPU architecture in
+its Makefile, for example ``NVCC_ARCHFLAGS := -arch=sm_80``. The default,
+``-arch=native``, builds for the GPUs of the machine that runs the test, so the
+program would differ from one machine to the next.
+
 Running the tests under AddressSanitizer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
