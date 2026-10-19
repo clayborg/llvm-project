@@ -3,11 +3,15 @@ import re
 import lldb
 from lldbsuite.test import lldbutil
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.gpu.nvgpu_decorators import skipUnlessNVGPUDevice
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUDisass(NVGPUTestCaseBase):
     NO_DEBUG_INFO_TESTCASE = True
+    # These tests disassemble cubins from disk; only the method marked
+    # @skipUnlessNVGPUDevice runs a program on the GPU.
+    NEEDS_GPU = False
 
     # Start of acosf in elfv8.cubin.
     ELFV8_ACOSF = 0x00007FFFCF280300
@@ -135,6 +139,7 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
                 code[offset : offset + self.SASS_INSTRUCTION_SIZE],
             )
 
+    @skipUnlessNVGPUDevice
     def test_disass_live_program(self):
         """Disassemble at a live GPU assert. The stop shows
         `stop-disassembly-count` instructions from the PC, and
