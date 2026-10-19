@@ -326,15 +326,18 @@ void DeviceState::DecodeDeviceInfoBuffer(
   }
 
   for (uint32_t sm_index = 0; sm_index < m_num_sms; ++sm_index) {
-    bool is_active = m_sm_active_mask[sm_index];
-    m_sms[sm_index].SetIsActive(is_active);
-    if (!is_active)
-      continue;
-
+    // An SM the response does not update keeps its state, active or not. The
+    // driver leaves such an SM out of the active mask too, so taking the mask
+    // as is would drop every unchanged SM's threads.
     bool is_updated =
         sm_update_mask.has_value() ? sm_update_mask->Get(sm_index) : true;
-    LLDB_LOGV(log, "SM {} is updated: {}", sm_index, is_updated);
-    if (is_updated)
+    if (!is_updated)
+      continue;
+
+    bool is_active = m_sm_active_mask[sm_index];
+    m_sms[sm_index].SetIsActive(is_active);
+    LLDB_LOGV(log, "SM {} is updated, active: {}", sm_index, is_active);
+    if (is_active)
       buffer_offset += m_sms[sm_index].DecodeSMInfoBuffer(
           buffer + buffer_offset, device_info, m_device_info_sizes,
           [this](uint64_t grid_id) -> const CUDBGGridInfo & {
