@@ -97,15 +97,22 @@ TEST(AMDGPUDisassembler, SymbolLookupCallback) {
   if (!DCR)
     GTEST_SKIP();
 
-  uint8_t Bytes[] = {0x00, 0x00, 0x82, 0xbf}; // s_branch 0
+  ASSERT_NE(LLVMSetDisasmOptions(DCR, LLVMDisassembler_Option_SetInstrComments),
+            0);
+
+  uint8_t Bytes[] = {0xf0, 0xff, 0x82, 0xbf}; // s_branch 0xfff0
+  constexpr uint64_t PC = 0x7d5210317ffc;
   char OutString[100];
-  size_t InstSize = LLVMDisasmInstruction(DCR, Bytes, sizeof(Bytes), 0,
+  size_t InstSize = LLVMDisasmInstruction(DCR, Bytes, sizeof(Bytes), PC,
                                           OutString, sizeof(OutString));
 
   EXPECT_EQ(InstSize, 4U);
   EXPECT_EQ(Recorder.NumCalls, 1U);
-  EXPECT_EQ(Recorder.ReferenceValue, 4U);
-  EXPECT_EQ(Recorder.ReferencePC, 0U);
+  EXPECT_EQ(Recorder.ReferenceValue, 0x7d5210317fc0U);
+  EXPECT_EQ(Recorder.ReferencePC, PC);
+  StringRef Output(OutString);
+  EXPECT_TRUE(Output.starts_with("\ts_branch 65520"));
+  EXPECT_TRUE(Output.contains("0x7d5210317fc0"));
 
   LLVMDisasmDispose(DCR);
 }
