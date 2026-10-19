@@ -10,6 +10,10 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 class NVGPUCoreTestBase(NVGPUTestCaseBase):
     """Base class for NVGPU core file tests with automated core generation."""
 
+    # Reading a core file needs no GPU. Making one does: generate_core skips
+    # the test on a machine that cannot run the program.
+    NEEDS_GPU = False
+
     def setUp(self):
         NVGPUTestCaseBase.setUp(self)
         self._generated_cores = {}
@@ -23,8 +27,14 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
                 binary (e.g. to select which exception the kernel triggers).
 
         Core files are cached by (flags, args) for the duration of the test
-        method.
+        method. The core comes from running the test program on the GPU, so
+        on a machine that cannot run it the test is skipped, with the reason,
+        and with an nvcc that cannot build for its GPUs the test fails.
         """
+        # Decided from the machine alone, before anything is built or run.
+        self.skip_without_gpu()
+        self.fail_on_unusable_nvcc()
+
         args = list(args) if args else []
         cache_key = (flags, tuple(args))
         if cache_key in self._generated_cores:
@@ -54,9 +64,10 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         except FileNotFoundError:
             pass
 
-        # Nothing here is a skip. Whether this test may run at all (device,
-        # driver, nvcc) was decided before it started, so every problem from
-        # here on is a real failure and must surface as one. A program that
+        # Nothing here is a skip. Whether this machine can run the program at
+        # all (device, driver, nvcc) was decided at the top of this method or
+        # before the test started, so every problem from here on is a real
+        # failure and must surface as one. A program that
         # cannot be started after a successful build points at a broken
         # artifact path or build rule. A program that runs past the timeout
         # either never faults (an exception_type with no switch case spins
