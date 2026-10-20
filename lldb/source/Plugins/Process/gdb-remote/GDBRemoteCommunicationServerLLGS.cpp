@@ -4018,8 +4018,12 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginSymbols(
 
   for (auto &plugin_up : m_plugins) {
     if (plugin_up->GetPluginName() == args->plugin_name) {
-      plugin_up->SetRequestedSymbols(args->symbol_values);
-      return SendOKResponse();
+      GPUPluginSymbolsResponse symbols_response;
+      symbols_response.actions =
+          plugin_up->SetRequestedSymbols(args->symbol_values);
+      StreamGDBRemote response;
+      response.PutAsJSON(symbols_response, /*hex_ascii=*/false);
+      return SendPacketNoLock(response.GetString());
     }
   }
   return SendErrorResponse(Status::FromErrorString("Invalid plugin name."));

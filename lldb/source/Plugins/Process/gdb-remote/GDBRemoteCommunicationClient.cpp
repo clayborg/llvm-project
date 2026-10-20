@@ -690,23 +690,34 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions() {
   return std::nullopt;
 }
 
-Status
+std::optional<GPUPluginSymbolsResponse>
 GDBRemoteCommunicationClient::SendGPUSymbols(const GPUPluginSymbolsArgs &args) {
-  if (m_supports_gpu_plugins == eLazyBoolYes) {
-    StreamGDBRemote packet;
-    StringExtractorGDBRemote response;
-    packet.PutCString("jGPUPluginSymbols:");
-    packet.PutAsJSON(args, /*hex_ascii=*/false);
-    if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
-        PacketResult::Success) {
-      if (response.IsUnsupportedResponse())
-        return Status::FromErrorString("jGPUPluginSymbols is not supported");
-      if (response.IsErrorResponse())
-        return Status::FromErrorString(response.GetStatus().AsCString());
-      return Status();
+  if (m_supports_gpu_plugins != eLazyBoolYes)
+    return std::nullopt;
+  StreamGDBRemote packet;
+  packet.PutCString("jGPUPluginSymbols:");
+  packet.PutAsJSON(args, /*hex_ascii=*/false);
+  StringExtractorGDBRemote response;
+  if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
+      PacketResult::Success) {
+    if (response.IsErrorResponse()) {
+      Debugger::ReportError(response.GetStatus().AsCString());
+      return std::nullopt;
+    }
+    if (llvm::Expected<GPUPluginSymbolsResponse> info =
+            llvm::json::parse<GPUPluginSymbolsResponse>(
+                response.Peek(), "GPUPluginSymbolsResponse")) {
+      return *info;
+    } else {
+      // We don't show JSON parsing errors to the user because they won't
+      // make sense to them.
+      llvm::consumeError(info.takeError());
+      Debugger::ReportError(llvm::formatv("malformed jGPUPluginSymbols "
+                                          "response packet. {0}",
+                                          response.GetStringRef()));
     }
   }
-  return Status::FromErrorString("GPU plugins are not supported");
+  return std::nullopt;
 }
 
 std::optional<LLDBSettings>

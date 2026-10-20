@@ -277,9 +277,11 @@ struct GPUActions {
   /// for it to return to a running state.
   bool wait_for_gpu_process_to_resume = false;
   /// If the LLDBServerPlugin needs symbol values, it can request them here.
-  /// A jGPUPluginSymbols packet will deliver the symbol names and values back
-  /// to the LLDBServerPlugin via the GDB remote connection that retuned the
-  /// GPUActions.
+  /// A jGPUPluginSymbols packet delivers the names and values of the symbols
+  /// that have resolved to the LLDBServerPlugin via the CPU GDB remote
+  /// connection. lldb delivers each symbol once: right away if it has
+  /// resolved, otherwise when the module that defines it loads. Requests from
+  /// several GPUActions add to the names lldb is still waiting for.
   std::vector<std::string> symbol_names;
 };
 
@@ -380,6 +382,22 @@ bool fromJSON(const llvm::json::Value &value,
               GPUPluginBreakpointHitResponse &data, llvm::json::Path path);
 
 llvm::json::Value toJSON(const GPUPluginBreakpointHitResponse &data);
+
+///-----------------------------------------------------------------------------
+/// GPUPluginSymbolsResponse
+///
+/// A response structure from the GPU plugin to the symbol values that a
+/// jGPUPluginSymbols packet delivered.
+///-----------------------------------------------------------------------------
+struct GPUPluginSymbolsResponse {
+  /// GPU actions for lldb to perform, if the plugin returned any.
+  std::optional<GPUActions> actions;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginSymbolsResponse &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginSymbolsResponse &data);
 
 struct GPUDynamicLoaderArgs {
   /// The name of the GPU plug-in to retrieve shared library information from.
