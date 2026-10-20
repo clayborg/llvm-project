@@ -83,8 +83,8 @@ uint64_t FileCache::WriteFile(lldb::user_id_t fd, uint64_t offset,
   }
   if (static_cast<uint64_t>(file_up->SeekFromStart(offset, &error)) != offset ||
       error.Fail()) {
-    // [NVIDIA] A pipe cannot seek, so the seek fails on it with ESPIPE. The
-    // offset means nothing there, so write at the pipe's end instead.
+    // A pipe cannot seek, so the seek fails on it with ESPIPE. The offset
+    // means nothing there, so write at the pipe's end instead.
     if (error.GetError() != ESPIPE)
       return UINT64_MAX;
     error.Clear();
