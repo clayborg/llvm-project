@@ -14,6 +14,8 @@
 #include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "ProcessNVGPU.h"
 #include "lldb/Utility/Status.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/Support/Error.h"
 
 namespace lldb_private::lldb_server {
 
@@ -75,9 +77,17 @@ private:
   /// Establishes a communication channel between the debugger client and
   /// the GPU debugging infrastructure.
   ///
+  /// \param[in] before_accept
+  ///     Called once the socket is listening and before the thread that
+  ///     accepts the client starts. That thread cannot be stopped, and it
+  ///     ends lldb-server if no client connects, so a step that can fail
+  ///     after the socket exists belongs here. If it returns an error, no
+  ///     thread is started and the socket is closed.
+  ///
   /// \return
   ///     Expected connection info on success, or error on failure.
-  llvm::Expected<GPUPluginConnectionInfo> CreateConnection();
+  llvm::Expected<GPUPluginConnectionInfo>
+  CreateConnection(llvm::function_ref<llvm::Error()> before_accept);
 
   /// Function used to execute the main loop of the GPU process in an
   /// independent thread.
