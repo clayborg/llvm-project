@@ -870,9 +870,13 @@ bool ProcessGDBRemote::GPUBreakpointHitCallback(
   return process->GPUBreakpointHit(baton, context, break_id, break_loc_id);
 }
 
-static size_t LookupSymbols(Target &target, const ModuleList &modules,
-                            const std::vector<std::string> &symbol_names,
-                            std::vector<SymbolValue> &symbol_values) {
+size_t
+ProcessGDBRemote::LookupSymbols(const ModuleList &modules,
+                                const std::vector<std::string> &symbol_names,
+                                std::vector<SymbolValue> &symbol_values) {
+  // The modules only provide file addresses; the target knows where the
+  // modules are loaded.
+  Target &target = GetTarget();
   const size_t num_symbols = symbol_names.size();
   if (num_symbols > 0) {
     symbol_values.resize(num_symbols);
@@ -908,7 +912,7 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   // to notifying lldb-server.
   GPUPluginBreakpointHitArgs args = *callback_data;
   Target &target = GetTarget();
-  LookupSymbols(target, target.GetImages(), args.breakpoint.symbol_names,
+  LookupSymbols(target.GetImages(), args.breakpoint.symbol_names,
                 args.symbol_values);
   std::optional<GPUPluginBreakpointHitResponse> response =
       m_gdb_comm.GPUBreakpointHit(args);
@@ -938,7 +942,7 @@ void ProcessGDBRemote::DeliverPendingGPUSymbols(const ModuleList &modules) {
   for (auto &entry : m_pending_gpu_symbols) {
     std::vector<std::string> &names = entry.second;
     std::vector<SymbolValue> values;
-    LookupSymbols(GetTarget(), modules, names, values);
+    LookupSymbols(modules, names, values);
     GPUPluginSymbolsArgs args;
     args.plugin_name = entry.first().str();
     std::vector<std::string> unresolved;

@@ -516,6 +516,16 @@ private:
 
   Status HandleGPUActions(const GPUActions &gpu_action);
 
+  /// Look up \a symbol_names in \a modules, and set each entry of
+  /// \a symbol_values to the symbol's name and its load address in this
+  /// process, or to no value if the symbol is not found or not loaded.
+  ///
+  /// \return
+  ///     The number of names looked up.
+  size_t LookupSymbols(const ModuleList &modules,
+                       const std::vector<std::string> &symbol_names,
+                       std::vector<SymbolValue> &symbol_values);
+
   /// Look up the symbols that GPU plug-ins requested and have not received
   /// yet in \a modules, and send each plug-in the ones that have resolved.
   void DeliverPendingGPUSymbols(const ModuleList &modules);
