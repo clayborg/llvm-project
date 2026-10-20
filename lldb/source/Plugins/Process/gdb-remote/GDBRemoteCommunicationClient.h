@@ -440,7 +440,13 @@ public:
 
   std::optional<std::vector<GPUActions>> GetGPUInitializeActions();
 
-  Status SendGPUSymbols(const GPUPluginSymbolsArgs &args);
+  /// Send symbol values to a GPU plug-in.
+  ///
+  /// \return
+  ///     The GPUActions the plug-in returned, std::nullopt if it returned
+  ///     none, or an error if the packet failed.
+  llvm::Expected<std::optional<GPUActions>>
+  SendGPUSymbols(const GPUPluginSymbolsArgs &args);
 
   std::optional<LLDBSettings> GetLLDBSettings();
 

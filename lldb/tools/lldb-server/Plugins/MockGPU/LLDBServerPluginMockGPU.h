@@ -89,7 +89,8 @@ public:
   std::optional<GPUDynamicLoaderResponse> 
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
-  void SetRequestedSymbols(const std::vector<SymbolValue> &symbols) override;
+  std::optional<GPUActions>
+  SetRequestedSymbols(const std::vector<SymbolValue> &symbols) override;
 
 private:
   ProcessMockGPU *GetGPUProcess() const;

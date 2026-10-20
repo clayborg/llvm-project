@@ -934,6 +934,7 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
 void ProcessGDBRemote::DeliverPendingGPUSymbols(const ModuleList &modules) {
   Log *log = GetLog(GDBRLog::Plugin);
   std::vector<std::string> done;
+  std::vector<GPUActions> returned_actions;
   for (auto &entry : m_pending_gpu_symbols) {
     std::vector<std::string> &names = entry.second;
     std::vector<SymbolValue> values;
@@ -949,18 +950,30 @@ void ProcessGDBRemote::DeliverPendingGPUSymbols(const ModuleList &modules) {
     }
     if (args.symbol_values.empty())
       continue;
-    Status error = m_gdb_comm.SendGPUSymbols(args);
-    if (error.Fail())
-      LLDB_LOG(log,
-               "ProcessGDBRemote::DeliverPendingGPUSymbols failed to send "
-               "symbols to plugin '{0}': {1}",
-               args.plugin_name, error.AsCString());
+    llvm::Expected<std::optional<GPUActions>> actions =
+        m_gdb_comm.SendGPUSymbols(args);
+    if (!actions)
+      LLDB_LOG_ERROR(log, actions.takeError(),
+                     "ProcessGDBRemote::DeliverPendingGPUSymbols failed to "
+                     "send symbols to plugin '{1}': {0}",
+                     args.plugin_name);
+    else if (*actions)
+      returned_actions.push_back(std::move(**actions));
     names = std::move(unresolved);
     if (names.empty())
       done.push_back(std::move(args.plugin_name));
   }
   for (const std::string &plugin_name : done)
     m_pending_gpu_symbols.erase(plugin_name);
+
+  // Handle the returned GPUActions only now: if they request symbols,
+  // HandleGPUActions adds to m_pending_gpu_symbols and calls this function
+  // again, which must not happen while the loop above iterates the map.
+  for (const GPUActions &actions : returned_actions)
+    if (Status error = HandleGPUActions(actions); error.Fail())
+      Debugger::ReportError(
+          llvm::formatv("HandleGPUActions failed. Error: {0}\nActions:\n{1}\n",
+                        error.AsCString(), toJSON(actions)));
 }
 
 Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {

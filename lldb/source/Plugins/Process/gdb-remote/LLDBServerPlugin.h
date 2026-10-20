@@ -185,7 +185,14 @@ public:
   /// that have resolved are delivered, and each is delivered once. A symbol
   /// whose module is not loaded yet is delivered later, when that module
   /// loads, so this can be called several times for one request.
-  virtual void SetRequestedSymbols(const std::vector<SymbolValue> &symbols) {}
+  ///
+  /// Return GPUActions to have lldb act on the symbols, for example to set
+  /// breakpoints at them. lldb handles them once it has delivered every
+  /// symbol that resolved, so they can request more symbols.
+  virtual std::optional<GPUActions>
+  SetRequestedSymbols(const std::vector<SymbolValue> &symbols) {
+    return std::nullopt;
+  }
 
 protected:
   std::mutex m_connect_mutex;

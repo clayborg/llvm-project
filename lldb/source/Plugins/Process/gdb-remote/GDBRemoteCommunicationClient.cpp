@@ -690,23 +690,36 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions() {
   return std::nullopt;
 }
 
-Status
+llvm::Expected<std::optional<GPUActions>>
 GDBRemoteCommunicationClient::SendGPUSymbols(const GPUPluginSymbolsArgs &args) {
-  if (m_supports_gpu_plugins == eLazyBoolYes) {
-    StreamGDBRemote packet;
-    StringExtractorGDBRemote response;
-    packet.PutCString("jGPUPluginSymbols:");
-    packet.PutAsJSON(args, /*hex_ascii=*/false);
-    if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
-        PacketResult::Success) {
-      if (response.IsUnsupportedResponse())
-        return Status::FromErrorString("jGPUPluginSymbols is not supported");
-      if (response.IsErrorResponse())
-        return Status::FromErrorString(response.GetStatus().AsCString());
-      return Status();
-    }
+  if (m_supports_gpu_plugins != eLazyBoolYes)
+    return llvm::createStringError("GPU plugins are not supported");
+  StreamGDBRemote packet;
+  StringExtractorGDBRemote response;
+  packet.PutCString("jGPUPluginSymbols:");
+  packet.PutAsJSON(args, /*hex_ascii=*/false);
+  if (SendPacketAndWaitForResponse(packet.GetString(), response) !=
+      PacketResult::Success)
+    return llvm::createStringError("failed to send jGPUPluginSymbols");
+  if (response.IsUnsupportedResponse())
+    return llvm::createStringError("jGPUPluginSymbols is not supported");
+  if (response.IsErrorResponse())
+    return response.GetStatus().ToError();
+  // The plug-in replies OK when it has no GPUActions to return.
+  if (response.IsOKResponse())
+    return std::nullopt;
+  llvm::Expected<GPUActions> actions =
+      llvm::json::parse<GPUActions>(response.Peek(), "GPUActions");
+  if (!actions) {
+    // The JSON parsing error would not make sense to users, so report the
+    // packet instead.
+    llvm::consumeError(actions.takeError());
+    return llvm::createStringError(
+        llvm::formatv("malformed jGPUPluginSymbols response packet: {0}",
+                      response.GetStringRef())
+            .str());
   }
-  return Status::FromErrorString("GPU plugins are not supported");
+  return std::move(*actions);
 }
 
 std::optional<LLDBSettings>

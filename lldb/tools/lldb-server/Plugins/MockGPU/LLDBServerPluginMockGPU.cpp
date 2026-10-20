@@ -290,5 +290,7 @@ LLDBServerPluginMockGPU::GetGPUDynamicLoaderLibraryInfos(
   return mock_process->GetGPUDynamicLoaderLibraryInfos(args);
 }
 
-void LLDBServerPluginMockGPU::SetRequestedSymbols(
-    const std::vector<SymbolValue> &symbols) {}
+std::optional<GPUActions> LLDBServerPluginMockGPU::SetRequestedSymbols(
+    const std::vector<SymbolValue> &symbols) {
+  return std::nullopt;
+}
