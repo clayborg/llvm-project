@@ -6954,7 +6954,7 @@ llvm::Expected<lldb::ModuleSP> AddressSpec::GetModule() const {
 
 llvm::Expected<lldb::ThreadSP> AddressSpec::GetThread() const {
   if (m_thread_wp.expired() && !weak_ptr_is_uninitialized(m_thread_wp))
-    return llvm::createStringError("module has expired");
+    return llvm::createStringError("thread has expired");
   return m_thread_wp.lock();
 }
 
