@@ -70,28 +70,13 @@ ValueObjectSP ABISASS::GetReturnValueObjectImpl(Thread &thread,
 }
 
 UnwindPlanSP ABISASS::CreateFunctionEntryUnwindPlan() {
-  UnwindPlan::Row row;
-
-  // Use LLDB register numbers to support the virtual RA register
-  const uint32_t lldb_sp = sass::regnum::LLDB_SP;
-  const uint32_t lldb_ra = sass::regnum::LLDB_RA;
-
-  // At function entry, CFA is the stack pointer
-  row.GetCFAValue().SetIsRegisterPlusOffset(lldb_sp, 0);
-  row.SetUnspecifiedRegistersAreUndefined(true);
-
-  // Return address is in the RA register (R20-R21)
-  row.SetRegisterLocationToRegister(lldb_ra, lldb_ra, true);
-
-  auto plan_sp = std::make_shared<UnwindPlan>(eRegisterKindLLDB);
-  plan_sp->AppendRow(std::move(row));
-  plan_sp->SetSourceName("sass at-func-entry default");
-  plan_sp->SetSourcedFromCompiler(eLazyBoolNo);
-  plan_sp->SetUnwindPlanValidAtAllInstructions(eLazyBoolNo);
-  plan_sp->SetUnwindPlanForSignalTrap(eLazyBoolNo);
-  plan_sp->SetReturnAddressRegister(lldb_ra);
-
-  return plan_sp;
+  // At a function's first instruction LLDB would use a plan returned here
+  // instead of the function's CFI. Before the prologue runs, a device
+  // function's caller is in RA (R20-R21), but a kernel has no caller, and its
+  // R1 and RA hold whatever the launch left in them. Only the CFI tells the
+  // two apart (a kernel's CIE has no return address column), so return no
+  // plan. A function without CFI gets the default plan.
+  return nullptr;
 }
 
 UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {

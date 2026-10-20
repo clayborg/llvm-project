@@ -3,6 +3,7 @@ Test NVGPU stack unwinding in various scenarios.
 """
 
 import lldb
+from lldbsuite.test import lldbutil
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -71,6 +72,37 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
 
         # Verify backtrace terminates properly
         self.assertLess(thread.GetNumFrames(), 20, f"{test_name}: Too many frames")
+
+    def stop_at_first_instruction(self, function_name):
+        """Run until GPU thread 0 stops at the first instruction of
+        `function_name`, before its prologue has run, and return the thread."""
+        self.build()
+        exe = self.getBuildArtifact("a.out")
+        self.runCmd(f"file {exe}")
+        self.runCmd(f"b {line_number('unwind.cu', '// cpu breakpoint')}")
+        self.runCmd("r")
+
+        # The CPU stops after cudaDeviceReset(), which created the GPU target.
+        self.assertIsNotNone(self.gpu_target, "GPU target should exist")
+        self.select_gpu()
+        # The cubin loads when the kernel launches, so the breakpoint may still
+        # be pending.
+        lldbutil.run_break_set_by_symbol(
+            self, function_name, extra_options="-K false", num_expected_locations=-2
+        )
+
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        self.select_gpu()
+        thread = self.assert_gpu_stop_reason(lldb.eStopReasonBreakpoint, thread_index=0)
+
+        frame = thread.GetFrameAtIndex(0)
+        function_start = frame.GetFunction().GetStartAddress()
+        self.assertEqual(
+            frame.GetPC(),
+            function_start.GetLoadAddress(self.gpu_target),
+            f"Frame 0 should be at the first instruction of {function_name}",
+        )
+        return thread
 
     def test_unwinding(self):
         """Test NVGPU stack unwinding in various scenarios."""
@@ -168,3 +200,33 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
             ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test4")),
         ]
         self.check_backtrace("test_unwind_null_function_ptr", expected_frames)
+
+    def test_unwind_at_function_entry(self):
+        """Test unwinding from the first instruction of a device function."""
+        self.killCPUOnTeardown()
+        self.stop_at_first_instruction("breakpoint")
+
+        source = "unwind.cu"
+        # fmt: off
+        expected_frames = [
+            ("breakpoint", "unwind.cu", None),
+            ("level3", "unwind.cu", line_number(source, "// frame_level3")),
+            ("level2", "unwind.cu", line_number(source, "// frame_level2")),
+            ("level1", "unwind.cu", line_number(source, "// frame_level1")),
+            ("level0", "unwind.cu", line_number(source, "// frame_level0")),
+            ("unwind_test_kernel", "unwind.cu", line_number(source, "// frame_kernel_test1")),
+        ]
+        # fmt: on
+        self.check_backtrace("test_unwind_at_function_entry", expected_frames)
+
+    def test_unwind_at_kernel_entry(self):
+        """Test that a kernel stopped at its first instruction has no caller.
+
+        The kernel's prologue has not loaded R1 yet and nothing has written RA,
+        so neither can be used to find a caller.
+        """
+        self.killCPUOnTeardown()
+        thread = self.stop_at_first_instruction("unwind_test_kernel")
+        self.assertEqual(
+            thread.GetNumFrames(), 1, "A kernel's first instruction has no caller"
+        )
