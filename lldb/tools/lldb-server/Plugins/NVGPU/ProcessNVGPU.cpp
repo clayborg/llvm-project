@@ -115,7 +115,7 @@ Status ProcessNVGPU::Halt() {
     std::string error_string =
         std::string("Failed to suspend device. ") + cudbgGetErrorString(res);
     LLDB_LOG(log, "NVGPU::Halt(). {}", error_string);
-    status.FromErrorString(error_string.c_str());
+    status = Status::FromErrorString(error_string.c_str());
   }
   return status;
 }
@@ -535,8 +535,8 @@ void ProcessNVGPU::OnAllDevicesSuspended(
 
   ReleaseAndClearThreads(m_threads);
 
-  // We report as the selected thread the one the first one that has an
-  // exception, or the first one that is at a breakpoint.
+  // We report as the selected thread the first one that has an exception, or
+  // else the first one that is at a breakpoint.
   std::optional<lldb::tid_t> exception_thread_id;
   std::optional<lldb::tid_t> breakpoint_thread_id;
 
@@ -550,7 +550,8 @@ void ProcessNVGPU::OnAllDevicesSuspended(
           if (stop_reason == lldb::eStopReasonBreakpoint &&
               !breakpoint_thread_id)
             breakpoint_thread_id = thread.GetID();
-          else if (stop_reason == lldb::eStopReasonNone && !exception_thread_id)
+          else if (stop_reason == lldb::eStopReasonException &&
+                   !exception_thread_id)
             exception_thread_id = thread.GetID();
 
           /// The threads are owned by the DeviceStateRegistry, but we need to
