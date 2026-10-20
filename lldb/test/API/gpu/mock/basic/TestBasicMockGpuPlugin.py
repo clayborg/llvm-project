@@ -2,6 +2,9 @@
 Basic tests for the Mock GPU Plugin.
 """
 
+import json
+import re
+
 import lldb
 import lldbsuite.test.lldbutil as lldbutil
 from lldbsuite.test.lldbtest import *
@@ -11,6 +14,27 @@ CPU_BEFORE_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - BEFORE INITIALIZE"
 CPU_AFTER_BREAKPOINT_COMMENT = "// CPU BREAKPOINT - AFTER INITIALIZE"
 GPU_BREAKPOINT_COMMENT = "// MOCK GPU BREAKPOINT"
 SOURCE_FILE = "hello_world.cpp"
+
+
+def get_sent_symbols(log_file):
+    """Return the name and value of each symbol that lldb sent in a
+    jGPUPluginSymbols packet, in the order sent, from a gdb-remote packet log."""
+    sent = []
+    with open(log_file) as log:
+        for line in log:
+            _, found, packet = line.partition("send packet: $jGPUPluginSymbols:")
+            if not found:
+                continue
+            # Drop the checksum, then undo the escaping of special characters
+            # as '}' followed by the character XOR 0x20.
+            payload = re.sub(
+                r"\}(.)",
+                lambda match: chr(ord(match.group(1)) ^ 0x20),
+                packet.rpartition("#")[0],
+            )
+            args = json.loads(payload)
+            sent.extend((s["name"], s.get("value")) for s in args["symbol_values"])
+    return sent
 
 
 class BasicMockGpuTestCase(GpuTestCaseBase):
@@ -217,3 +241,28 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.assertTrue(cpu_thread.IsValid())
         self.assertEqual(cpu_thread.GetLaneID(), lldb.LLDB_INVALID_LANE_ID)
         self.assertEqual(cpu_thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)
+
+    def test_mock_gpu_requested_symbols(self):
+        """
+        Test that lldb sends the plug-in each symbol it asks for once, with its
+        load address, and doesn't send names that don't resolve.
+        """
+        log_file = self.getBuildArtifact("packets.log")
+        self.runCmd(f"log enable -f {log_file} gdb-remote packets")
+        self.addTearDownHook(lambda: self.runCmd("log disable gdb-remote packets"))
+        self.build()
+        target, _, _, _ = lldbutil.run_to_source_breakpoint(
+            self, CPU_BEFORE_BREAKPOINT_COMMENT, lldb.SBFileSpec(SOURCE_FILE, False)
+        )
+
+        # The plug-in's initialize actions ask for "gpu_shlib_load", before
+        # lldb knows where the executable is loaded, and for
+        # "invalid_name_that_wont_be_found". Its reply to "gpu_shlib_load"
+        # asks for "gpu_kernel".
+        expected = []
+        for name in ("gpu_shlib_load", "gpu_kernel"):
+            symbols = target.FindSymbols(name)
+            self.assertEqual(symbols.GetSize(), 1, f'one symbol is named "{name}"')
+            address = symbols.GetContextAtIndex(0).GetSymbol().GetStartAddress()
+            expected.append((name, address.GetLoadAddress(target)))
+        self.assertEqual(get_sent_symbols(log_file), expected)

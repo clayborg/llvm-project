@@ -292,5 +292,14 @@ LLDBServerPluginMockGPU::GetGPUDynamicLoaderLibraryInfos(
 
 std::optional<GPUActions> LLDBServerPluginMockGPU::SetRequestedSymbols(
     const std::vector<SymbolValue> &symbols) {
+  // Ask for "gpu_kernel" once "gpu_shlib_load" arrives, to test GPUActions
+  // returned from here.
+  for (const SymbolValue &symbol : symbols) {
+    if (symbol.name == "gpu_shlib_load") {
+      GPUActions actions = GetNewGPUAction();
+      actions.symbol_names.push_back("gpu_kernel");
+      return actions;
+    }
+  }
   return std::nullopt;
 }
