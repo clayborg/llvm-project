@@ -106,7 +106,8 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         expected_items = {
             "name": "Mock GPU Thread Name",
-            "is_active": "true",
+            # ProcessMockGPU::UpdateThreads() makes its thread inactive.
+            "is_active": "false",
             "dispatch.kernel_name": "mock_gpu_kernel",
         }
         for path, expected_value in expected_items.items():
