@@ -35,8 +35,19 @@ class GpuTestCaseBase(TestBase):
 
     @property
     def gpu_target(self):
-        """Return the GPU target by searching for a GPU triple."""
-        return self._find_target_by_triple(GPU_TRIPLE_PATTERNS)
+        """Return the GPU target by searching for a GPU triple, or else the
+        target that is not the CPU target."""
+        target = self._find_target_by_triple(GPU_TRIPLE_PATTERNS)
+        if target:
+            return target
+        # The mock GPU's architecture is not one LLDB knows, so its server
+        # reports no process triple, and its target gets the host's triple.
+        cpu_target = self.cpu_target
+        for i in range(self.dbg.GetNumTargets()):
+            target = self.dbg.GetTargetAtIndex(i)
+            if target != cpu_target:
+                return target
+        return None
 
     @property
     def cpu_process(self):
