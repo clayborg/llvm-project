@@ -119,15 +119,17 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             self.assertEqual(stream.GetData(), expected_value)
 
     def test_mock_gpu_breakpoint_hit(self):
-        """Test that we can hit a breakpoint on the gpu target."""
-        # Switch to the GPU target and set a breakpoint.
+        """Test that we can hit a breakpoint in the mock GPU kernel."""
         self.common_setup()
-        self.select_gpu()
-        (gpu_target, gpu_process, gpu_thread, gpu_bkpt) = lldbutil.run_to_source_breakpoint(
-            self,
-            GPU_BREAKPOINT_COMMENT,
-            self.source_spec,
+        # The mock GPU process can't set breakpoints, and its kernel is CPU
+        # code, so the breakpoint goes in the CPU target. Reaching it means
+        # continuing past the plug-in's breakpoints in gpu_initialize,
+        # gpu_shlib_load and gpu_third_stop.
+        gpu_bkpt = self.cpu_target.BreakpointCreateBySourceRegex(
+            GPU_BREAKPOINT_COMMENT, self.source_spec
         )
+        threads = lldbutil.continue_to_breakpoint(self.cpu_process, gpu_bkpt)
+        self.assertTrue(threads, "The CPU process stopped at the breakpoint")
 
         # Check the breakpoint was hit.
         self.assertEqual(
