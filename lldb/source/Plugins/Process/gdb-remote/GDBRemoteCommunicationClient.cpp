@@ -4650,12 +4650,17 @@ size_t GDBRemoteCommunicationClient::ReadMemory(
   packet.PutHex64(size);
   packet.PutChar(';');
   if (info.is_thread_specific) {
-    if (llvm::Expected<lldb::ThreadSP> thread = addr_spec.GetThread()) {
+    llvm::Expected<lldb::ThreadSP> thread = addr_spec.GetThread();
+    if (!thread) {
+      error = Status::FromError(thread.takeError());
+      return 0;
+    }
+    // An AddressSpec without a thread is not an error. Leave out the tid and
+    // let the server decide whether it can read the space without one.
+    if (*thread) {
       packet.PutCString("tid:");
       packet.PutHex64((*thread)->GetID());
       packet.PutChar(';');
-    } else {
-      error = Status::FromError(thread.takeError());
     }
   }
 
