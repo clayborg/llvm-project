@@ -1669,6 +1669,10 @@ void Platform::CallLocateModuleCallbackIfSet(const ModuleSpec &module_spec,
   cached_module_spec.GetSymbolFileSpec() = symbol_file_spec;
   cached_module_spec.GetPlatformFileSpec() = module_spec.GetFileSpec();
   cached_module_spec.SetObjectOffset(0);
+  // [NVIDIA] The callback returns a whole local file, which the object size
+  // of the requested module does not describe. A stale size would make
+  // ModuleSpec::Matches treat the file as a slice and reject it.
+  cached_module_spec.SetObjectSize(0);
 
   error = ModuleList::GetSharedModule(cached_module_spec, module_sp, nullptr,
                                       did_create_ptr, false, false);
