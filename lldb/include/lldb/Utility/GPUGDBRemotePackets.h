@@ -277,9 +277,12 @@ struct GPUActions {
   /// for it to return to a running state.
   bool wait_for_gpu_process_to_resume = false;
   /// If the LLDBServerPlugin needs symbol values, it can request them here.
-  /// A jGPUPluginSymbols packet will deliver the symbol names and values back
-  /// to the LLDBServerPlugin via the GDB remote connection that retuned the
-  /// GPUActions.
+  /// A jGPUPluginSymbols packet delivers the names and values of the symbols
+  /// that have resolved to the LLDBServerPlugin via the CPU GDB remote
+  /// connection. lldb delivers each symbol once: right away if it has
+  /// resolved, otherwise when the module that defines it loads. A later
+  /// request from the same plug-in replaces the names that have not been
+  /// delivered yet.
   std::vector<std::string> symbol_names;
 };
 

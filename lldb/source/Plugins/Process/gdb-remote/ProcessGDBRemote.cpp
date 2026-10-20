@@ -930,6 +930,38 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   return should_stop;
 }
 
+void ProcessGDBRemote::DeliverPendingGPUSymbols() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  llvm::SmallVector<std::string> done;
+  for (auto &entry : m_pending_gpu_symbols) {
+    std::vector<std::string> &names = entry.second;
+    std::vector<SymbolValue> values;
+    LookupSymbols(GetTarget(), names, values);
+    GPUPluginSymbolsArgs args;
+    args.plugin_name = entry.first().str();
+    std::vector<std::string> unresolved;
+    for (SymbolValue &symbol : values) {
+      if (symbol.value)
+        args.symbol_values.push_back(std::move(symbol));
+      else
+        unresolved.push_back(std::move(symbol.name));
+    }
+    if (args.symbol_values.empty())
+      continue;
+    Status error = m_gdb_comm.SendGPUSymbols(args);
+    if (error.Fail())
+      LLDB_LOG(log,
+               "ProcessGDBRemote::DeliverPendingGPUSymbols failed to send "
+               "symbols to plugin '{0}': {1}",
+               args.plugin_name, error.AsCString());
+    names = std::move(unresolved);
+    if (names.empty())
+      done.push_back(std::move(args.plugin_name));
+  }
+  for (const std::string &plugin_name : done)
+    m_pending_gpu_symbols.erase(plugin_name);
+}
+
 Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   // GPUActions need to always be handled by the CPU process. So check if this
   // process is a GPU process by getting its native target.
@@ -971,10 +1003,11 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
       return error;
   }
   if (!gpu_action.symbol_names.empty()) {
-    GPUPluginSymbolsArgs args;
-    args.plugin_name = gpu_action.plugin_name;
-    if (LookupSymbols(GetTarget(), gpu_action.symbol_names, args.symbol_values))
-      m_gdb_comm.SendGPUSymbols(args);
+    // The module that defines a symbol might not be loaded yet, so remember
+    // the names and deliver each one when it resolves. A new request from the
+    // same plug-in replaces the names it is still waiting for.
+    m_pending_gpu_symbols[gpu_action.plugin_name] = gpu_action.symbol_names;
+    DeliverPendingGPUSymbols();
   }
 
   // Any commands below require a GPU process and it needs to have published
@@ -5943,6 +5976,9 @@ void ProcessGDBRemote::ModulesDidLoad(ModuleList &module_list) {
   // After loading shared libraries, we can ask our remote GDB server if it
   // needs any symbols.
   m_gdb_comm.ServeSymbolLookups(this);
+
+  // The symbols a GPU plug-in requested might be in one of these modules.
+  DeliverPendingGPUSymbols();
 }
 
 void ProcessGDBRemote::HandleAsyncStdout(llvm::StringRef out) {

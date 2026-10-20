@@ -181,9 +181,10 @@ public:
     settings.send_dyld_packet_to_gpu = true;
     return settings;
   }
-  /// Any GPUActions that request symbols will be delivered to the plugin using
-  /// this virtual method immediately after the GPUActions are sent to the CPU
-  /// connection.
+  /// Receives the values of symbols that a GPUActions requested. Only symbols
+  /// that have resolved are delivered, and each is delivered once. A symbol
+  /// whose module is not loaded yet is delivered later, when that module
+  /// loads, so this can be called several times for one request.
   virtual void SetRequestedSymbols(const std::vector<SymbolValue> &symbols) {}
 
 protected:

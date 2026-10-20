@@ -516,6 +516,10 @@ private:
 
   Status HandleGPUActions(const GPUActions &gpu_action);
 
+  /// Look up the symbols that GPU plug-ins requested and have not received
+  /// yet, and send each plug-in the ones that have resolved.
+  void DeliverPendingGPUSymbols();
+
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
   void HandleAsyncMisc(llvm::StringRef data) override;
@@ -580,6 +584,10 @@ private:
   
   //  Map to track processed GPU actions.
   std::unordered_map<std::string, uint32_t> m_processed_gpu_actions;
+
+  /// Names of the symbols each GPU plug-in requested that have not resolved
+  /// yet, keyed by plug-in name.
+  llvm::StringMap<std::vector<std::string>> m_pending_gpu_symbols;
 };
 
 } // namespace process_gdb_remote
