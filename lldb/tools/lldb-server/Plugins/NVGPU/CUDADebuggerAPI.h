@@ -30,7 +30,8 @@ public:
   static constexpr const char *LIBCUDA_LIBRARY_NAME = "libcuda.so";
   static constexpr const char *LIBCUDA_LIBRARY_NAME_ALT = "libcuda.so.1";
 
-  /// Initialize the CUDA debugger API.
+  /// Initialize the CUDA debugger API. This writes the API client's identity
+  /// into the debugged process, but not the IPC flag; see SetIpcFlag.
   ///
   /// \param bp_args The GPU plugin breakpoint that triggered the
   /// initialization.
@@ -41,6 +42,21 @@ public:
   Initialize(const GPUPluginBreakpointHitArgs &bp_args,
              llvm::StringRef libcuda_library_name,
              NativeProcessProtocol &linux_process);
+
+  /// Set the IPC flag in the debugged process, which tells its CUDA driver
+  /// that a debugger is ready to serve it. A driver that sees the flag can
+  /// wait for this debugger indefinitely, so set it only after every other
+  /// initialization step has succeeded. If a step fails first, the process
+  /// runs on without GPU debugging.
+  ///
+  /// \param[in] bp_args
+  ///     The initialization breakpoint hit, which carries the address of the
+  ///     flag.
+  ///
+  /// \param[in] linux_process
+  ///     The debugged process.
+  static llvm::Error SetIpcFlag(const GPUPluginBreakpointHitArgs &bp_args,
+                                NativeProcessProtocol &linux_process);
 
   CUDBGAPI operator->() const { return m_api_up.get(); }
 

@@ -151,6 +151,10 @@ name lldb-dap gives the GPU session:
     target #0: /path/to/a.out ( arch=x86_64-unknown-linux-gnu, platform=host, pid=12345, state=stopped )
   * target #1: NVIDIA GPU Session ( arch=nvptx64-nvidia-cuda, platform=nvgpu, pid=1, state=stopped )
 
+If the CUDA debugger API fails to initialize, for example because no CUDA
+device is visible, LLDB reports the error and adds no GPU target. The program
+keeps running, without GPU debugging.
+
 GPU modules
 ^^^^^^^^^^^
 

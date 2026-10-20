@@ -146,7 +146,8 @@ void LLDBServerPluginNVGPU::AcceptAndMainLoopThread(
   m_is_connected = false;
 }
 
-Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
+Expected<GPUPluginConnectionInfo>
+LLDBServerPluginNVGPU::CreateConnection(function_ref<Error()> before_accept) {
   std::lock_guard<std::mutex> guard(m_connect_mutex);
   Log *log = GetLog(GDBRLog::Plugin);
   if (m_is_connected) {
@@ -187,6 +188,11 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
         llvm::formatv("connect://{}:{}", remote_host, listen_port);
     LLDB_LOG(log, "LLDBServerPluginNVGPU::CreateConnection listening to {}",
              listen_port);
+    if (Error err = before_accept()) {
+      // Closing the socket is enough: no thread is waiting on it yet.
+      m_is_listening = false;
+      return err;
+    }
     std::thread t(&LLDBServerPluginNVGPU::AcceptAndMainLoopThread, this,
                   std::move(*sock));
     t.detach();
@@ -201,11 +207,12 @@ Expected<GPUPluginConnectionInfo> LLDBServerPluginNVGPU::CreateConnection() {
 llvm::Expected<GPUPluginBreakpointHitResponse>
 LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   std::string library_name = *args.breakpoint.name_info->shlib;
+  NativeProcessProtocol &native_process = *m_native_process.GetCurrentProcess();
   // This method is invoked when a CPU breakpoint is hit signaling that the
   // driver is initializing. This is the perfect time to initialize the debugger
   // API. We are assuming that no kernels will run until we resume the CPU.
-  Expected<CUDADebuggerAPI> api_or = CUDADebuggerAPI::Initialize(
-      args, library_name, *m_native_process.GetCurrentProcess());
+  Expected<CUDADebuggerAPI> api_or =
+      CUDADebuggerAPI::Initialize(args, library_name, native_process);
   if (!api_or)
     return api_or.takeError();
 
@@ -237,7 +244,12 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         "Failed to set the event callback for the CUDA Debugger API. {}",
         cudbgGetErrorString(res));
 
-  Expected<GPUPluginConnectionInfo> connection_info = CreateConnection();
+  // Only tell the driver that a debugger is ready once every other step has
+  // succeeded. If one fails, the client resumes the process, which runs on
+  // without GPU debugging instead of waiting for a debugger that does not
+  // answer.
+  Expected<GPUPluginConnectionInfo> connection_info = CreateConnection(
+      [&] { return CUDADebuggerAPI::SetIpcFlag(args, native_process); });
   if (!connection_info)
     return connection_info.takeError();
 
