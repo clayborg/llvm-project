@@ -517,8 +517,8 @@ private:
   Status HandleGPUActions(const GPUActions &gpu_action);
 
   /// Look up the symbols that GPU plug-ins requested and have not received
-  /// yet, and send each plug-in the ones that have resolved.
-  void DeliverPendingGPUSymbols();
+  /// yet in \a modules, and send each plug-in the ones that have resolved.
+  void DeliverPendingGPUSymbols(const ModuleList &modules);
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;

@@ -280,9 +280,8 @@ struct GPUActions {
   /// A jGPUPluginSymbols packet delivers the names and values of the symbols
   /// that have resolved to the LLDBServerPlugin via the CPU GDB remote
   /// connection. lldb delivers each symbol once: right away if it has
-  /// resolved, otherwise when the module that defines it loads. A later
-  /// request from the same plug-in replaces the names that have not been
-  /// delivered yet.
+  /// resolved, otherwise when the module that defines it loads. Requests from
+  /// several GPUActions add to the names lldb is still waiting for.
   std::vector<std::string> symbol_names;
 };
 

@@ -870,7 +870,7 @@ bool ProcessGDBRemote::GPUBreakpointHitCallback(
   return process->GPUBreakpointHit(baton, context, break_id, break_loc_id);
 }
 
-static size_t LookupSymbols(Target &target,
+static size_t LookupSymbols(Target &target, const ModuleList &modules,
                             const std::vector<std::string> &symbol_names,
                             std::vector<SymbolValue> &symbol_values) {
   const size_t num_symbols = symbol_names.size();
@@ -879,8 +879,8 @@ static size_t LookupSymbols(Target &target,
     for (size_t i = 0; i < num_symbols; ++i) {
       const auto &symbol_name = symbol_names[i];
       SymbolContextList sc_list;
-      target.GetImages().FindSymbolsWithNameAndType(
-          ConstString(symbol_name), lldb::eSymbolTypeAny, sc_list);
+      modules.FindSymbolsWithNameAndType(ConstString(symbol_name),
+                                         lldb::eSymbolTypeAny, sc_list);
       SymbolContext sc;
       symbol_values[i].name = symbol_name;
       size_t num_symbols = sc_list.GetSize();
@@ -908,7 +908,8 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   // to notifying lldb-server.
   GPUPluginBreakpointHitArgs args = *callback_data;
   Target &target = GetTarget();
-  LookupSymbols(target, args.breakpoint.symbol_names, args.symbol_values);
+  LookupSymbols(target, target.GetImages(), args.breakpoint.symbol_names,
+                args.symbol_values);
   std::optional<GPUPluginBreakpointHitResponse> response =
       m_gdb_comm.GPUBreakpointHit(args);
   bool should_stop = false;
@@ -930,13 +931,13 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   return should_stop;
 }
 
-void ProcessGDBRemote::DeliverPendingGPUSymbols() {
+void ProcessGDBRemote::DeliverPendingGPUSymbols(const ModuleList &modules) {
   Log *log = GetLog(GDBRLog::Plugin);
-  llvm::SmallVector<std::string> done;
+  std::vector<std::string> done;
   for (auto &entry : m_pending_gpu_symbols) {
     std::vector<std::string> &names = entry.second;
     std::vector<SymbolValue> values;
-    LookupSymbols(GetTarget(), names, values);
+    LookupSymbols(GetTarget(), modules, names, values);
     GPUPluginSymbolsArgs args;
     args.plugin_name = entry.first().str();
     std::vector<std::string> unresolved;
@@ -1004,10 +1005,14 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   }
   if (!gpu_action.symbol_names.empty()) {
     // The module that defines a symbol might not be loaded yet, so remember
-    // the names and deliver each one when it resolves. A new request from the
-    // same plug-in replaces the names it is still waiting for.
-    m_pending_gpu_symbols[gpu_action.plugin_name] = gpu_action.symbol_names;
-    DeliverPendingGPUSymbols();
+    // the names and deliver each one when it resolves. Several GPUActions can
+    // request symbols, so add the names to the ones still pending.
+    std::vector<std::string> &pending =
+        m_pending_gpu_symbols[gpu_action.plugin_name];
+    for (const std::string &name : gpu_action.symbol_names)
+      if (!llvm::is_contained(pending, name))
+        pending.push_back(name);
+    DeliverPendingGPUSymbols(GetTarget().GetImages());
   }
 
   // Any commands below require a GPU process and it needs to have published
@@ -5977,8 +5982,9 @@ void ProcessGDBRemote::ModulesDidLoad(ModuleList &module_list) {
   // needs any symbols.
   m_gdb_comm.ServeSymbolLookups(this);
 
-  // The symbols a GPU plug-in requested might be in one of these modules.
-  DeliverPendingGPUSymbols();
+  // The symbols a GPU plug-in is waiting for can only have resolved in the
+  // modules that just loaded.
+  DeliverPendingGPUSymbols(module_list);
 }
 
 void ProcessGDBRemote::HandleAsyncStdout(llvm::StringRef out) {
