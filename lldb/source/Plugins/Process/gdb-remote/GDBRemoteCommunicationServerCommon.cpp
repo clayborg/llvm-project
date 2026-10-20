@@ -622,8 +622,8 @@ GDBRemoteCommunicationServerCommon::Handle_vFile_pWrite(
         NativeFile file(fd, File::eOpenOptionWriteOnly, false);
         size_t count = buffer.size();
         Status error = file.Write(buffer.data(), count, offset);
-        // [NVIDIA] A pipe cannot seek, so pwrite fails on it with ESPIPE. The
-        // offset means nothing there, so write at the pipe's end instead.
+        // A pipe cannot seek, so pwrite fails on it with ESPIPE. The offset
+        // means nothing there, so write at the pipe's end instead.
         if (error.Fail() && error.GetError() == ESPIPE) {
           count = buffer.size();
           error = file.Write(buffer.data(), count);
