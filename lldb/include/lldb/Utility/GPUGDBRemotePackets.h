@@ -110,6 +110,28 @@ bool fromJSON(const llvm::json::Value &value, GPUPluginBreakpointHitArgs &data,
 llvm::json::Value toJSON(const GPUPluginBreakpointHitArgs &data);
 
 ///-----------------------------------------------------------------------------
+/// GPUPluginSymbolsArgs
+///
+/// GPUActions can request symbol values. The values will be sent over the CPU
+/// GDB remote connection and deliver the symbol values via the
+/// jGPUPluginSymbols packet.
+///-----------------------------------------------------------------------------
+
+struct GPUPluginSymbolsArgs {
+  GPUPluginSymbolsArgs() = default;
+  GPUPluginSymbolsArgs(llvm::StringRef plugin_name)
+      : plugin_name(plugin_name) {}
+
+  std::string plugin_name;
+  std::vector<SymbolValue> symbol_values;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginSymbolsArgs &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginSymbolsArgs &data);
+
+///-----------------------------------------------------------------------------
 /// LLDBSettings
 ///
 /// A structure that contains settings that the a process being debugged over
@@ -254,6 +276,11 @@ struct GPUActions {
   /// Set this to true if the native plug-in sync with the GPU process and wait
   /// for it to return to a running state.
   bool wait_for_gpu_process_to_resume = false;
+  /// If the LLDBServerPlugin needs symbol values, it can request them here.
+  /// A jGPUPluginSymbols packet will deliver the symbol names and values back
+  /// to the LLDBServerPlugin via the GDB remote connection that retuned the
+  /// GPUActions.
+  std::vector<std::string> symbol_names;
 };
 
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,

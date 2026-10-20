@@ -181,6 +181,10 @@ public:
     settings.send_dyld_packet_to_gpu = true;
     return settings;
   }
+  /// Any GPUActions that request symbols will be delivered to the plugin using
+  /// this virtual method immediately after the GPUActions are sent to the CPU
+  /// connection.
+  virtual void SetRequestedSymbols(const std::vector<SymbolValue> &symbols) {}
 
 protected:
   std::mutex m_connect_mutex;

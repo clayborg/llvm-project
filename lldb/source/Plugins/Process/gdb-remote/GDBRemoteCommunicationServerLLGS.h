@@ -320,6 +320,8 @@ protected:
 
   PacketResult Handle_jLLDBSettings(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_jGPUPluginSymbols(StringExtractorGDBRemote &packet);
+
   void SetCurrentThreadID(lldb::tid_t tid);
 
   lldb::tid_t GetCurrentThreadID() const;

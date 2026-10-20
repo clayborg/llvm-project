@@ -870,6 +870,34 @@ bool ProcessGDBRemote::GPUBreakpointHitCallback(
   return process->GPUBreakpointHit(baton, context, break_id, break_loc_id);
 }
 
+static size_t LookupSymbols(Target &target,
+                            const std::vector<std::string> &symbol_names,
+                            std::vector<SymbolValue> &symbol_values) {
+  const size_t num_symbols = symbol_names.size();
+  if (num_symbols > 0) {
+    symbol_values.resize(num_symbols);
+    for (size_t i = 0; i < num_symbols; ++i) {
+      const auto &symbol_name = symbol_names[i];
+      SymbolContextList sc_list;
+      target.GetImages().FindSymbolsWithNameAndType(
+          ConstString(symbol_name), lldb::eSymbolTypeAny, sc_list);
+      SymbolContext sc;
+      symbol_values[i].name = symbol_name;
+      size_t num_symbols = sc_list.GetSize();
+      for (size_t sc_idx = 0; sc_idx < num_symbols; ++sc_idx) {
+        if (sc_list.GetContextAtIndex(sc_idx, sc)) {
+          auto load_addr = sc.symbol->GetAddress().GetLoadAddress(&target);
+          if (load_addr != LLDB_INVALID_ADDRESS) {
+            symbol_values[i].value = load_addr;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return num_symbols;
+}
+
 bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
                                         StoppointCallbackContext *context,
                                         lldb::user_id_t break_id,
@@ -880,28 +908,7 @@ bool ProcessGDBRemote::GPUBreakpointHit(void *baton,
   // to notifying lldb-server.
   GPUPluginBreakpointHitArgs args = *callback_data;
   Target &target = GetTarget();
-  const size_t num_symbols = args.breakpoint.symbol_names.size();
-  if (num_symbols > 0) {
-    args.symbol_values.resize(num_symbols);
-    for (size_t i = 0; i < num_symbols; ++i) {
-      const auto &symbol_name = args.breakpoint.symbol_names[i];
-      SymbolContextList sc_list;
-      target.GetImages().FindSymbolsWithNameAndType(
-          ConstString(symbol_name), lldb::eSymbolTypeAny, sc_list);
-      SymbolContext sc;
-      args.symbol_values[i].name = symbol_name;
-      size_t num_symbols = sc_list.GetSize();
-      for (size_t sc_idx = 0; sc_idx < num_symbols; ++sc_idx) {
-        if (sc_list.GetContextAtIndex(sc_idx, sc)) {
-          auto load_addr = sc.symbol->GetAddress().GetLoadAddress(&target);
-          if (load_addr != LLDB_INVALID_ADDRESS) {
-            args.symbol_values[i].value = load_addr;
-            break;
-          }
-        }
-      }
-    }
-  }
+  LookupSymbols(target, args.breakpoint.symbol_names, args.symbol_values);
   std::optional<GPUPluginBreakpointHitResponse> response =
       m_gdb_comm.GPUBreakpointHit(args);
   bool should_stop = false;
@@ -962,6 +969,12 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
     error = HandleConnectionRequest(gpu_action);
     if (error.Fail())
       return error;
+  }
+  if (!gpu_action.symbol_names.empty()) {
+    GPUPluginSymbolsArgs args;
+    args.plugin_name = gpu_action.plugin_name;
+    if (LookupSymbols(GetTarget(), gpu_action.symbol_names, args.symbol_values))
+      m_gdb_comm.SendGPUSymbols(args);
   }
 
   // Any commands below require a GPU process and it needs to have published

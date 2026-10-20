@@ -287,6 +287,9 @@ void GDBRemoteCommunicationServerLLGS::RegisterPacketHandlers() {
           eServerPacketType_jGPUPluginGetDynamicLoaderLibraryInfo,
       &GDBRemoteCommunicationServerLLGS::
           Handle_jGPUPluginGetDynamicLoaderLibraryInfo);
+  RegisterMemberFunctionHandler(
+      StringExtractorGDBRemote::eServerPacketType_jGPUPluginSymbols,
+      &GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginSymbols);
 }
 
 void GDBRemoteCommunicationServerLLGS::SetLaunchInfo(
@@ -4001,6 +4004,25 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginGetDynamicLoaderLibraryInfo(
     response.PutAsJSON(*libraries_response, /*hex_ascii=*/false);
     return SendPacketNoLock(response.GetString());
   }
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginSymbols(
+    StringExtractorGDBRemote &packet) {
+
+  packet.ConsumeFront("jGPUPluginSymbols:");
+  Expected<GPUPluginSymbolsArgs> args =
+      json::parse<GPUPluginSymbolsArgs>(packet.Peek(), "GPUPluginSymbolsArgs");
+  if (!args)
+    return SendErrorResponse(args.takeError());
+
+  for (auto &plugin_up : m_plugins) {
+    if (plugin_up->GetPluginName() == args->plugin_name) {
+      plugin_up->SetRequestedSymbols(args->symbol_values);
+      return SendOKResponse();
+    }
+  }
+  return SendErrorResponse(Status::FromErrorString("Invalid plugin name."));
 }
 
 GDBRemoteCommunication::PacketResult

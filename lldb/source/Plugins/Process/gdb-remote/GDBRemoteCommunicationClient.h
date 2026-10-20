@@ -440,6 +440,8 @@ public:
 
   std::optional<std::vector<GPUActions>> GetGPUInitializeActions();
 
+  Status SendGPUSymbols(const GPUPluginSymbolsArgs &args);
+
   std::optional<LLDBSettings> GetLLDBSettings();
 
   std::optional<GPUPluginBreakpointHitResponse> 

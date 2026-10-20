@@ -270,6 +270,11 @@ GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
     bp.name_info = {"a.out", "gpu_wait_for_stop"};
     init_actions.breakpoints.emplace_back(std::move(bp));
   }
+  // Add some symbols to the GPU actions that should be delivered to the
+  // LLDBServerPluginsMockGPU instance via the jGPUPluginSymbols packet on the
+  // CPU GDB remote connection.
+  init_actions.symbol_names.push_back("gpu_shlib_load");
+  init_actions.symbol_names.push_back("invalid_name_that_wont_be_found");
   return init_actions;
 }
 
@@ -284,3 +289,6 @@ LLDBServerPluginMockGPU::GetGPUDynamicLoaderLibraryInfos(
     return std::nullopt;
   return mock_process->GetGPUDynamicLoaderLibraryInfos(args);
 }
+
+void LLDBServerPluginMockGPU::SetRequestedSymbols(
+    const std::vector<SymbolValue> &symbols) {}

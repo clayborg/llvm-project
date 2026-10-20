@@ -690,6 +690,25 @@ GDBRemoteCommunicationClient::GetGPUInitializeActions() {
   return std::nullopt;
 }
 
+Status
+GDBRemoteCommunicationClient::SendGPUSymbols(const GPUPluginSymbolsArgs &args) {
+  if (m_supports_gpu_plugins == eLazyBoolYes) {
+    StreamGDBRemote packet;
+    StringExtractorGDBRemote response;
+    packet.PutCString("jGPUPluginSymbols:");
+    packet.PutAsJSON(args, /*hex_ascii=*/false);
+    if (SendPacketAndWaitForResponse(packet.GetString(), response) ==
+        PacketResult::Success) {
+      if (response.IsUnsupportedResponse())
+        return Status::FromErrorString("jGPUPluginSymbols is not supported");
+      if (response.IsErrorResponse())
+        return Status::FromErrorString(response.GetStatus().AsCString());
+      return Status();
+    }
+  }
+  return Status::FromErrorString("GPU plugins are not supported");
+}
+
 std::optional<LLDBSettings>
 GDBRemoteCommunicationClient::GetLLDBSettings() {
   // Get JSON information containing GPU process settings required by a GDB

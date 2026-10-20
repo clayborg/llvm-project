@@ -160,6 +160,22 @@ GPUPluginBreakpointHitArgs::GetSymbolValue(llvm::StringRef symbol_name) const {
 }
 
 //------------------------------------------------------------------------------
+// GPUPluginSymbolsArgs
+//------------------------------------------------------------------------------
+bool fromJSON(const json::Value &value, GPUPluginSymbolsArgs &data, Path path) {
+  ObjectMapper o(value, path);
+  return o && o.map("plugin_name", data.plugin_name) &&
+         o.map("symbol_values", data.symbol_values);
+}
+
+json::Value toJSON(const GPUPluginSymbolsArgs &data) {
+  return json::Value(Object{
+      {"plugin_name", data.plugin_name},
+      {"symbol_values", data.symbol_values},
+  });
+}
+
+//------------------------------------------------------------------------------
 // GPUActions
 //------------------------------------------------------------------------------
 bool fromJSON(const llvm::json::Value &value, GPUActions &data,
@@ -176,7 +192,8 @@ bool fromJSON(const llvm::json::Value &value, GPUActions &data,
          o.map("load_libraries", data.load_libraries) &&
          o.map("resume_gpu_process", data.resume_gpu_process) &&
          o.map("wait_for_gpu_process_to_resume",
-               data.wait_for_gpu_process_to_resume);
+               data.wait_for_gpu_process_to_resume) &&
+         o.map("symbol_names", data.symbol_names);
 }
 
 llvm::json::Value toJSON(const GPUActions &data) {
@@ -201,6 +218,7 @@ llvm::json::Value toJSON(const GPUActions &data) {
       {"load_libraries", data.load_libraries},
       {"resume_gpu_process", data.resume_gpu_process},
       {"wait_for_gpu_process_to_resume", data.wait_for_gpu_process_to_resume},
+      {"symbol_names", data.symbol_names},
   });
 }
 
