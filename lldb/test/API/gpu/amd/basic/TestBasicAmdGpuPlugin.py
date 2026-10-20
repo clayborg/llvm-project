@@ -81,6 +81,36 @@ class BasicAmdGpuTestCase(AmdGpuTestCaseBase):
             gpu_threads[0], line_number(source, "// GPU STEP OVER")
         )
 
+    def test_gpu_step_over_while_cpu_running(self):
+        """Test that a GPU thread can step while the CPU process is running."""
+        self.build()
+
+        source = "hello_world.hip"
+        gpu_threads = self.run_to_gpu_breakpoint(source, "// GPU BREAKPOINT")
+        self.assertTrue(gpu_threads, "GPU should be stopped at breakpoint")
+        self.assertState(self.cpu_process.GetState(), lldb.eStateRunning)
+
+        thread = gpu_threads[0]
+        listener = self.dbg.GetListener()
+        # Do not use prepare_for_gpu_step(), which stops the CPU process.
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        self.assertTrue(self.gpu_process.SetSelectedThread(thread))
+
+        error = lldb.SBError()
+        thread.StepOver(lldb.eOnlyDuringStepping, error)
+        self.assertSuccess(error, "step GPU thread while CPU process is running")
+        lldbutil.expect_state_changes(
+            self,
+            listener,
+            self.gpu_process,
+            [lldb.eStateRunning, lldb.eStateStopped],
+        )
+        self.assertEqual(lldb.eStopReasonPlanComplete, thread.GetStopReason())
+        self.assertEqual(
+            line_number(source, "// GPU STEP OVER"),
+            thread.GetFrameAtIndex(0).GetLineEntry().GetLine(),
+        )
+
     def test_gpu_all_thread_resume_preserves_stepped_lane(self):
         """Step a non-first lane, then perform a default all-thread continue to
         a later breakpoint. Because that continue does not identify a new
