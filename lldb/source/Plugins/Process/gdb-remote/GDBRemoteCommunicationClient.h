@@ -443,9 +443,9 @@ public:
   /// Send symbol values to a GPU plug-in.
   ///
   /// \return
-  ///     The GPUActions the plug-in returned, std::nullopt if it returned
-  ///     none, or an error if the packet failed.
-  llvm::Expected<std::optional<GPUActions>>
+  ///     The plug-in's response, or std::nullopt if the packet failed. Error
+  ///     and malformed responses are reported to the user.
+  std::optional<GPUPluginSymbolsResponse>
   SendGPUSymbols(const GPUPluginSymbolsArgs &args);
 
   std::optional<LLDBSettings> GetLLDBSettings();

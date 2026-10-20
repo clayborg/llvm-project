@@ -4018,12 +4018,11 @@ GDBRemoteCommunicationServerLLGS::Handle_jGPUPluginSymbols(
 
   for (auto &plugin_up : m_plugins) {
     if (plugin_up->GetPluginName() == args->plugin_name) {
-      std::optional<GPUActions> actions =
+      GPUPluginSymbolsResponse symbols_response;
+      symbols_response.actions =
           plugin_up->SetRequestedSymbols(args->symbol_values);
-      if (!actions)
-        return SendOKResponse();
       StreamGDBRemote response;
-      response.PutAsJSON(*actions, /*hex_ascii=*/false);
+      response.PutAsJSON(symbols_response, /*hex_ascii=*/false);
       return SendPacketNoLock(response.GetString());
     }
   }

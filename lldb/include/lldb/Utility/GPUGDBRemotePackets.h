@@ -383,6 +383,22 @@ bool fromJSON(const llvm::json::Value &value,
 
 llvm::json::Value toJSON(const GPUPluginBreakpointHitResponse &data);
 
+///-----------------------------------------------------------------------------
+/// GPUPluginSymbolsResponse
+///
+/// A response structure from the GPU plugin to the symbol values that a
+/// jGPUPluginSymbols packet delivered.
+///-----------------------------------------------------------------------------
+struct GPUPluginSymbolsResponse {
+  /// GPU actions for lldb to perform, if the plugin returned any.
+  std::optional<GPUActions> actions;
+};
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginSymbolsResponse &data,
+              llvm::json::Path path);
+
+llvm::json::Value toJSON(const GPUPluginSymbolsResponse &data);
+
 struct GPUDynamicLoaderArgs {
   /// The name of the GPU plug-in to retrieve shared library information from.
   /// This is needed if we send the library request to the CPU GDB remote

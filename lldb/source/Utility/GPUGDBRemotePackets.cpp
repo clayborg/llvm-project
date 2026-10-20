@@ -243,6 +243,22 @@ llvm::json::Value toJSON(const GPUPluginBreakpointHitResponse &data) {
 }
 
 //------------------------------------------------------------------------------
+// GPUPluginSymbolsResponse
+//------------------------------------------------------------------------------
+
+bool fromJSON(const llvm::json::Value &value, GPUPluginSymbolsResponse &data,
+              llvm::json::Path path) {
+  ObjectMapper o(value, path);
+  return o && o.mapOptional("actions", data.actions);
+}
+
+llvm::json::Value toJSON(const GPUPluginSymbolsResponse &data) {
+  return json::Value(Object{
+      {"actions", data.actions},
+  });
+}
+
+//------------------------------------------------------------------------------
 // GPUSectionInfo
 //------------------------------------------------------------------------------
 
