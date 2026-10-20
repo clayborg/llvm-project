@@ -111,6 +111,9 @@ static Error WriteToHostSymbol(const GPUPluginBreakpointHitArgs &bp_args,
   return Error::success();
 }
 
+/// Write the API client's identity and requested capabilities into the
+/// debugged process. The IPC flag is not written here: see
+/// CUDADebuggerAPI::SetIpcFlag.
 static Error
 WriteInitializationSymbolsToHost(const GPUPluginBreakpointHitArgs &bp_args,
                                  NativeProcessProtocol &linux_process,
@@ -120,10 +123,6 @@ WriteInitializationSymbolsToHost(const GPUPluginBreakpointHitArgs &bp_args,
                             const uint32_t &value) -> Error {
     return WriteToHostSymbol(bp_args, linux_process, symbol_name, value);
   };
-
-  const uint32_t ipc_flag = 1;
-  if (Error err = write_uint32_t(Symbols::CUDBG_IPC_FLAG_NAME, ipc_flag))
-    return err;
 
   if (Error err = write_uint32_t(Symbols::CUDBG_APICLIENT_PID, pid))
     return err;
@@ -342,6 +341,13 @@ CUDADebuggerAPI::Initialize(const GPUPluginBreakpointHitArgs &args,
         "Failed to initialize the CUDA Debugger API. {}",
         llvm::toString(api.takeError()));
   return api;
+}
+
+Error CUDADebuggerAPI::SetIpcFlag(const GPUPluginBreakpointHitArgs &bp_args,
+                                  NativeProcessProtocol &linux_process) {
+  const uint32_t ipc_flag = 1;
+  return WriteToHostSymbol(bp_args, linux_process, Symbols::CUDBG_IPC_FLAG_NAME,
+                           ipc_flag);
 }
 
 GPUBreakpointInfo
