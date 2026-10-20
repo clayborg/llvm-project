@@ -956,12 +956,15 @@ void ProcessGDBRemote::DeliverPendingGPUSymbols(const ModuleList &modules) {
       continue;
     llvm::Expected<std::optional<GPUActions>> actions =
         m_gdb_comm.SendGPUSymbols(args);
-    if (!actions)
+    if (!actions) {
+      // The plug-in did not get the symbols, so keep all of its names pending.
       LLDB_LOG_ERROR(log, actions.takeError(),
                      "ProcessGDBRemote::DeliverPendingGPUSymbols failed to "
                      "send symbols to plugin '{1}': {0}",
                      args.plugin_name);
-    else if (*actions)
+      continue;
+    }
+    if (*actions)
       returned_actions.push_back(std::move(**actions));
     names = std::move(unresolved);
     if (names.empty())
