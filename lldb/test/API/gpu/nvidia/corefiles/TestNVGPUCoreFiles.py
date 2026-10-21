@@ -53,6 +53,44 @@ class TestNVGPUCoreFiles(NVGPUCoreTestCaseBase):
         self._test_read_pc()
         self._test_register_sanity()
 
+    def test_invalid_pc_backtrace(self):
+        """An invalid call target must not hide the saved caller frames."""
+        _, gpu_process = self.generate_and_load_core(args=["5"])
+        thread = self.get_stopped_thread()
+        gpu_process.SetSelectedThread(thread)
+        self.assertEqual(thread.GetStopReason(), lldb.eStopReasonException)
+        self.assertRegex(
+            thread.GetStopDescription(256), "Warp (Invalid|Misaligned) PC"
+        )
+
+        # The invalid call lands at function entry. Its return address is
+        # still in R20/R21, followed by the ordinary DWARF caller chain.
+        expected_frames = [
+            "crash_kernel_2",
+            "crash_kernel_2",
+            "crash_kernel_1",
+            "crash_kernel_0",
+            "crash_kernel",
+        ]
+        self.assertEqual(thread.GetNumFrames(), len(expected_frames))
+        for i, expected_func in enumerate(expected_frames):
+            frame = thread.GetFrameAtIndex(i)
+            self.assertTrue(frame.IsValid(), f"Frame {i} should be valid")
+            self.assertEqual(frame.GetFunctionName(), expected_func)
+
+        self.expect(
+            "thread backtrace --unfiltered",
+            substrs=["crash_kernel_2(exception_type=5)", "frame #4:"],
+        )
+
+        frame = thread.GetFrameAtIndex(0)
+        r20 = frame.FindRegister("R20")
+        r21 = frame.FindRegister("R21")
+        self.assertSuccess(r20.GetError())
+        self.assertSuccess(r21.GetError())
+        return_address = r20.GetValueAsUnsigned() | (r21.GetValueAsUnsigned() << 32)
+        self.assertEqual(thread.GetFrameAtIndex(1).GetPC(), return_address)
+
     def _test_thread_list(self):
         """Thread list shows block/thread coordinates from the kernel launch."""
         _, gpu_process = self.generate_and_load_core()
