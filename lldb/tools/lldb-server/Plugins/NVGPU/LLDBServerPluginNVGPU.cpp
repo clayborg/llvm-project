@@ -377,10 +377,8 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
                                  log_to_client_callback);
     // Here we can force the two processes to be in sync.
     // Not synchronizing them allows for a non-stop mode for the native process.
-    if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1") {
-      bool was_halted = false;
-      HaltNativeProcessIfNeeded(was_halted);
-    }
+    if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1")
+      HaltNativeProcessIfNeeded();
     break;
   }
   case CUDBG_EVENT_INVALID: {
