@@ -211,6 +211,17 @@ its Makefile, for example ``NVCC_ARCHFLAGS := -arch=sm_80``. The default,
 ``-arch=native``, builds for the GPUs of the machine that runs the test, so the
 program would differ from one machine to the next.
 
+To bring a live program to its first stop, use
+``run_to_cpu_line(source, marker)`` from ``NVGPUTestCaseBase`` rather than
+``lldbutil.run_to_line_breakpoint``. When lldb creates the GPU target it copies
+every CPU breakpoint into it. A copied file-and-line breakpoint that may move
+to the nearest code resolves in a cubin only inside a function that begins at
+or before the marked line, with one line of slack, so a marker on the line
+directly above a kernel's definition would stop the GPU in that kernel.
+``run_to_cpu_line`` sets a breakpoint that matches the line exactly, so its
+copy never resolves to device code, wherever the kernels are defined. Set GPU
+breakpoints on ``self.gpu_target`` once the program has stopped there.
+
 Running the tests under AddressSanitizer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -239,6 +250,41 @@ On such a build, the NVIDIA test directories set up the rest:
 The CUDA test programs are not instrumented, so they are not checked. A report
 that lldb-server writes while it shuts down can be cut short, because lldb stops
 the server soon after it starts to exit. The test file still fails in that case.
+
+Building GPU test programs
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A GPU test's ``Makefile`` lists its CUDA files in ``NVCC_SOURCES``.
+``Makefile.rules`` compiles them with ``-arch=native -G -g -O0`` and links with
+nvcc. Before the ``include``, a test can set:
+
+- ``CFLAGS_EXTRAS``: compiler options, which the link also gets.
+- ``LD_EXTRAS``: libraries, such as ``-lcuda`` for the driver API.
+- ``NVCC_DEBUGFLAGS``: replaces ``-G``. Use ``-lineinfo`` for line tables only,
+  or leave it empty for no device debug information; either way nvcc optimizes
+  the device code. To change only some files, set it per object after the
+  ``include``, as in ``other.o: NVCC_DEBUGFLAGS := -lineinfo``.
+
+A variable in the dictionary a test passes to ``build()`` goes on make's command
+line, where it overrides every assignment in a Makefile. A variable that a lit
+configuration puts in ``config.environment`` reaches make through dotest's
+environment instead, where a Makefile's ``:=`` wins over it and ``?=`` takes
+it; lit passes the tests only what its configuration sets, not the shell's
+environment. A test whose subject is one of these settings pins it with
+``override``, as ``lineinfo/Makefile`` does with
+``override NVCC_DEBUGFLAGS := -lineinfo``, which holds against either route.
+
+Each file's device code is a separate cubin, so a kernel can only call device
+functions in its own file. ``CFLAGS_EXTRAS := -rdc=true`` links the device code
+of all the files together, for device code that calls across files or launches
+kernels; nvcc adds the device runtime library itself.
+
+A program that loads device code through the driver API needs rules that build
+it next to ``a.out``; see ``lldb/test/API/gpu/nvidia/loaded_modules/Makefile``.
+Build a fatbin rather than a cubin, and PTX with ``NVCC_ARCHFLAGS`` empty:
+``-cubin`` and ``-ptx`` each take one architecture, and ``-arch=native`` gives
+one for each kind of GPU in the machine. When a second test needs these rules,
+move them into ``Makefile.rules`` instead of copying them.
 
 
 Remote platforms - Linux

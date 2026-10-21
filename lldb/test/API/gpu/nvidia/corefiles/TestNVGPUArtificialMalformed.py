@@ -11,7 +11,7 @@ sparseness.
 
 import lldb
 
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     CUDBG_SHT_SM_TABLE,
@@ -32,9 +32,7 @@ NO_ROOT_ERROR = "did not produce a nvgpucore root section"
 WARP_ILLEGAL_INSTRUCTION = cudbg_exception("WARP_ILLEGAL_INSTRUCTION")
 
 
-class TestNVGPUArtificialMalformed(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
     def _minimal(self, b):
         """Valid one-thread scaffold; tests bolt malformed sections onto it."""
         dev = b.add_device(num_regs_per_lane=32)
