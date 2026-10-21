@@ -53,6 +53,10 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         env["CUDA_ENABLE_COREDUMP_ON_EXCEPTION"] = "1"
         env["CUDA_COREDUMP_FILE"] = core_path
         env["CUDA_COREDUMP_GENERATION_FLAGS"] = flags
+        # The driver reports why a dump failed only in its own log; with
+        # progress on, stderr names the last step the dump reached. stderr is
+        # shown only when the test fails.
+        env["CUDA_COREDUMP_SHOW_PROGRESS"] = "1"
 
         if not getattr(self, "_built_core", False):
             self.build()
@@ -103,7 +107,8 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         )
         self.assertTrue(
             os.path.isfile(core_path),
-            f"CUDA core dump not found at {core_path}; program stderr: "
+            f"CUDA core dump not found at {core_path}; the program exited with "
+            f"{result.returncode}; program stderr: "
             f"{result.stderr.decode(errors='replace')[-500:]}",
         )
 
