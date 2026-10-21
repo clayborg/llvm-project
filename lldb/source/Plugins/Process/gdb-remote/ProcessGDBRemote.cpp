@@ -2396,6 +2396,10 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
           // load events.
           thread_sp->SetStopInfo(StopInfo::CreateStopReasonDyld(*thread_sp));
           handled = true;
+        } else if (reason == "target sync") {
+          thread_sp->SetStopInfo(
+              StopInfo::CreateStopReasonTargetSync(*thread_sp));
+          handled = true;
         }
       }
 

@@ -815,6 +815,8 @@ static const char *GetStopReasonString(StopReason stop_reason) {
     return "async interrupt";
   case eStopReasonDynamicLoader:
     return "dyld";
+  case eStopReasonTargetSync:
+    return "target sync";
   case eStopReasonHistoryBoundary:
   case eStopReasonInstrumentation:
   case eStopReasonInvalid:
@@ -4812,11 +4814,12 @@ void GDBRemoteCommunicationServerLLGS::InstallPlugin(
   m_plugins.emplace_back(std::move(plugin_up));
 }
 
-void GDBRemoteCommunicationServerLLGS::QueueInterrupt() {
-  m_mainloop.AddPendingCallback([this](MainLoopBase &) {
+void GDBRemoteCommunicationServerLLGS::QueueInterrupt(
+    lldb::StopReason stop_reason) {
+  m_mainloop.AddPendingCallback([this, stop_reason](MainLoopBase &) {
     if (!m_current_process || !m_current_process->IsRunning())
       return;
-    Status error = m_current_process->Interrupt();
+    Status error = m_current_process->InterruptWithStopReason(stop_reason);
     if (error.Fail())
       LLDB_LOG(GetLog(LLDBLog::Process), "failed to interrupt process {0}: {1}",
                m_current_process->GetID(), error);

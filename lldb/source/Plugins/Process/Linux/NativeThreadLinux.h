@@ -73,6 +73,10 @@ private:
 
   void SetStoppedBySignal(uint32_t signo, const siginfo_t *info = nullptr);
 
+  /// Stop the thread that an interrupt chose to report the stop, for
+  /// \a stop_reason. The signal stays the SIGSTOP that stopped it.
+  void SetStoppedByInterrupt(lldb::StopReason stop_reason);
+
   /// Return true if the thread is stopped.
   /// If stopped by a signal, indicate the signo in the signo argument.
   /// Otherwise, return LLDB_INVALID_SIGNAL_NUMBER.

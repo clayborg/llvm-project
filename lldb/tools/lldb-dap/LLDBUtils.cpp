@@ -140,6 +140,7 @@ bool ThreadHasStopReason(lldb::SBThread &thread) {
   case lldb::eStopReasonVForkDone:
   case lldb::eStopReasonInterrupt:
   case lldb::eStopReasonHistoryBoundary:
+  case lldb::eStopReasonTargetSync:
     return true;
   case lldb::eStopReasonThreadExiting:
   case lldb::eStopReasonDynamicLoader:

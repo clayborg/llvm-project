@@ -63,7 +63,8 @@ public:
   /// GPUActions from NativeProcessIsStopping(). This can be called from any
   /// thread, and returns without waiting: the native process's GDB server
   /// interrupts it on its own main loop, and the client learns of the stop
-  /// from the stop reply to its continue.
+  /// from the stop reply to its continue, which reports it as a
+  /// lldb::eStopReasonTargetSync stop rather than as an interrupt.
   void HaltNativeProcessIfNeeded();
 
   /// Get notified when the process is stopping.

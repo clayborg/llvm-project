@@ -715,6 +715,9 @@ llvm::json::Value CreateThreadStopped(DAP &dap, lldb::SBThread &thread,
   case lldb::eStopReasonDynamicLoader:
     body.try_emplace("reason", "dyld");
     break;
+  case lldb::eStopReasonTargetSync:
+    body.try_emplace("reason", "target sync");
+    break;
   case lldb::eStopReasonThreadExiting:
   case lldb::eStopReasonInvalid:
   case lldb::eStopReasonNone:
@@ -737,7 +740,10 @@ llvm::json::Value CreateThreadStopped(DAP &dap, lldb::SBThread &thread,
   if (tid == dap.focus_tid) {
     body.try_emplace("threadCausedFocus", true);
   }
-  body.try_emplace("preserveFocusHint", tid != dap.focus_tid);
+  // A target sync stop follows a stop in another target, which keeps the focus.
+  body.try_emplace("preserveFocusHint",
+                   tid != dap.focus_tid ||
+                       thread.GetStopReason() == lldb::eStopReasonTargetSync);
   body.try_emplace("allThreadsStopped", true);
   event.try_emplace("body", std::move(body));
   return llvm::json::Value(std::move(event));

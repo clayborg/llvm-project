@@ -91,6 +91,8 @@ public:
 
   Status Interrupt() override;
 
+  Status InterruptWithStopReason(lldb::StopReason stop_reason) override;
+
   Status Kill() override;
 
   Status GetMemoryRegionInfo(lldb::addr_t load_addr,
@@ -180,6 +182,11 @@ private:
   std::vector<std::pair<MemoryRegionInfo, FileSpec>> m_mem_region_cache;
 
   lldb::tid_t m_pending_notification_tid = LLDB_INVALID_THREAD_ID;
+
+  /// The stop reason that InterruptWithStopReason asked the interrupt's
+  /// triggering thread to report, until that thread stops or the process
+  /// resumes.
+  std::optional<lldb::StopReason> m_interrupt_stop_reason;
 
   /// Inferior memory (allocated by us) and its size.
   llvm::DenseMap<lldb::addr_t, lldb::addr_t> m_allocated_memory;

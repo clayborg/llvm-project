@@ -270,7 +270,11 @@ enum StopReason {
   /// work. The process will auto continue after the plugin is done loading or
   /// unloading some shared libraries unless the target setting named
   /// "target.process.stop-on-sharedlibrary-events" it set to true.
-  eStopReasonDynamicLoader
+  eStopReasonDynamicLoader,
+  /// Indicates that the process was stopped to stay in sync with another
+  /// target, for example a CPU process whose GPU stopped. The stop is reported
+  /// as such rather than as an interrupt.
+  eStopReasonTargetSync
 };
 
 /// Command Return Status Types.

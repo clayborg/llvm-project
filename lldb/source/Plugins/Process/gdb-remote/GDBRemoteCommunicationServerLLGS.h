@@ -123,7 +123,12 @@ public:
   /// running, as the client's interrupt packet does. Unlike the packet, this
   /// can be called from any thread: the interrupt happens on this server's
   /// main loop.
-  void QueueInterrupt();
+  ///
+  /// \param[in] stop_reason
+  ///     The stop reason of the thread that the stop reply reports, in place
+  ///     of the interrupt, so that the client can tell why the process
+  ///     stopped. See NativeProcessProtocol::InterruptWithStopReason.
+  void QueueInterrupt(lldb::StopReason stop_reason);
 
   PacketResult SendONotification(const char *buffer, uint32_t len);
 

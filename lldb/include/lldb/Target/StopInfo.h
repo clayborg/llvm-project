@@ -134,6 +134,7 @@ public:
     lldb::StopReason reason = GetStopReason();
     return reason != lldb::eStopReasonNone &&
            reason != lldb::eStopReasonHistoryBoundary &&
+           reason != lldb::eStopReasonTargetSync &&
            reason != lldb::eStopReasonInvalid;
   }
 
@@ -182,6 +183,9 @@ public:
 
   static lldb::StopInfoSP
   CreateStopReasonDyld(Thread &thread, const char *description = nullptr);
+
+  /// The thread's process was stopped to stay in sync with another target.
+  static lldb::StopInfoSP CreateStopReasonTargetSync(Thread &thread);
 
   static lldb::StopInfoSP CreateStopReasonFork(Thread &thread,
                                                lldb::pid_t child_pid,

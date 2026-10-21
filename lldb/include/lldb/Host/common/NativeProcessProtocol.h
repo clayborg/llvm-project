@@ -80,6 +80,19 @@ public:
   ///     Returns an error object.
   virtual Status Interrupt();
 
+  /// Interrupt the process like Interrupt, but have the thread whose stop is
+  /// reported stop for \a stop_reason, rather than for whatever the interrupt
+  /// does, so that the client can tell why the process stopped.
+  ///
+  /// The default implementation interrupts the process with Interrupt, and so
+  /// reports the interrupt instead.
+  ///
+  /// \return
+  ///     Returns an error object.
+  virtual Status InterruptWithStopReason(lldb::StopReason stop_reason) {
+    return Interrupt();
+  }
+
   virtual Status Kill() = 0;
 
   // Tells a process not to stop the inferior on given signals and just

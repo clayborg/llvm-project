@@ -1599,6 +1599,20 @@ public:
   }
 };
 
+/// A stop of a process that was interrupted to stay in sync with another
+/// target, for example a CPU process whose GPU stopped. The process stays
+/// stopped, but the stop is not an interrupt the user asked for.
+class StopInfoTargetSync : public StopInfo {
+public:
+  StopInfoTargetSync(Thread &thread) : StopInfo(thread, 0) {
+    SetDescription("target sync");
+  }
+  ~StopInfoTargetSync() override = default;
+  StopReason GetStopReason() const override {
+    return lldb::eStopReasonTargetSync;
+  }
+};
+
 } // namespace lldb_private
 
 StopInfoSP StopInfo::CreateStopReasonWithBreakpointSiteID(Thread &thread,
@@ -1664,6 +1678,10 @@ StopInfoSP StopInfo::CreateStopReasonHistoryBoundary(Thread &thread,
 StopInfoSP StopInfo::CreateStopReasonDyld(Thread &thread,
                                           const char *description) {
   return StopInfoSP(new StopInfoDyld(thread, description));
+}
+
+StopInfoSP StopInfo::CreateStopReasonTargetSync(Thread &thread) {
+  return std::make_shared<StopInfoTargetSync>(thread);
 }
 
 StopInfoSP StopInfo::CreateStopReasonWithExec(Thread &thread) {
