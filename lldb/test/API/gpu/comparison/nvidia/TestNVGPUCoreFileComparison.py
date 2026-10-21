@@ -26,7 +26,7 @@ import sys
 import lldb
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     CUDBG_GRID_STATUS_ACTIVE,
@@ -111,10 +111,8 @@ def _thread_name(block, thread):
 
 
 @skipTestIfFn(_cuda_gdb_skip_reason)
-class TestNVGPUCoreFileComparison(NVGPUCoreTestBase):
+class TestNVGPUCoreFileComparison(NVGPUCoreTestCaseBase):
     """Compares LLDB and cuda-gdb on an artificial NVGPU (.nvcudmp) core."""
-
-    NO_DEBUG_INFO_TESTCASE = True
 
     # Cubin fixture and the address compare_kernel resolves to (see
     # comparison_artificial.cu).
@@ -320,7 +318,7 @@ class TestNVGPUCoreFileComparison(NVGPUCoreTestBase):
         if getattr(self, "_active_lldb_driver", None):
             self._active_lldb_driver.cleanup()
             self._active_lldb_driver = None
-        NVGPUCoreTestBase.tearDown(self)
+        NVGPUCoreTestCaseBase.tearDown(self)
 
     def _gdb_threads(self, gdb_driver):
         """Parse non-coalesced 'info cuda threads' into generic thread data."""

@@ -5,8 +5,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUExit(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
     def _run_to_exit_code(self, exit_code: int):
         """Run to the exit code breakpoint."""
         self.killCPUOnTeardown()

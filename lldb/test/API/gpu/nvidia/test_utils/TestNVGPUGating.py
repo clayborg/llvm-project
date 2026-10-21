@@ -21,7 +21,7 @@ from lldbsuite.test import configuration
 from lldbsuite.test.lldbtest import TestBase
 from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu import nvgpu_host
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 gpu_info = nvgpu_host.gpu_info
@@ -328,7 +328,7 @@ class TestNVGPUGating(TestBase):
             def test_live(self):
                 pass
 
-        class Core(NVGPUCoreTestBase):
+        class Core(NVGPUCoreTestCaseBase):
             def test_method(self):
                 pass
 
@@ -364,7 +364,7 @@ class TestNVGPUGating(TestBase):
             def test_method(self):
                 pass
 
-        class Core(NVGPUCoreTestBase):
+        class Core(NVGPUCoreTestCaseBase):
             def test_method(self):
                 pass
 
@@ -390,7 +390,7 @@ class TestNVGPUGating(TestBase):
             def test_method(self):
                 pass
 
-        class Core(NVGPUCoreTestBase):
+        class Core(NVGPUCoreTestCaseBase):
             def test_method(self):
                 pass
 
@@ -435,7 +435,7 @@ class TestNVGPUGating(TestBase):
         # A core-file test needs no GPU until it makes a core by running a
         # program on one. Then, before building anything, it skips on a
         # machine without a GPU and fails with an nvcc that cannot build.
-        class Core(NVGPUCoreTestBase):
+        class Core(NVGPUCoreTestCaseBase):
             def test_method(self):
                 pass
 
@@ -460,7 +460,7 @@ class TestNVGPUGating(TestBase):
             def test_method(self):
                 pass
 
-        class Core(NVGPUCoreTestBase):
+        class Core(NVGPUCoreTestCaseBase):
             def test_method(self):
                 pass
 
