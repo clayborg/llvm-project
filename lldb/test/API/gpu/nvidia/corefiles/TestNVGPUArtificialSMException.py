@@ -20,7 +20,7 @@ import struct
 
 import lldb
 
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     cudbg_exception,
@@ -31,9 +31,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
 )
 
 
-class TestNVGPUArtificialSMException(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
     # Addresses inside the elfv8.cubin fixture, so an error PC symbolicates
     # (values from ../disass/TestNVGPUDisass.py). The lane and error PCs differ
     # so a frame can be traced back to the row it came from.

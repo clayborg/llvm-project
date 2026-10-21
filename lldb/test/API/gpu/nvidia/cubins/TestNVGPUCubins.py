@@ -5,8 +5,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUCubins(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
     def test_cubin_sections_have_load_addresses(self):
         """Test that all executable text sections of all cubins have a load address."""
         self.killCPUOnTeardown()

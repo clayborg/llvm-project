@@ -1,8 +1,9 @@
 import math
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 import lldb
 from lldbsuite.test import lldbutil
+from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 
@@ -31,7 +32,14 @@ def _with_gpu_check(setup):
 
 class NVGPUTestCaseBase(GpuTestCaseBase):
     """
-    Class that should be used by all python NVIDIA GPU tests.
+    Base class for NVIDIA GPU tests. A test that reads core files uses its
+    subclass NVGPUCoreTestCaseBase (nvgpu_core_testcase.py), which adds making
+    and loading core files.
+
+    run_to_cpu_line(source, marker) launches the built program and runs the CPU
+    to a marked line, the usual first step of a test. Its breakpoint matches the
+    line exactly, so the copy lldb makes of it in the GPU target cannot move to
+    device code.
 
     Which wait to use:
 
@@ -50,6 +58,9 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
           is never examined. Bounded by a continue count and a timeout.
       assert_gpu_stop_reason(reason), continue_gpu_until_stop_reason(reason)
           Shorthands for "a thread stopped for this reason".
+      wait_for_exit(process)
+          The test resumed both processes and expects them to finish. Nothing
+          is resumed.
 
     The verb says what happens to the GPU: `wait_for` and `assert` never resume
     it, `continue` does.
@@ -67,9 +78,9 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     # before resuming the GPU.
 
     # Tests on this base class debug a live CUDA program, so they need a GPU.
-    # NVGPUCoreTestBase sets this to False. A test class can set it too, and
-    # @skipUnlessNVGPUDevice from nvgpu_decorators marks one method of a class
-    # that needs no GPU.
+    # NVGPUCoreTestCaseBase sets this to False. A test class can set it too,
+    # and @skipUnlessNVGPUDevice from nvgpu_decorators marks one method of a
+    # class that needs no GPU.
     NEEDS_GPU = True
 
     def __init_subclass__(cls, **kwargs):
@@ -98,6 +109,33 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         if error:
             self.fail(error)
 
+    def run_to_cpu_line(
+        self, source: str, marker: str, exe_name: str = "a.out"
+    ) -> Tuple[lldb.SBTarget, lldb.SBProcess, lldb.SBThread, lldb.SBBreakpoint]:
+        """Launch the built program and run the CPU to the line of `source`
+        that contains `marker`, as lldbutil.run_to_line_breakpoint does. Return
+        (target, process, thread, breakpoint).
+
+        The breakpoint matches that line exactly. When lldb creates the GPU
+        target it copies every CPU breakpoint into it. A copy that may move to
+        the nearest code resolves in a cubin only inside a function that begins
+        at or before the marked line, with one line of slack, so a marker on
+        the line directly above a kernel's definition would stop the GPU in
+        that kernel. An exact match never resolves to device code, so the
+        layout of the program does not matter.
+        """
+        target = lldbutil.run_to_breakpoint_make_target(self, exe_name)
+        line = line_number(source, marker)
+        breakpoint = target.BreakpointCreateByLocation(
+            lldb.SBFileSpec(source), line, 0, 0, lldb.SBFileSpecList(), False
+        )
+        self.assertGreater(
+            breakpoint.GetNumLocations(),
+            0,
+            f"no CPU code at {source}:{line}, the line marked {marker!r}",
+        )
+        return lldbutil.run_to_breakpoint_do_run(self, target, breakpoint)
+
     def killCPUOnTeardown(self):
         # TestBase.tearDown deletes all targets (and kills their processes)
         # before running registered hooks, so by the time this fires
@@ -110,17 +148,24 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
         self.addTearDownHook(kill_cpu)
 
-    def _next_gpu_state(self, listener: lldb.SBListener, timeout_seconds: int) -> int:
-        """Pull the next GPU process state-changed event and return its state.
+    def _next_state(
+        self,
+        process: lldb.SBProcess,
+        what: str,
+        listener: lldb.SBListener,
+        timeout_seconds: int,
+    ) -> int:
+        """Pull the next state-changed event of `process` and return its state.
 
-        Only events from the GPU process broadcaster are consumed, so CPU events
-        stay queued. Stopped events flagged as "restarted" (a stop lldb resumed
-        from on its own) are skipped the way lldbutil.expect_state_changes does.
-        Fails the test on timeout.
+        Only events from that process's broadcaster are consumed, so the other
+        process's events stay queued. Stopped events flagged as "restarted" (a
+        stop lldb resumed from on its own) are skipped the way
+        lldbutil.expect_state_changes does. Fails the test on timeout, naming
+        `what` ("CPU" or "GPU").
         """
         # SBListener waits take a uint32 second count; round fractions up once here.
         num_seconds = math.ceil(timeout_seconds)
-        broadcaster = self.gpu_process.GetBroadcaster()
+        broadcaster = process.GetBroadcaster()
         while True:
             event = lldb.SBEvent()
             if not listener.WaitForEventForBroadcasterWithType(
@@ -130,8 +175,8 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 event,
             ):
                 self.fail(
-                    f"timed out after {timeout_seconds} s waiting for the GPU process "
-                    "to change state"
+                    f"timed out after {timeout_seconds} s waiting for the {what} "
+                    "process to change state"
                 )
             state = lldb.SBProcess.GetStateFromEvent(event)
             if state == lldb.eStateStopped and lldb.SBProcess.GetRestartedFromEvent(
@@ -140,13 +185,39 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 continue
             return state
 
+    def _next_gpu_state(self, listener: lldb.SBListener, timeout_seconds: int) -> int:
+        """Pull the next GPU process state-changed event and return its state."""
+        return self._next_state(self.gpu_process, "GPU", listener, timeout_seconds)
+
+    def wait_for_exit(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> int:
+        """Wait for `process` (CPU or GPU) to exit and return its exit status.
+
+        Nothing is resumed: the test resumes both processes first. Running
+        events are tolerated on the way; a stop fails the test, so a program
+        that stops again instead of finishing fails instead of hanging.
+        """
+        what = "GPU" if process.GetTarget() == self.gpu_target else "CPU"
+        listener = self.dbg.GetListener()
+        while True:
+            state = self._next_state(process, what, listener, timeout_seconds)
+            if state == lldb.eStateRunning:
+                continue
+            if state == lldb.eStateExited:
+                return process.GetExitStatus()
+            self.fail(
+                f"{what} process entered state "
+                f"{lldb.SBDebugger.StateAsCString(state)} before exiting"
+            )
+
     def wait_for_gpu_to_stop(self, timeout_seconds: int = 60) -> None:
         """Wait for the running GPU process to stop.
 
         Nothing is resumed. Running events (and restarted stops) are tolerated on
         the way to eStateStopped. Any other state fails the test, naming the exit
-        status if the GPU process exited, so a kernel that never reaches the
-        expected stop fails instead of hanging the test.
+        status and its description if the GPU process exited, so a kernel that
+        never reaches the expected stop fails instead of hanging the test. The
+        description tells a lost connection to lldb-server (status -1) apart
+        from the program ending.
         """
         listener = self.dbg.GetListener()
         while True:
@@ -156,7 +227,12 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             if state == lldb.eStateStopped:
                 return
             if state == lldb.eStateExited:
-                what = f"exited (status {self.gpu_process.GetExitStatus()})"
+                status = self.gpu_process.GetExitStatus()
+                description = self.gpu_process.GetExitDescription()
+                if description:
+                    what = f"exited (status {status}: {description})"
+                else:
+                    what = f"exited (status {status})"
             else:
                 what = f"entered state {lldb.SBDebugger.StateAsCString(state)}"
             self.fail(f"GPU process {what} before stopping")
@@ -335,6 +411,62 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             timeout_seconds=timeout_seconds,
             max_continues=max_continues,
             description=description,
+        )
+
+    @staticmethod
+    def _breakpoint_matcher(breakpoint: lldb.SBBreakpoint):
+        """Build the (match, description) pair shared by the *_breakpoint helpers.
+
+        The match is the list of threads stopped at `breakpoint`.
+        """
+
+        def match(process: lldb.SBProcess) -> Optional[List[lldb.SBThread]]:
+            threads = lldbutil.get_threads_stopped_at_breakpoint(process, breakpoint)
+            return threads or None
+
+        return match, f"at {breakpoint}"
+
+    def assert_gpu_stop_at_breakpoint(
+        self, breakpoint: lldb.SBBreakpoint
+    ) -> List[lldb.SBThread]:
+        """The current GPU stop must have threads stopped at `breakpoint`; return
+        them."""
+        match, description = self._breakpoint_matcher(breakpoint)
+        return self.assert_gpu_stop(match, description=description)
+
+    def continue_gpu_until_breakpoint(
+        self,
+        breakpoint: lldb.SBBreakpoint,
+        *,
+        timeout_seconds: int = 60,
+        max_continues: int = 16,
+    ) -> List[lldb.SBThread]:
+        """Resume the GPU process until threads stop at `breakpoint`; return them.
+
+        Bounds are as in continue_gpu_until.
+        """
+        match, description = self._breakpoint_matcher(breakpoint)
+        return self.continue_gpu_until(
+            match,
+            timeout_seconds=timeout_seconds,
+            max_continues=max_continues,
+            description=description,
+        )
+
+    def assert_frame_at(
+        self, frame: lldb.SBFrame, function: str, source: str, marker: str
+    ) -> None:
+        """`frame` must be in `function`, at the line of `source` that contains
+        `marker`."""
+        self.assertEqual(frame.GetFunctionName(), function, f"function of {frame}")
+        line_entry = frame.GetLineEntry()
+        self.assertEqual(
+            line_entry.GetFileSpec().GetFilename(), source, f"source file of {frame}"
+        )
+        self.assertEqual(
+            line_entry.GetLine(),
+            line_number(source, marker),
+            f"line of {frame}, which should be the line marked {marker!r}",
         )
 
     def read_vec3_register(self, frame: lldb.SBFrame, name: str) -> List[int]:

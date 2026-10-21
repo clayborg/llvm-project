@@ -5,7 +5,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUModuleNames(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
     SESSION_NAME = "NVIDIA GPU Session"
 
     def run_to_breakpoint_after_launches(self):

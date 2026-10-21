@@ -8,7 +8,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUDisass(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
     # These tests disassemble cubins from disk; only the method marked
     # @skipUnlessNVGPUDevice runs a program on the GPU.
     NEEDS_GPU = False
