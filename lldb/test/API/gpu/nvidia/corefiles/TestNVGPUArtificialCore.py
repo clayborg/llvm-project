@@ -12,7 +12,7 @@ import struct
 
 import lldb
 
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     cudbg_exception,
@@ -20,9 +20,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
 )
 
 
-class TestNVGPUArtificialCore(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
     # PC points inside the elfv8.cubin fixture so the primary thread drives
     # both register reads and cubin symbolication (values from
     # ../disass/TestNVGPUDisass.py).
@@ -314,7 +312,7 @@ class TestNVGPUArtificialCore(NVGPUCoreTestBase):
         return b
 
     def setUp(self):
-        NVGPUCoreTestBase.setUp(self)
+        NVGPUCoreTestCaseBase.setUp(self)
         self.core_target, self.core_process = (
             self.generate_and_load_artificial_core(self._build_full_core())
         )

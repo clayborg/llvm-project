@@ -9,8 +9,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUUnwind(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
     def continue_to_next_stop(self, stop_reason):
         """Resume until thread 0 stops for `stop_reason`, then reselect the GPU target.
 

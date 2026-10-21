@@ -125,6 +125,14 @@ ifneq "$(strip $(NVCC_SOURCES))" ""
 	override CC_TYPE := cuda
 	USE_SYSTEM_STDLIB := 1
 	NVCC_ARCHFLAGS ?= -arch=native
+	# [NVIDIA] Device debug information: -G, -lineinfo for line tables only, or
+	# nothing.
+	NVCC_DEBUGFLAGS ?= -G
+	# [NVIDIA] Linking relocatable device code (-rdc=true) also links the device
+	# code, for the GPU architectures the link is given. Without them, nvcc
+	# links it for its default architecture and the kernels cannot run on other
+	# GPUs.
+	LDFLAGS += $(NVCC_ARCHFLAGS)
 endif
 
 #----------------------------------------------------------------------
@@ -349,7 +357,7 @@ CXXFLAGS += -std=c++11 $(CFLAGS) $(ARCH_CXXFLAGS)
 HIPFLAGS ?= $(CFLAGS)
 # Copy common options to the linker flags (dwarf, arch. & etc).
 # Note: we get some 'garbage' options for linker here (such as -I, --isystem & etc).
-NVCCFLAGS ?= $(CFLAGS) $(NVCC_ARCHFLAGS) -G -g -O0
+NVCCFLAGS ?= $(CFLAGS) $(NVCC_ARCHFLAGS) $(NVCC_DEBUGFLAGS) -g -O0
 LDFLAGS += $(CFLAGS)
 LDFLAGS += $(LD_EXTRAS) $(ARCH_LDFLAGS)
 ifeq (,$(filter $(OS), Windows_NT Android Darwin))

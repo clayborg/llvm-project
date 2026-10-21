@@ -3,12 +3,12 @@
 API tests ignore lit's REQUIRES lines, so whether a test needs a GPU is decided
 in Python, by the test's base class. A test derived from NVGPUTestCaseBase
 debugs a live CUDA program, so it needs a GPU; a core-file test derived from
-NVGPUCoreTestBase does not. Each base class says so in its NEEDS_GPU attribute,
-which a test class can set too. NVGPUTestCaseBase skips a test that needs a GPU
-on a machine that cannot run one, with a reason that says what would let it
-run, and lit reports a test file whose tests were all skipped as UNSUPPORTED.
-NVGPUCoreTestBase.generate_core skips the same way, because it runs the test
-program on the GPU to make a core.
+NVGPUCoreTestCaseBase does not. Each base class says so in its NEEDS_GPU
+attribute, which a test class can set too. NVGPUTestCaseBase skips a test that
+needs a GPU on a machine that cannot run one, with a reason that says what
+would let it run, and lit reports a test file whose tests were all skipped as
+UNSUPPORTED. NVGPUCoreTestCaseBase.generate_core skips the same way, because it
+runs the test program on the GPU to make a core.
 
 In a class that needs no GPU, a method that runs a CUDA program on the GPU
 carries @skipUnlessNVGPUDevice:
