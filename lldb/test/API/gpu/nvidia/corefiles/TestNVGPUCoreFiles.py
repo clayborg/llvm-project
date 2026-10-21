@@ -5,12 +5,10 @@ Test NVGPU core file debugging functionality.
 import lldb
 
 from lldbsuite.test.lldbtest import line_number
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 
 
-class TestNVGPUCoreFiles(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUCoreFiles(NVGPUCoreTestCaseBase):
     NUM_BLOCKS = 32
     THREADS_PER_BLOCK = 4
     SOURCE = "corefiles.cu"

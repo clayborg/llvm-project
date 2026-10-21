@@ -8,8 +8,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPUThreads(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
     def _thread_info_json(self, thread):
         self.runCmd(f"thread info -j {thread.GetIndexID()}")
         output = self.res.GetOutput()

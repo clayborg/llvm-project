@@ -5,8 +5,6 @@ from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
 class TestNVGPURegisters(NVGPUTestCaseBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
     def test_gpu_showing_registers(self):
         """Test that we know when the GPU has asserted."""
         self.killCPUOnTeardown()

@@ -4,7 +4,7 @@ import struct
 
 import lldb
 
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     CUDBG_SHT_DEV_REGS,
     CUDBG_SHT_LN_TABLE,
@@ -15,9 +15,7 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
 )
 
 
-class TestNVGPUCompactLanes(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUCompactLanes(NVGPUCoreTestCaseBase):
     def _compact_core(self, hardware_lanes, valid_mask, active_mask, fault=True):
         """Emit compact rows directly: the normal builder pads to lane IDs."""
         b = NVGPUCoreBuilder()

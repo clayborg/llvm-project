@@ -7,7 +7,7 @@ import lldb
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
-class NVGPUCoreTestBase(NVGPUTestCaseBase):
+class NVGPUCoreTestCaseBase(NVGPUTestCaseBase):
     """Base class for NVGPU core file tests with automated core generation."""
 
     # Reading a core file needs no GPU. Making one does: generate_core skips
@@ -141,7 +141,7 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         self.assertEqual(
             gpu_process.GetPluginName(),
             "nvgpu-core",
-            "EM_CUDA + ET_CORE corefiles must be handled by ProcessNVGPUCore"
+            "EM_CUDA + ET_CORE corefiles must be handled by ProcessNVGPUCore",
         )
 
         self.dbg.SetSelectedTarget(gpu_target)
@@ -162,8 +162,7 @@ class NVGPUCoreTestBase(NVGPUTestCaseBase):
         self.yaml2obj(yaml_path, core_path)
         return core_path
 
-    def generate_and_load_artificial_core(self, builder,
-                                          name="artificial.nvcudmp"):
+    def generate_and_load_artificial_core(self, builder, name="artificial.nvcudmp"):
         """Build an artificial core from an NVGPUCoreBuilder and load it.
 
         Returns (gpu_target, gpu_process).

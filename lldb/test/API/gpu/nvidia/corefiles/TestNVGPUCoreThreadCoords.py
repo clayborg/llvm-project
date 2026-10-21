@@ -8,12 +8,10 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     cudbg_exception,
 )
-from lldbsuite.test.tools.gpu.nvgpu_core_testbase import NVGPUCoreTestBase
+from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 
 
-class TestNVGPUCoreThreadCoords(NVGPUCoreTestBase):
-    NO_DEBUG_INFO_TESTCASE = True
-
+class TestNVGPUCoreThreadCoords(NVGPUCoreTestCaseBase):
     CONTEXT_ID = 0x8000000100000001
     GRID_ID = 0xF000000500000005
     DECOY_GRID_ID = 0xE000000400000004
