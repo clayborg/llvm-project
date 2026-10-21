@@ -323,8 +323,20 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
 
       for (const SectionSP &lane :
            nvgpu_core::FindChildrenByType(*warp, eSectionTypeNVGPULane)) {
-        const uint32_t lane_idx = nvgpu::DecodeHwIdx(lane->GetID());
-        if (!warp_or->IsLaneValid(lane_idx))
+        llvm::Expected<nvgpu_core::LaneEntry> lane_or =
+            nvgpu_core::ReadAndDecode<nvgpu_core::LaneEntry>(lane, core);
+        if (!lane_or) {
+          LLDB_LOG_ERROR(log, lane_or.takeError(),
+                         "ProcessNVGPUCore: skipping lane at {1}: {0}",
+                         lane->GetName());
+          continue;
+        }
+
+        // Section IDs encode table rows, not hardware lane IDs. Producers
+        // can compact the table (e.g. hardware lane 29 in row 0); masks and
+        // stop attribution must use the lane ID stored in the row instead.
+        const uint32_t lane_idx = lane_or->ln;
+        if (lane_idx >= 32 || !warp_or->IsLaneValid(lane_idx))
           continue;
         ++tid;
         auto thread_sp =
