@@ -4836,3 +4836,14 @@ void GDBRemoteCommunicationServerLLGS::InstallPlugin(
     std::unique_ptr<lldb_server::LLDBServerPlugin> plugin_up) {
   m_plugins.emplace_back(std::move(plugin_up));
 }
+
+void GDBRemoteCommunicationServerLLGS::QueueInterrupt() {
+  m_mainloop.AddPendingCallback([this](MainLoopBase &) {
+    if (!m_current_process || !m_current_process->IsRunning())
+      return;
+    Status error = m_current_process->Interrupt();
+    if (error.Fail())
+      LLDB_LOG(GetLog(LLDBLog::Process), "failed to interrupt process {0}: {1}",
+               m_current_process->GetID(), error);
+  });
+}

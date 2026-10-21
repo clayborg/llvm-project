@@ -119,6 +119,12 @@ public:
     return m_current_process;
   }
 
+  /// Queue an interrupt of the current process, which stops it if it is
+  /// running, as the client's interrupt packet does. Unlike the packet, this
+  /// can be called from any thread: the interrupt happens on this server's
+  /// main loop.
+  void QueueInterrupt();
+
   PacketResult SendONotification(const char *buffer, uint32_t len);
 
 protected:
