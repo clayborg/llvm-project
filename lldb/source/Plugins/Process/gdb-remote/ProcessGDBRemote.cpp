@@ -2534,7 +2534,6 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
   static constexpr llvm::StringLiteral g_key_lane("lane");
   static constexpr llvm::StringLiteral g_key_simd("simd");
   static constexpr llvm::StringLiteral g_key_inactive("inactive");
-  static constexpr llvm::StringLiteral g_key_sync_plugin("sync-plugin");
 
   // Stop with signal and thread info
   lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
@@ -2555,7 +2554,6 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
   std::optional<lldb::tid_t> lane_id;
   std::optional<lldb::tid_t> simd_id;
   bool active = true;
-  std::string sync_plugin;
   // Iterate through all of the thread dictionary key/value pairs from the
   // structured data dictionary
 
@@ -2565,9 +2563,9 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
                         &thread_dispatch_qaddr, &queue_vars_valid,
                         &associated_with_dispatch_queue, &dispatch_queue_t,
                         &queue_name, &queue_kind, &queue_serial_number,
-                        &lane_id, &simd_id, &active,
-                        &sync_plugin](llvm::StringRef key,
-                                      StructuredData::Object *object) -> bool {
+                        &lane_id, &simd_id,
+                        &active](llvm::StringRef key,
+                                 StructuredData::Object *object) -> bool {
     if (key == g_key_tid) {
       // thread in big endian hex
       tid = object->GetUnsignedIntegerValue(LLDB_INVALID_THREAD_ID);
@@ -2673,8 +2671,6 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
         simd_id = tmp_id;
     } else if (key == g_key_inactive) {
       active = false;
-    } else if (key == g_key_sync_plugin) {
-      sync_plugin = std::string(object->GetStringValue());
     } else if (key == g_key_signal)
       signo = object->GetUnsignedIntegerValue(LLDB_INVALID_SIGNAL_NUMBER);
     return true; // Keep iterating through all dictionary key/value pairs
@@ -2684,7 +2680,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       tid, expedited_register_map, signo, thread_name, reason, description,
       exc_type, exc_data, thread_dispatch_qaddr, queue_vars_valid,
       associated_with_dispatch_queue, dispatch_queue_t, queue_name, queue_kind,
-      queue_serial_number, lane_id, simd_id, active, sync_plugin);
+      queue_serial_number, lane_id, simd_id, active, /*sync_plugin=*/"");
 }
 
 StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {

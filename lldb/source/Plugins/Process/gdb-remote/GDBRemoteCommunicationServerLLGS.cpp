@@ -845,8 +845,7 @@ static bool ApplyInterruptStopReason(NativeProcessProtocol &process,
 }
 
 static llvm::Expected<json::Array>
-GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged,
-                   llvm::StringRef interrupt_plugin_name) {
+GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
 
   json::Array threads_array;
@@ -860,8 +859,7 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged,
     if (!thread.GetStopReason(tid_stop_info, description))
       return llvm::make_error<llvm::StringError>(
           "failed to get stop reason", llvm::inconvertibleErrorCode());
-    const bool interrupt_stop =
-        ApplyInterruptStopReason(process, tid_stop_info);
+    ApplyInterruptStopReason(process, tid_stop_info);
 
     const int signum = tid_stop_info.signo;
     if (log) {
@@ -901,9 +899,6 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged,
     const char *stop_reason = GetStopReasonString(tid_stop_info.reason);
     if (stop_reason)
       thread_obj.try_emplace("reason", stop_reason);
-
-    if (interrupt_stop && !interrupt_plugin_name.empty())
-      thread_obj.try_emplace("sync-plugin", interrupt_plugin_name);
 
     if (!description.empty())
       thread_obj.try_emplace("description", description);
@@ -1020,8 +1015,7 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     if (thread_num > 1) {
       const bool threads_with_valid_stop_info_only = true;
       llvm::Expected<json::Array> threads_info = GetJSONThreadsInfo(
-          *m_current_process, threads_with_valid_stop_info_only,
-          m_interrupt_plugin_name);
+          *m_current_process, threads_with_valid_stop_info_only);
       if (threads_info) {
         response.PutCString("jstopinfo:");
         StreamString unescaped_response;
@@ -3841,8 +3835,7 @@ GDBRemoteCommunicationServerLLGS::Handle_jThreadsInfo(
   StreamString response;
   const bool threads_with_valid_stop_info_only = false;
   llvm::Expected<json::Value> threads_info =
-      GetJSONThreadsInfo(*m_current_process, threads_with_valid_stop_info_only,
-                         m_interrupt_plugin_name);
+      GetJSONThreadsInfo(*m_current_process, threads_with_valid_stop_info_only);
   if (!threads_info) {
     LLDB_LOG_ERROR(log, threads_info.takeError(),
                    "failed to prepare a packet for pid {1}: {0}",
