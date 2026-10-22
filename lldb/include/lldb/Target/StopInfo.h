@@ -190,7 +190,8 @@ public:
   ///     The target that the process stopped for, which the description
   ///     names, or null if it is not known.
   static lldb::StopInfoSP
-  CreateStopReasonTargetSync(Thread &thread, lldb::TargetSP sync_target_sp);
+  CreateStopReasonTargetSync(Thread &thread,
+                             lldb::TargetSP sync_target_sp = nullptr);
 
   static lldb::StopInfoSP CreateStopReasonFork(Thread &thread,
                                                lldb::pid_t child_pid,

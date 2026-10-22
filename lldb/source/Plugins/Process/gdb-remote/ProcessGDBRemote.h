@@ -436,7 +436,7 @@ protected:
       lldb::addr_t dispatch_queue_t, std::string &queue_name,
       lldb::QueueKind queue_kind, uint64_t queue_serial,
       std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
-      bool inactive, const std::string &sync_plugin);
+      bool inactive, llvm::StringRef sync_plugin = {});
 
   void ClearThreadIDList();
 
