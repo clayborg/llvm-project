@@ -134,7 +134,10 @@ class DebuggerInterface(ABC):
 
     @abstractmethod
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file for debugging."""
         pass

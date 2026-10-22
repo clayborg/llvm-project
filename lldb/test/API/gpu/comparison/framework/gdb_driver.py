@@ -270,10 +270,16 @@ print("{self.END_MARKER}")
         return self._wait_for_prompt(timeout)
 
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file into the persistent GDB process."""
         self._start_gdb()
+
+        if auto_load_debuginfo:
+            core_path = os.path.realpath(core_path)
 
         self._core_path = core_path
         self._executable_path = executable_path
@@ -285,6 +291,9 @@ print("{self.END_MARKER}")
         # Load the core file
         self._send_command(f"core-file {core_path}")
         self._core_loaded = True
+        auto_load_output = ""
+        if auto_load_debuginfo:
+            auto_load_output = self._auto_load_debuginfo()
 
         # Get thread info to verify core loaded
         script = """
@@ -309,8 +318,29 @@ print("RESULT_JSON:" + json.dumps(result))
             success=data.get("success", False),
             error_message=data.get("error", ""),
             raw_output=data.get("raw_output", ""),
-            extra_data={"thread_count": data.get("thread_count", 0)},
+            extra_data={
+                "thread_count": data.get("thread_count", 0),
+                "auto_load_output": auto_load_output,
+            },
         )
+
+    def _auto_load_debuginfo(self) -> str:
+        fbcode_path = os.environ.get("GPU_COMPARISON_FBCODE_PATH")
+        if not fbcode_path:
+            return "GPU_COMPARISON_FBCODE_PATH is not set; skipped auto-load-debuginfo\n"
+
+        fbload_path = os.path.join(fbcode_path, "gdb", "scripts", "fbload.py")
+        output = []
+        output.append(self._send_command(f"source {fbload_path}"))
+        output.append(self._send_command("fbload auto_debuginfo"))
+        output.append(
+            self._send_command(
+                "python import os; os.environ['LD_LIBRARY_PATH'] = "
+                "os.environ.get('LLDB_SYMBOL_STORAGE_LD_LIBRARY_PATH', '')"
+            )
+        )
+        output.append(self._send_command("auto-load-debuginfo", timeout=600.0))
+        return "".join(output)
 
     def get_all_threads(self) -> DebuggerResult:
         """Get list of all threads (CPU + GPU in flat view).
@@ -399,6 +429,83 @@ print("RESULT_JSON:" + json.dumps(result))
 
         return DebuggerResult(
             success=data.get("success", False), error_message=data.get("error", "")
+        )
+
+    def get_selected_thread(self) -> DebuggerResult:
+        """Return ROCgDB's current selected thread without changing selection.
+
+        ROCgDB's flat GPU thread number does not match LLDB's GPU thread id.
+        For AMDGPU waves, the useful cross-debugger key is the wave id embedded
+        in names like: AMDGPU Lane 3:5:1:8192/0 (...).
+        """
+        script = r"""
+import gdb
+import json
+import re
+
+result = {"success": True, "error": ""}
+
+try:
+    thread = gdb.selected_thread()
+    frame = gdb.selected_frame()
+    current_thread_output = ""
+    try:
+        current_thread_output = gdb.execute("thread", to_string=True)
+    except:
+        pass
+
+    thread_name = thread.name or ""
+    selected_line = current_thread_output.strip()
+    thread_text = " ".join([thread_name, selected_line])
+    wave_match = re.search(
+        r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+        thread_text,
+    )
+    if not wave_match:
+        info_threads = gdb.execute("info threads", to_string=True)
+        for line in info_threads.splitlines():
+            if line.lstrip().startswith("*"):
+                selected_line = line.strip()
+                break
+        wave_match = re.search(
+            r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+            selected_line,
+        )
+
+    result.update({
+        "id": thread.global_num,
+        "name": thread_name,
+        "selected_line": selected_line,
+        "pc": frame.pc(),
+        "function": frame.name() or "<unknown>",
+        "architecture": frame.architecture().name(),
+    })
+
+    if wave_match:
+        result["amdgpu_wave_id"] = int(wave_match.group(1))
+        result["amdgpu_lane_id"] = int(wave_match.group(2))
+
+except Exception as e:
+    result["success"] = False
+    result["error"] = str(e)
+
+print("RESULT_JSON:" + json.dumps(result))
+"""
+        data = self._run_python_script(script)
+
+        return DebuggerResult(
+            success=data.get("success", False),
+            error_message=data.get("error", ""),
+            extra_data={
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "selected_line": data.get("selected_line"),
+                "pc": data.get("pc"),
+                "function": data.get("function"),
+                "architecture": data.get("architecture"),
+                "amdgpu_wave_id": data.get("amdgpu_wave_id"),
+                "amdgpu_lane_id": data.get("amdgpu_lane_id"),
+            },
         )
 
     def get_backtrace(self, thread_id: Optional[int] = None) -> DebuggerResult:
