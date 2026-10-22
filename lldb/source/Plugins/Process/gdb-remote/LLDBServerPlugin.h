@@ -58,22 +58,16 @@ public:
 
   /// Stop the native process if it is running.
   ///
-  /// Some plug-ins might want to stop the native process if it is running so
-  /// that the plug-in can return some GPUActions from the call to the
-  /// NativeProcessIsStopping(). This function will trigger the native process
-  /// to stop only if it is running.
-  ///
-  /// \param[out] was_halted The \a was_halted parameter will be set to
-  ///   true if the process was running and was halted. It will be false if the
-  ///   process was already stopped.
-  ///
-  /// \param[out] timeout_sec The timeout in seconds to wait for the process to
-  ///   enter the stopped state.
-  ///
-  /// \return The actual state of the process in case the process was not able
-  /// to be stopped within the specified timeout.
-  lldb::StateType HaltNativeProcessIfNeeded(bool &was_halted,
-                                            uint32_t timeout_sec = 5);
+  /// Some plug-ins might want to stop the native process if it is running,
+  /// for example when their GPU stops, or so that the plug-in can return some
+  /// GPUActions from NativeProcessIsStopping(). This can be called from any
+  /// thread, and returns without waiting: the native process's GDB server
+  /// interrupts it on its own main loop, and the client learns of the stop
+  /// from the stop reply to its continue, which reports it as a
+  /// lldb::eStopReasonTargetSync stop rather than as an interrupt. The stop
+  /// reply names this plug-in, so that the client can tell which target the
+  /// process stopped for.
+  void HaltNativeProcessIfNeeded();
 
   /// Get notified when the process is stopping.
   ///

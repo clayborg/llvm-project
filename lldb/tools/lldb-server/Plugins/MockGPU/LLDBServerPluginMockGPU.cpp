@@ -14,6 +14,7 @@
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 
+#include <chrono>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -30,7 +31,8 @@ enum {
   BreakpointIDShlibLoad = 3,
   BreakpointIDThirdStop = 4,
   BreakpointIDResumeAndWaitForResume = 5,
-  BreakpointIDWaitForStop = 6
+  BreakpointIDWaitForStop = 6,
+  BreakpointIDHaltNativeProcess = 7
 };
 
 LLDBServerPluginMockGPU::LLDBServerPluginMockGPU(
@@ -244,9 +246,29 @@ LLDBServerPluginMockGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
       gpu_process->Halt();
     });
     resume_after_delay_thread.detach();
+  } else if (bp_identifier == BreakpointIDHaltNativeProcess) {
+    // Halt the native process while it runs, as a GPU plug-in does when its
+    // GPU stops. It stays stopped at this breakpoint until the client resumes
+    // it.
+    HaltNativeProcessWhenItRuns();
   }
 
   return response;
+}
+
+void LLDBServerPluginMockGPU::HaltNativeProcessWhenItRuns() {
+  NativeProcessProtocol *native_process = m_native_process.GetCurrentProcess();
+  if (!native_process || !native_process->IsAlive())
+    return;
+  // Wait out a single step as well: an interrupt that comes during one can be
+  // lost to the stop that ends the step.
+  if (native_process->GetState() == eStateRunning) {
+    HaltNativeProcessIfNeeded();
+    return;
+  }
+  m_main_loop.AddCallback(
+      [this](MainLoopBase &) { HaltNativeProcessWhenItRuns(); },
+      std::chrono::milliseconds(100));
 }
 
 GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
@@ -268,6 +290,12 @@ GPUActions LLDBServerPluginMockGPU::GetInitializeActions() {
     GPUBreakpointInfo bp;
     bp.identifier = BreakpointIDWaitForStop;
     bp.name_info = {"a.out", "gpu_wait_for_stop"};
+    init_actions.breakpoints.emplace_back(std::move(bp));
+  }
+  {
+    GPUBreakpointInfo bp;
+    bp.identifier = BreakpointIDHaltNativeProcess;
+    bp.name_info = {"a.out", "gpu_halt_native_process"};
     init_actions.breakpoints.emplace_back(std::move(bp));
   }
   // Add some symbols to the GPU actions that should be delivered to the

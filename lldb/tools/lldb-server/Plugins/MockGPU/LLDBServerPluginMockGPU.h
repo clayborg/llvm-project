@@ -96,6 +96,9 @@ private:
   ProcessMockGPU *GetGPUProcess() const;
   std::optional<GPUPluginConnectionInfo> CreateConnection();
   void CloseFDs();
+  /// Halt the native process with HaltNativeProcessIfNeeded() once it runs,
+  /// checking from the main loop every 100 ms until then.
+  void HaltNativeProcessWhenItRuns();
 
   // Used with a socketpair to get events on the native ptrace event queue.
   int m_fds[2] = {-1, -1};

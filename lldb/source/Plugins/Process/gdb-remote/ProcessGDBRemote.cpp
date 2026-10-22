@@ -2154,7 +2154,7 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
     LazyBool associated_with_dispatch_queue, addr_t dispatch_queue_t,
     std::string &queue_name, QueueKind queue_kind, uint64_t queue_serial,
     std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
-    bool active) {
+    bool active, llvm::StringRef sync_plugin) {
 
   if (tid == LLDB_INVALID_THREAD_ID)
     return nullptr;
@@ -2395,6 +2395,15 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
           // of setting that specifies if we should stop for shared library
           // load events.
           thread_sp->SetStopInfo(StopInfo::CreateStopReasonDyld(*thread_sp));
+          handled = true;
+        } else if (reason == "target sync") {
+          // The server names the GPU plug-in whose target the process
+          // stopped for.
+          TargetSP sync_target_sp;
+          if (!sync_plugin.empty())
+            sync_target_sp = GetTarget().GetGPUPluginTarget(sync_plugin);
+          thread_sp->SetStopInfo(
+              StopInfo::CreateStopReasonTargetSync(*thread_sp, sync_target_sp));
           handled = true;
         }
       }
@@ -2700,6 +2709,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     std::optional<lldb::tid_t> lane_id;
     std::optional<lldb::tid_t> simd_id;
     bool active = true;
+    std::string sync_plugin;
     const uint8_t signo = stop_packet.GetHexU8();
     llvm::StringRef key;
     llvm::StringRef value;
@@ -2903,6 +2913,8 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
           simd_id = tmp_id;
       } else if (key.compare("inactive") == 0) {
         active = false;
+      } else if (key.compare("sync-plugin") == 0) {
+        sync_plugin = std::string(value);
       } else if (key.size() == 2 && ::isxdigit(key[0]) && ::isxdigit(key[1])) {
         uint32_t reg = UINT32_MAX;
         if (!key.getAsInteger(16, reg))
@@ -2941,7 +2953,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         tid, expedited_register_map, signo, thread_name, reason, description,
         exc_type, exc_data, thread_dispatch_qaddr, queue_vars_valid,
         associated_with_dispatch_queue, dispatch_queue_t, queue_name,
-        queue_kind, queue_serial_number, lane_id, simd_id, active);
+        queue_kind, queue_serial_number, lane_id, simd_id, active, sync_plugin);
 
     return eStateStopped;
   } break;

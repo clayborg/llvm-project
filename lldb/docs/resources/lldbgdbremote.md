@@ -2193,6 +2193,12 @@ following keys and values:
     the `description` key/value pair to describe the
     exceptional event the user should see as the stop
     reason.
+  * `target sync` - the process was stopped to stay in sync with another
+    target, for example a CPU process whose GPU stopped. The signal is the one
+    that stopped the thread, which a client that does not know this reason
+    reports instead. A `sync-plugin` key/value pair can name the GPU plug-in
+    whose target the process stopped for, so that the client can name that
+    target.
   * `description` -
     An ASCII hex string that contains a more descriptive
     reason that the thread stopped. This is only needed
