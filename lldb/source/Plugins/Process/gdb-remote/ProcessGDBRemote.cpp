@@ -2154,7 +2154,7 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
     LazyBool associated_with_dispatch_queue, addr_t dispatch_queue_t,
     std::string &queue_name, QueueKind queue_kind, uint64_t queue_serial,
     std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
-    bool active) {
+    bool active, const std::string &sync_plugin) {
 
   if (tid == LLDB_INVALID_THREAD_ID)
     return nullptr;
@@ -2397,8 +2397,13 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
           thread_sp->SetStopInfo(StopInfo::CreateStopReasonDyld(*thread_sp));
           handled = true;
         } else if (reason == "target sync") {
+          // The server names the GPU plug-in whose target the process
+          // stopped for.
+          TargetSP sync_target_sp;
+          if (!sync_plugin.empty())
+            sync_target_sp = GetTarget().GetGPUPluginTarget(sync_plugin);
           thread_sp->SetStopInfo(
-              StopInfo::CreateStopReasonTargetSync(*thread_sp));
+              StopInfo::CreateStopReasonTargetSync(*thread_sp, sync_target_sp));
           handled = true;
         }
       }
@@ -2529,6 +2534,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
   static constexpr llvm::StringLiteral g_key_lane("lane");
   static constexpr llvm::StringLiteral g_key_simd("simd");
   static constexpr llvm::StringLiteral g_key_inactive("inactive");
+  static constexpr llvm::StringLiteral g_key_sync_plugin("sync-plugin");
 
   // Stop with signal and thread info
   lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
@@ -2549,6 +2555,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
   std::optional<lldb::tid_t> lane_id;
   std::optional<lldb::tid_t> simd_id;
   bool active = true;
+  std::string sync_plugin;
   // Iterate through all of the thread dictionary key/value pairs from the
   // structured data dictionary
 
@@ -2558,9 +2565,9 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
                         &thread_dispatch_qaddr, &queue_vars_valid,
                         &associated_with_dispatch_queue, &dispatch_queue_t,
                         &queue_name, &queue_kind, &queue_serial_number,
-                        &lane_id, &simd_id,
-                        &active](llvm::StringRef key,
-                                 StructuredData::Object *object) -> bool {
+                        &lane_id, &simd_id, &active,
+                        &sync_plugin](llvm::StringRef key,
+                                      StructuredData::Object *object) -> bool {
     if (key == g_key_tid) {
       // thread in big endian hex
       tid = object->GetUnsignedIntegerValue(LLDB_INVALID_THREAD_ID);
@@ -2666,6 +2673,8 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
         simd_id = tmp_id;
     } else if (key == g_key_inactive) {
       active = false;
+    } else if (key == g_key_sync_plugin) {
+      sync_plugin = std::string(object->GetStringValue());
     } else if (key == g_key_signal)
       signo = object->GetUnsignedIntegerValue(LLDB_INVALID_SIGNAL_NUMBER);
     return true; // Keep iterating through all dictionary key/value pairs
@@ -2675,7 +2684,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       tid, expedited_register_map, signo, thread_name, reason, description,
       exc_type, exc_data, thread_dispatch_qaddr, queue_vars_valid,
       associated_with_dispatch_queue, dispatch_queue_t, queue_name, queue_kind,
-      queue_serial_number, lane_id, simd_id, active);
+      queue_serial_number, lane_id, simd_id, active, sync_plugin);
 }
 
 StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
@@ -2704,6 +2713,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     std::optional<lldb::tid_t> lane_id;
     std::optional<lldb::tid_t> simd_id;
     bool active = true;
+    std::string sync_plugin;
     const uint8_t signo = stop_packet.GetHexU8();
     llvm::StringRef key;
     llvm::StringRef value;
@@ -2907,6 +2917,8 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
           simd_id = tmp_id;
       } else if (key.compare("inactive") == 0) {
         active = false;
+      } else if (key.compare("sync-plugin") == 0) {
+        sync_plugin = std::string(value);
       } else if (key.size() == 2 && ::isxdigit(key[0]) && ::isxdigit(key[1])) {
         uint32_t reg = UINT32_MAX;
         if (!key.getAsInteger(16, reg))
@@ -2945,7 +2957,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         tid, expedited_register_map, signo, thread_name, reason, description,
         exc_type, exc_data, thread_dispatch_qaddr, queue_vars_valid,
         associated_with_dispatch_queue, dispatch_queue_t, queue_name,
-        queue_kind, queue_serial_number, lane_id, simd_id, active);
+        queue_kind, queue_serial_number, lane_id, simd_id, active, sync_plugin);
 
     return eStateStopped;
   } break;

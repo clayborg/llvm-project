@@ -9,7 +9,8 @@ class TestTargetSyncStopReason(GDBRemoteTestBase):
     def test(self):
         """A thread that a stop reply reports with reason "target sync" stops
         for eStopReasonTargetSync, and is not selected over a thread that
-        stopped for a reason of its own."""
+        stopped for a reason of its own. Its description names no target when
+        lldb has none for the plug-in that the reply names."""
 
         class MyResponder(MockGDBServerResponder):
             def qfThreadInfo(self):
@@ -20,8 +21,8 @@ class TestTargetSyncStopReason(GDBRemoteTestBase):
 
             def cont(self):
                 # The server stopped thread 2 with SIGSTOP to keep the process
-                # in sync with another target.
-                return "T13thread:2;reason:target sync;"
+                # in sync with the target of the "mock-gpu" plug-in.
+                return "T13thread:2;reason:target sync;sync-plugin:mock-gpu;"
 
             def threadStopInfo(self, threadnum):
                 # Meanwhile thread 1 stopped for SIGINT. An empty reply would

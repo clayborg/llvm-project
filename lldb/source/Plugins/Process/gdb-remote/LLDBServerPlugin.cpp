@@ -19,5 +19,5 @@ LLDBServerPlugin::LLDBServerPlugin(GDBServer &native_process, MainLoop &main_loo
 LLDBServerPlugin::~LLDBServerPlugin() {}
 
 void LLDBServerPlugin::HaltNativeProcessIfNeeded() {
-  m_native_process.QueueInterrupt(lldb::eStopReasonTargetSync);
+  m_native_process.QueueInterrupt(lldb::eStopReasonTargetSync, GetPluginName());
 }

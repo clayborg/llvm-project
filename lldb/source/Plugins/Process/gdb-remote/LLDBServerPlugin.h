@@ -64,7 +64,9 @@ public:
   /// thread, and returns without waiting: the native process's GDB server
   /// interrupts it on its own main loop, and the client learns of the stop
   /// from the stop reply to its continue, which reports it as a
-  /// lldb::eStopReasonTargetSync stop rather than as an interrupt.
+  /// lldb::eStopReasonTargetSync stop rather than as an interrupt. The stop
+  /// reply names this plug-in, so that the client can tell which target the
+  /// process stopped for.
   void HaltNativeProcessIfNeeded();
 
   /// Get notified when the process is stopping.

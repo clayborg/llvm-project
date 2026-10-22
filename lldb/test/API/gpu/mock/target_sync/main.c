@@ -1,5 +1,8 @@
 #include <unistd.h>
 
+// The mock GPU plug-in connects its GPU target when this is called.
+void gpu_initialize(void) {}
+
 // The mock GPU plug-in sets a breakpoint here, and halts this process once it
 // runs again, as a GPU plug-in does when its GPU stops.
 void gpu_halt_native_process(void) {}
@@ -13,6 +16,7 @@ void wait_for_the_halt(void) {
 }
 
 int main(void) {
+  gpu_initialize();
   wait_for_the_halt(); // step over this line
   return 0;
 }

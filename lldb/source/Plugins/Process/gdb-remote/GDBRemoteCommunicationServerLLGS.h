@@ -128,7 +128,13 @@ public:
   ///     The stop reason of the thread that the stop reply reports, in place
   ///     of the interrupt, so that the client can tell why the process
   ///     stopped. See NativeProcessProtocol::InterruptWithStopReason.
-  void QueueInterrupt(lldb::StopReason stop_reason);
+  ///
+  /// \param[in] plugin_name
+  ///     The name of the plug-in that asks for the interrupt. The stop reply
+  ///     names it with the stop reason, so that the client can tell which
+  ///     target the process stopped for.
+  void QueueInterrupt(lldb::StopReason stop_reason,
+                      llvm::StringRef plugin_name);
 
   PacketResult SendONotification(const char *buffer, uint32_t len);
 
@@ -166,6 +172,10 @@ protected:
   /// If this GDB server is a LLDBServerPlugin, then this will point to the 
   /// LLDBServerPlugin instance.
   lldb_server::LLDBServerPlugin *m_plugin_instance = nullptr;
+
+  /// The plug-in that the last QueueInterrupt was for. Stop replies name it
+  /// while the current process reports the interrupt's stop reason.
+  std::string m_interrupt_plugin_name;
 
   // Typically we would use a SmallVector for this data but in this context we
   // don't know how much data we're recieving so we would have to heap allocate
