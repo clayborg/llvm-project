@@ -80,6 +80,8 @@ llvm::StringRef StopReasonToString(lldb::StopReason reason) {
     return "history boundary";
   case eStopReasonDynamicLoader:
     return "dynamic loader";
+  case eStopReasonTargetSync:
+    return "target sync";
   }
   return "unknown";
 }
