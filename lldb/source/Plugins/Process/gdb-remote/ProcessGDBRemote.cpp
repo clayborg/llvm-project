@@ -59,6 +59,8 @@
 #include "lldb/Target/RegisterFlags.h"
 #include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Target/TargetGroup.h"
+#include "lldb/Target/TargetGroupList.h"
 #include "lldb/Target/TargetList.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
 #include "lldb/Utility/Args.h"
@@ -92,6 +94,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatAdapters.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
@@ -1166,6 +1169,31 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   // via the CPU connnection.
   GetTarget().SetGPUPluginTarget(gpu_action.plugin_name, gpu_target_sp);
 
+  // Put the CPU and GPU targets in one CPU and accelerators target group. This
+  // only records the relationship.
+  TargetSP native_target_sp = GetTarget().shared_from_this();
+  std::shared_ptr<TargetGroupCPUAndAccelerators> group_sp =
+      native_target_sp
+          ->GetFirstTargetGroupOfType<TargetGroupCPUAndAccelerators>();
+  const bool created_group = !group_sp;
+  if (created_group)
+    group_sp = debugger.GetTargetGroupList()
+                   .CreateTargetGroup<TargetGroupCPUAndAccelerators>(
+                       "CPU and accelerator targets");
+  auto restore_target_group = llvm::make_scope_exit([&] {
+    group_sp->RemoveTarget(gpu_target_sp);
+    if (created_group) {
+      group_sp->RemoveTarget(native_target_sp);
+      debugger.GetTargetGroupList().DeleteTargetGroup(group_sp);
+    }
+  });
+  if (llvm::Error err =
+          group_sp->AddTarget(native_target_sp, TargetGroup::Role::CPU))
+    return Status::FromError(std::move(err));
+  if (llvm::Error err =
+          group_sp->AddTarget(gpu_target_sp, TargetGroup::Role::Accelerator))
+    return Status::FromError(std::move(err));
+
   if (connection_info.copy_cpu_breakpoints_during_attaching)
     CopyCPUBreakpointsToGPUTarget(gpu_target_sp,
                                   GetTarget().shared_from_this());
@@ -1189,6 +1217,8 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
     return Status::FromErrorString("invalid process after connecting");
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest(): successfully "
                 "created process");
+  // The GPU process exists, so keep the group membership.
+  restore_target_group.release();
   // Set the session name on the GPU target so it can be retrieved later
   gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
   // Tell the new GPU process its plug-in's name. ConnectProcess() made it with
