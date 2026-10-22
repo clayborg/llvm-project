@@ -901,14 +901,10 @@ void NativeProcessLinux::MonitorSignal(const siginfo_t &info,
       // *is* the real stop reason, so we leave the signal intact if this is
       // the thread that was chosen as the triggering thread.
       if (m_pending_notification_tid != LLDB_INVALID_THREAD_ID) {
-        if (m_pending_notification_tid != thread.GetID()) {
-          thread.SetStoppedWithNoReason();
-        } else if (m_interrupt_stop_reason) {
-          thread.SetStoppedByInterrupt(*m_interrupt_stop_reason);
-          m_interrupt_stop_reason.reset();
-        } else {
+        if (m_pending_notification_tid == thread.GetID())
           thread.SetStoppedBySignal(SIGSTOP, &info);
-        }
+        else
+          thread.SetStoppedWithNoReason();
 
         SetCurrentThreadID(thread.GetID());
         SignalIfAllThreadsStopped();
@@ -1013,9 +1009,6 @@ bool NativeProcessLinux::SupportHardwareSingleStepping() const {
 Status NativeProcessLinux::Resume(const ResumeActionList &resume_actions) {
   Log *log = GetLog(POSIXLog::Process);
   LLDB_LOG(log, "pid {0}", GetID());
-
-  // Another stop can beat the interrupt's, and then the reason goes unused.
-  m_interrupt_stop_reason.reset();
 
   NotifyTracersProcessWillResume();
 
@@ -1172,15 +1165,6 @@ Status NativeProcessLinux::Interrupt() {
   StopRunningThreads(deferred_signal_thread->GetID());
 
   return Status();
-}
-
-Status
-NativeProcessLinux::InterruptWithStopReason(lldb::StopReason stop_reason) {
-  m_interrupt_stop_reason = stop_reason;
-  Status error = Interrupt();
-  if (error.Fail())
-    m_interrupt_stop_reason.reset();
-  return error;
 }
 
 Status NativeProcessLinux::Kill() {

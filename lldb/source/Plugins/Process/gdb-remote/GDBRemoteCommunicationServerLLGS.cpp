@@ -828,6 +828,18 @@ static const char *GetStopReasonString(StopReason stop_reason) {
   return nullptr;
 }
 
+// Report the stop reason that NativeProcessProtocol::InterruptWithStopReason
+// asked for in place of the SIGSTOP of a thread that the interrupt stopped.
+// The signal stays, for clients that do not know the reason.
+static void ApplyInterruptStopReason(NativeProcessProtocol &process,
+                                     ThreadStopInfo &stop_info) {
+  if (stop_info.reason != eStopReasonSignal || stop_info.signo != SIGSTOP)
+    return;
+  if (std::optional<lldb::StopReason> stop_reason =
+          process.GetInterruptStopReason())
+    stop_info.reason = *stop_reason;
+}
+
 static llvm::Expected<json::Array>
 GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
   Log *log = GetLog(LLDBLog::Process | LLDBLog::Thread);
@@ -843,6 +855,7 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
     if (!thread.GetStopReason(tid_stop_info, description))
       return llvm::make_error<llvm::StringError>(
           "failed to get stop reason", llvm::inconvertibleErrorCode());
+    ApplyInterruptStopReason(process, tid_stop_info);
 
     const int signum = tid_stop_info.signo;
     if (log) {
@@ -920,6 +933,7 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
   std::string description;
   if (!thread.GetStopReason(tid_stop_info, description))
     return response;
+  ApplyInterruptStopReason(process, tid_stop_info);
 
   // FIXME implement register handling for exec'd inferiors.
   // if (tid_stop_info.reason == eStopReasonExec) {

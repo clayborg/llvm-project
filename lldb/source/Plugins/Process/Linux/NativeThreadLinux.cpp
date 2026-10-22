@@ -85,10 +85,6 @@ void LogThreadStopInfo(Log &log, const ThreadStopInfo &stop_info,
   case eStopReasonHistoryBoundary:
     log.Printf("%s: %s history boundary", __FUNCTION__, header);
     return;
-  case eStopReasonTargetSync:
-    log.Printf("%s: %s target sync, stopping signal 0x%" PRIx32, __FUNCTION__,
-               header, stop_info.signo);
-    return;
   default:
     log.Printf("%s: %s invalid stop reason %" PRIu32, __FUNCTION__, header,
                static_cast<uint32_t>(stop_info.reason));
@@ -281,14 +277,6 @@ Status NativeThreadLinux::SingleStep(uint32_t signo) {
       GetProcess().SupportHardwareSingleStepping() ? PTRACE_SINGLESTEP
                                                    : PTRACE_CONT,
       m_tid, nullptr, reinterpret_cast<void *>(data));
-}
-
-void NativeThreadLinux::SetStoppedByInterrupt(lldb::StopReason stop_reason) {
-  SetStopped();
-
-  m_stop_info.reason = stop_reason;
-  m_stop_info.signo = SIGSTOP;
-  m_stop_description.clear();
 }
 
 void NativeThreadLinux::SetStoppedBySignal(uint32_t signo,
