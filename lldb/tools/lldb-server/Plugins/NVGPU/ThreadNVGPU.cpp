@@ -134,4 +134,9 @@ void ThreadNVGPU::SetStopped(lldb::StopReason reason,
 void ThreadNVGPU::SetRunning() {
   LLDB_LOGV(GetLog(GDBRLog::Plugin), "ThreadNVGPU::Resume()");
   m_state = lldb::eStateRunning;
+  // A stop reason belongs to one stop. The next stop decodes only the SMs that
+  // changed, and a dyld stop decodes none, so this one's would otherwise be
+  // reported again.
+  m_stop_info.reason = lldb::eStopReasonNone;
+  m_stop_description.clear();
 }
