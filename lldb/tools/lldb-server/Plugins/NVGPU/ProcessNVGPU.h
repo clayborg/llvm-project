@@ -64,6 +64,10 @@ public:
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
+  /// Drop the debugger API pointer just before the plugin finalizes and
+  /// destroys it, so this process cannot be left holding a dangling table.
+  void ClearDebuggerAPI() { m_api = nullptr; }
+
   /// The API version this session runs at: the lesser of the compiled and the
   /// live driver's versions. Gate calls to entry points newer than the
   /// major's baseline on this -- `if (GetAPIVersion().AtLeast(13, 4, 0))
