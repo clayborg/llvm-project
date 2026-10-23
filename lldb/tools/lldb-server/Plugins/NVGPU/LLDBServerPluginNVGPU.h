@@ -105,11 +105,26 @@ private:
   /// taking appropriate action based on event type.
   void OnDebuggerAPIEvent();
 
+  /// Finalize and drop the debugger API along with everything holding a
+  /// pointer into it, to undo an InitializeAPIAndConnect that failed partway.
+  void ReleaseDebuggerAPI();
+
+  /// Bring the debugger API up from a breakpoint hit, which runs on the native
+  /// server's thread, the only one that may use \a native_process.
+  llvm::Expected<GPUActions>
+  InitializeAPIAndConnect(const GPUPluginBreakpointHitArgs &args,
+                          llvm::StringRef libcuda_library_name,
+                          NativeProcessProtocol &native_process);
+
   Status m_main_loop_status;
   std::optional<CUDADebuggerAPI> m_cuda_api;
   ProcessNVGPU *m_gpu = nullptr;
   /// A utility to send debugger api notifications to the main loop.
   std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
+
+  /// Set once the debugger API is up. Only breakpoint hits use it, and they
+  /// arrive on the native server's thread.
+  bool m_api_initialized = false;
 };
 
 } // namespace lldb_private::lldb_server
