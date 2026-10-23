@@ -15,6 +15,7 @@
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Process.h"
 
@@ -204,20 +205,20 @@ LLDBServerPluginNVGPU::CreateConnection(function_ref<Error()> before_accept) {
                               llvm::toString(sock.takeError()));
 }
 
-llvm::Expected<GPUPluginBreakpointHitResponse>
-LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
-  std::string library_name = *args.breakpoint.name_info->shlib;
-  NativeProcessProtocol &native_process = *m_native_process.GetCurrentProcess();
-  // This method is invoked when a CPU breakpoint is hit signaling that the
-  // driver is initializing. This is the perfect time to initialize the debugger
-  // API. We are assuming that no kernels will run until we resume the CPU.
+Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
+    const GPUPluginBreakpointHitArgs &args, StringRef libcuda_library_name,
+    NativeProcessProtocol &native_process) {
+  // We are assuming that no kernels will run until we resume the CPU.
   Expected<CUDADebuggerAPI> api_or =
-      CUDADebuggerAPI::Initialize(args, library_name, native_process);
+      CUDADebuggerAPI::Initialize(args, libcuda_library_name, native_process);
   if (!api_or)
     return api_or.takeError();
 
   m_cuda_api = std::move(*api_or);
   this->m_gpu->SetDebuggerAPI(*m_cuda_api);
+  // Undo the partial setup if a step below fails, so that nothing is left
+  // pointing into an API the next initialization attempt replaces.
+  auto release_api = llvm::make_scope_exit([this] { ReleaseDebuggerAPI(); });
 
   // We are registering the event notifier in the GPU main loop. We might want
   // to use the CPU main loop at some point if needed.
@@ -245,9 +246,10 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
         cudbgGetErrorString(res));
 
   // Only tell the driver that a debugger is ready once every other step has
-  // succeeded. If one fails, the client resumes the process, which runs on
-  // without GPU debugging instead of waiting for a debugger that does not
-  // answer.
+  // succeeded, the event callback included, so that it cannot emit a
+  // notification before anything can observe it. If one fails, the client
+  // resumes the process, which runs on without GPU debugging instead of
+  // waiting for a debugger that does not answer.
   Expected<GPUPluginConnectionInfo> connection_info = CreateConnection(
       [&] { return CUDADebuggerAPI::SetIpcFlag(args, native_process); });
   if (!connection_info)
@@ -256,9 +258,52 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
   GPUActions actions = GetNewGPUAction();
   actions.connect_info = std::move(*connection_info);
   actions.session_name = "NVIDIA GPU Session";
-  GPUPluginBreakpointHitResponse response(std::move(actions));
-  response.disable_bp = true;
-  return response;
+  release_api.release();
+  return actions;
+}
+
+llvm::Expected<GPUPluginBreakpointHitResponse>
+LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
+  // The plug-in's breakpoints are each needed once.
+  auto disabling_response = [](GPUActions actions) {
+    GPUPluginBreakpointHitResponse response(std::move(actions));
+    response.disable_bp = true;
+    return response;
+  };
+  // Both libcuda sonames can resolve, so this fires more than once.
+  // Initializing twice would build a second API table and reverse connection
+  // and leak the live one.
+  if (m_api_initialized) {
+    Log *log = GetLog(GDBRLog::Plugin);
+    LLDB_LOG(log, "debugger API already initialized; ignoring breakpoint and "
+                  "disabling it.");
+    return disabling_response(GetNewGPUAction());
+  }
+
+  const std::optional<GPUBreakpointByName> &name_info =
+      args.breakpoint.name_info;
+  if (!name_info || !name_info->shlib)
+    return createStringError(
+        "The breakpoint names no library to initialize the CUDA Debugger API "
+        "from");
+  StringRef library_name = *name_info->shlib;
+
+  // Breakpoint hits arrive on the native server's thread, the only one that
+  // may use its process, and the process stays stopped until this returns.
+  NativeProcessProtocol *native_process = m_native_process.GetCurrentProcess();
+  if (!native_process)
+    return createStringError(
+        "No native process to initialize the CUDA Debugger API for");
+
+  Expected<GPUActions> actions =
+      InitializeAPIAndConnect(args, library_name, *native_process);
+  if (!actions) {
+    // Leave m_api_initialized false so a later breakpoint can retry the init.
+    return actions.takeError();
+  }
+
+  m_api_initialized = true;
+  return disabling_response(std::move(*actions));
 }
 
 GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
@@ -398,6 +443,21 @@ void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
     logAndReportFatalError("Failed to acknowledge CUDA Debugger API events. {}",
                            cudbgGetErrorString(res));
   }
+}
+
+void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
+  Log *log = GetLog(GDBRLog::Plugin);
+
+  // The GPU process's copy of the table is cleared so it cannot dangle. The
+  // driver's event callback uses the notifier, so the notifier outlives the
+  // session that finalizing shuts down. It still goes before this returns to
+  // the GPU MainLoop, which would otherwise dispatch into the finalized API.
+  m_gpu->ClearDebuggerAPI();
+  if (m_cuda_api) {
+    LLDB_LOG(log, "finalizing the debugger API");
+    m_cuda_api.reset();
+  }
+  m_main_loop_event_notifier_up.reset();
 }
 
 void LLDBServerPluginNVGPU::NativeProcessDidExit(
