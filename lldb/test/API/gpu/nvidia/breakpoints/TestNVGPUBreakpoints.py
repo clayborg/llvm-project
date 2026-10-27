@@ -84,3 +84,28 @@ class TestNVGPUBreakpoints(NVGPUTestCaseBase):
                 f"at {source}:{gpu_bp_line_2}, name = 'blockIdx(x=3 y=0 z=0) threadIdx(x=0 y=0 z=0)', stop reason = breakpoint 2.1",
             ],
         )
+
+    def test_exception_breakpoint_before_run(self):
+        """Test that lldb copies the CPU target's breakpoints into the GPU
+        target when one of them is an exception breakpoint, which cannot be
+        serialized."""
+        self.build()
+        source = "breakpoints.cu"
+        target = lldbutil.run_to_breakpoint_make_target(self)
+        exception_breakpoint = target.BreakpointCreateForException(
+            lldb.eLanguageTypeC_plus_plus, True, True
+        )
+        self.assertTrue(exception_breakpoint.IsValid())
+        target.BreakpointCreateByLocation(
+            source, line_number(source, "// gpu breakpoint 1")
+        )
+        self.run_to_cpu_line(source, "// breakpoint after CUDA starts", target=target)
+
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        thread = self.assert_gpu_stop_reason(lldb.eStopReasonBreakpoint)
+        self.assert_frame_at(
+            thread.GetFrameAtIndex(0),
+            "breakpoints(int)",
+            source,
+            "// gpu breakpoint 1",
+        )

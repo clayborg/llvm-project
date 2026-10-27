@@ -814,6 +814,12 @@ BreakpointSP Target::CreateBreakpoint(SearchFilterSP &filter_sp,
   return bp_sp;
 }
 
+BreakpointSP Target::CopyBreakpoint(const Breakpoint &bp) {
+  BreakpointSP copy_sp = Breakpoint::CopyFromBreakpoint(shared_from_this(), bp);
+  AddBreakpoint(copy_sp, /*internal=*/false);
+  return copy_sp;
+}
+
 void Target::AddBreakpoint(lldb::BreakpointSP bp_sp, bool internal) {
   if (!bp_sp)
     return;

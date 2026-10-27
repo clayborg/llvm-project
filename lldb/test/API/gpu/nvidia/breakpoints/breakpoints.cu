@@ -18,7 +18,7 @@ int main(void) {
 
   cudaDeviceReset();
 
-  int threadsPerBlock = 4;
+  int threadsPerBlock = 4; // breakpoint after CUDA starts
   int blocksPerGrid =
       (N + threadsPerBlock - 1) / threadsPerBlock; // cpu breakpoint
   breakpoints<<<blocksPerGrid, threadsPerBlock>>>(22);

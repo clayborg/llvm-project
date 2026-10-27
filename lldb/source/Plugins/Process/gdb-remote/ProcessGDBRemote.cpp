@@ -1116,21 +1116,14 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
 
 static void CopyCPUBreakpointsToGPUTarget(TargetSP gpu_target_sp,
                                           TargetSP cpu_target_sp) {
-  BreakpointList &bp_list = cpu_target_sp->GetBreakpointList();
-  for (size_t i = 0; i < bp_list.GetSize(); i++) {
-    BreakpointSP bp_sp = bp_list.GetBreakpointAtIndex(i);
-
-    StructuredData::ObjectSP bp_data_sp =
-        bp_sp->SerializeToStructuredData()->GetObjectForDotSeparatedPath(
-            "Breakpoint");
-    Status error;
-    Breakpoint::CreateFromStructuredData(gpu_target_sp, bp_data_sp, error);
-
-    if (error.Fail())
-      Debugger::ReportError(llvm::formatv(
-          "failed to create breakpoint from structured data: {0}\n",
-          error.AsCString()));
-  }
+  // Copy each breakpoint rather than serializing it and creating the copy from
+  // the result. Not every breakpoint serializes (an exception breakpoint's
+  // filter does not), and a name breakpoint loses name types on the round
+  // trip, so one on an unqualified C++ function name, such as a kernel's,
+  // resolves to nothing.
+  for (const BreakpointSP &bp_sp :
+       cpu_target_sp->GetBreakpointList().Breakpoints())
+    gpu_target_sp->CopyBreakpoint(*bp_sp);
 }
 
 Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
