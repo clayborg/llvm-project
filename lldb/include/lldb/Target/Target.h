@@ -889,6 +889,17 @@ public:
                                       bool internal, bool request_hardware,
                                       bool resolve_indirect_symbols);
 
+  /// Add a copy of \a bp, a breakpoint of another target, to this target and
+  /// resolve it here.
+  ///
+  /// The copy has the resolver, search filter, options and names of \a bp,
+  /// as a breakpoint copied from the dummy target does, and resolves its own
+  /// locations.
+  ///
+  /// \return
+  ///     The copy.
+  lldb::BreakpointSP CopyBreakpoint(const Breakpoint &bp);
+
   // Use this to create a watchpoint:
   lldb::WatchpointSP CreateWatchpoint(lldb::addr_t addr, size_t size,
                                       const CompilerType *type, uint32_t kind,

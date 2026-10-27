@@ -148,9 +148,6 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
         of the kernel. Once resumed, the program finishes, and the printf of
         each thread that was stopped reaches stdout."""
         self.run_to_launch()
-        # Set on the GPU target once the program has stopped: one set before
-        # the run never reaches the GPU
-        # (test_kernel_name_breakpoint_before_run).
         breakpoint = self.gpu_target.BreakpointCreateByName("simplePrintfKernel")
 
         self.continue_cpu_and_wait_for_gpu_to_stop()
@@ -225,10 +222,6 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
         self.assertEqual(self.wait_for_exit(self.cpu_process), 0, "CPU exit")
         self.assertEqual(self.wait_for_exit(self.gpu_process), 0, "GPU exit")
 
-    @expectedFailureAll(
-        "the GPU copy of a function-name breakpoint set before the run never "
-        "resolves in the cubin"
-    )
     def test_kernel_name_breakpoint_before_run(self):
         """A breakpoint on the kernel's name, set before the program runs,
         stops the GPU at the start of the kernel."""
