@@ -222,6 +222,25 @@ directly above a kernel's definition would stop the GPU in that kernel.
 copy never resolves to device code, wherever the kernels are defined. Set GPU
 breakpoints on ``self.gpu_target`` once the program has stopped there.
 
+A test program can be a copy of a `cuda-samples
+<https://github.com/NVIDIA/cuda-samples>`_ program. Each copy has a directory
+of its own under ``gpu/nvidia/samples/``, with the Makefile and the test file
+for that sample. The copy adds a ``// Based on`` line with the URL of the file
+at the commit of the release tag it was copied from, and keeps the sample's
+license header and formatting (the ``.clang-format`` in ``samples/`` turns
+formatting off there), so that a diff against that file shows only the
+changes the copy makes. To copy a newer version, merge the sample's changes
+since that commit into the copy, for example with
+``git merge-file <copy> <sample at that commit> <sample at the newer tag>``,
+and update the URL. Comments that mark breakpoint lines go at the end of the
+sample's own lines, and a change whose reason is not obvious gets a comment.
+
+The test methods of a class that all run one program can build it once with
+``build_shared(exe)``. The program is then in a directory of its own,
+``<Module>.<Class>.<exe>``, next to the methods' build directories, which stay
+empty. Debug that program to reproduce a failure by hand. It still runs in the
+method's build directory.
+
 Running the tests under AddressSanitizer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

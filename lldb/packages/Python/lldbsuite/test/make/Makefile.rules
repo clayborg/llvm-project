@@ -714,8 +714,11 @@ endif
 %.o: %.hip %.d
 	$(HIPCC) $(HIPFLAGS) -MT $@ -MD -MP -MF $*.d -c -o $@ $<
 
+# [NVIDIA] nvcc writes the dependency file itself. The host compiler's would
+# name nvcc's temporary copy of the source, which nvcc deletes, so the next
+# make in the same directory would stop with "No rule to make target".
 %.o: %.cu %.d
-	$(NVCC) $(NVCCFLAGS) -Xcompiler "-MD -MP -MF $*.d" -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) -MT $@ -MD -MP -MF $*.d -c -o $@ $<
 
 #----------------------------------------------------------------------
 # Automatic variables based on items already entered. Below we create
