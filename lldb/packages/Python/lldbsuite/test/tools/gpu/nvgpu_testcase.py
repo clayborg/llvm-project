@@ -1,9 +1,11 @@
 import math
-from typing import Any, Callable, List, Optional, Tuple
+import os
+import shutil
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import lldb
-from lldbsuite.test import lldbutil
-from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test import configuration, lldbplatformutil, lldbutil
+from lldbsuite.test.lldbtest import builder_module, line_number
 from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 
@@ -11,6 +13,9 @@ from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 # wants from that stop (a thread, a list of threads, ...) or None when the stop
 # is not the one expected. Return None, not an empty list, for "no match".
 StopMatcher = Callable[[lldb.SBProcess], Optional[Any]]
+
+# The programs build_shared has built in this run, by test class and EXE.
+_shared_builds: Dict[Tuple[type, str], str] = {}
 
 
 def _with_gpu_check(setup):
@@ -58,15 +63,21 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
           is never examined. Bounded by a continue count and a timeout.
       assert_gpu_stop_reason(reason), continue_gpu_until_stop_reason(reason)
           Shorthands for "a thread stopped for this reason".
+      wait_for_stop(process)
+          wait_for_gpu_to_stop for either process. For the CPU: it kept running
+          while the GPU stopped, and the test needs it at one of its own
+          breakpoints too. Nothing is resumed.
       wait_for_exit(process)
           The test resumed both processes and expects them to finish. Nothing
           is resumed.
+      assert_exit_status(status)
+          The same for both processes, which must exit with `status`.
 
     The verb says what happens to the GPU: `wait_for` and `assert` never resume
     it, `continue` does.
 
-    All of them consume only GPU process state-changed events, so CPU events
-    stay queued for whoever waits on the CPU process.
+    Each consumes only the state-changed events of the processes it waits on,
+    so the other process's events stay queued for whoever waits on it.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
@@ -109,12 +120,67 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         if error:
             self.fail(error)
 
+    def build_shared(self, exe: str) -> str:
+        """Build the test's program once for all the test methods of this
+        class, with EXE set to `exe`, and return its path.
+
+        The program is built in a directory of its own,
+        `<Module>.<Class>.<exe>`, next to the per-method directories that
+        build() uses. The first method of a run that asks for it builds it,
+        after deleting what an earlier run left there; later methods of the
+        class get the same path, since dotest runs a file's methods one after
+        another in one process.
+
+        Use this for a program that several test methods run unchanged, such
+        as a copied sample. It takes no make variables: a test that builds
+        variants of a program uses build() in each method. The program still
+        runs in the method's own build directory, which stays empty, so a
+        program that reads files from its working directory cannot use this as
+        it is.
+        """
+        cls = type(self)
+        path = _shared_builds.get((cls, exe))
+        if path:
+            return path
+
+        build_dir_name = f"{cls.__module__}.{cls.__name__}.{exe}"
+        build_dir = os.path.join(
+            configuration.test_build_dir, self.mydir, build_dir_name
+        )
+        # Start from an empty directory, as TestBase.makeBuildDir does for a
+        # method's directory.
+        if os.path.isdir(build_dir):
+            shutil.rmtree(build_dir)
+        lldbutil.mkdir_p(build_dir)
+        # No debug information variants: NO_DEBUG_INFO_TESTCASE runs each
+        # method once.
+        command = builder_module().getBuildCommand(
+            debug_info=None,
+            architecture=configuration.arch,
+            dictionary=lldbplatformutil.finalize_build_dictionary({"EXE": exe}),
+            testdir=self.mydir,
+            testname=build_dir_name,
+        )
+        if command is None:
+            raise Exception("Don't know how to build binary")
+        self.runBuildCommand(command)
+        path = os.path.join(build_dir, exe)
+        _shared_builds[(cls, exe)] = path
+        return path
+
     def run_to_cpu_line(
-        self, source: str, marker: str, exe_name: str = "a.out"
+        self,
+        source: str,
+        marker: str,
+        exe_name: Optional[str] = None,
+        target: Optional[lldb.SBTarget] = None,
     ) -> Tuple[lldb.SBTarget, lldb.SBProcess, lldb.SBThread, lldb.SBBreakpoint]:
         """Launch the built program and run the CPU to the line of `source`
         that contains `marker`, as lldbutil.run_to_line_breakpoint does. Return
-        (target, process, thread, breakpoint).
+        (target, process, thread, breakpoint). `exe_name` is a file in the
+        method's build directory, a.out by default, or an absolute path such
+        as build_shared returns. A test that sets breakpoints before the run
+        creates the target itself and passes it as `target` instead.
 
         The breakpoint matches that line exactly. When lldb creates the GPU
         target it copies every CPU breakpoint into it. A copy that may move to
@@ -124,7 +190,14 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         that kernel. An exact match never resolves to device code, so the
         layout of the program does not matter.
         """
-        target = lldbutil.run_to_breakpoint_make_target(self, exe_name)
+        if target is None:
+            exe_name = exe_name or "a.out"
+            # An absolute exe_name, such as one from build_shared, is used as is.
+            target = lldbutil.run_to_breakpoint_make_target(
+                self, exe_name, in_cwd=not os.path.isabs(exe_name)
+            )
+        else:
+            self.assertIsNone(exe_name, "pass exe_name or target, not both")
         line = line_number(source, marker)
         breakpoint = target.BreakpointCreateByLocation(
             lldb.SBFileSpec(source), line, 0, 0, lldb.SBFileSpecList(), False
@@ -185,57 +258,80 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 continue
             return state
 
-    def _next_gpu_state(self, listener: lldb.SBListener, timeout_seconds: int) -> int:
-        """Pull the next GPU process state-changed event and return its state."""
-        return self._next_state(self.gpu_process, "GPU", listener, timeout_seconds)
+    def _wait_for_state(
+        self,
+        process: lldb.SBProcess,
+        wanted: int,
+        doing: str,
+        timeout_seconds: int,
+    ) -> None:
+        """Pull the state-changed events of `process` until it enters `wanted`.
 
-    def wait_for_exit(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> int:
-        """Wait for `process` (CPU or GPU) to exit and return its exit status.
-
-        Nothing is resumed: the test resumes both processes first. Running
-        events are tolerated on the way; a stop fails the test, so a program
-        that stops again instead of finishing fails instead of hanging.
+        Running events (and restarted stops) are skipped. Any other state fails
+        the test, saying what the process did before `doing` ("stopping",
+        "exiting"): with the exit status and its description if it exited, so
+        that a lost connection to lldb-server (status -1) is told apart from
+        the program ending. A program that never gets where the test expects
+        fails instead of hanging the test.
         """
         what = "GPU" if process.GetTarget() == self.gpu_target else "CPU"
         listener = self.dbg.GetListener()
         while True:
             state = self._next_state(process, what, listener, timeout_seconds)
+            if state == wanted:
+                return
             if state == lldb.eStateRunning:
                 continue
             if state == lldb.eStateExited:
-                return process.GetExitStatus()
-            self.fail(
-                f"{what} process entered state "
-                f"{lldb.SBDebugger.StateAsCString(state)} before exiting"
+                status = process.GetExitStatus()
+                description = process.GetExitDescription()
+                if description:
+                    entered = f"exited (status {status}: {description})"
+                else:
+                    entered = f"exited (status {status})"
+            else:
+                entered = f"entered state {lldb.SBDebugger.StateAsCString(state)}"
+            self.fail(f"{what} process {entered} before {doing}")
+
+    def wait_for_stop(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> None:
+        """Wait for `process` (CPU or GPU), which is running, to stop. Nothing
+        is resumed."""
+        self._wait_for_state(process, lldb.eStateStopped, "stopping", timeout_seconds)
+
+    def wait_for_exit(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> int:
+        """Wait for `process` (CPU or GPU) to exit and return its exit status.
+
+        Nothing is resumed: the test resumes both processes first. A stop fails
+        the test, so a program that stops again instead of finishing fails
+        instead of hanging.
+        """
+        self._wait_for_state(process, lldb.eStateExited, "exiting", timeout_seconds)
+        return process.GetExitStatus()
+
+    def assert_exit_status(self, status: int, timeout_seconds: int = 60) -> None:
+        """Both processes, which the test resumed, must exit with `status`.
+        Nothing is resumed."""
+        # The GPU first: if it stops instead, that fails here at once, while
+        # the CPU would only wait for it until the timeout.
+        for process, what in ((self.gpu_process, "GPU"), (self.cpu_process, "CPU")):
+            self.assertEqual(
+                self.wait_for_exit(process, timeout_seconds),
+                status,
+                f"{what} exit status ({process.GetExitDescription() or 'no description'})",
             )
 
-    def wait_for_gpu_to_stop(self, timeout_seconds: int = 60) -> None:
-        """Wait for the running GPU process to stop.
+    def read_stdout(self) -> str:
+        """Return what the CPU process wrote to stdout that the test has not
+        read yet. lldb collects it on a thread of its own, so output the
+        program has just written may not be here yet."""
+        chunks = []
+        while chunk := self.cpu_process.GetSTDOUT(4096):
+            chunks.append(chunk)
+        return "".join(chunks)
 
-        Nothing is resumed. Running events (and restarted stops) are tolerated on
-        the way to eStateStopped. Any other state fails the test, naming the exit
-        status and its description if the GPU process exited, so a kernel that
-        never reaches the expected stop fails instead of hanging the test. The
-        description tells a lost connection to lldb-server (status -1) apart
-        from the program ending.
-        """
-        listener = self.dbg.GetListener()
-        while True:
-            state = self._next_gpu_state(listener, timeout_seconds)
-            if state == lldb.eStateRunning:
-                continue
-            if state == lldb.eStateStopped:
-                return
-            if state == lldb.eStateExited:
-                status = self.gpu_process.GetExitStatus()
-                description = self.gpu_process.GetExitDescription()
-                if description:
-                    what = f"exited (status {status}: {description})"
-                else:
-                    what = f"exited (status {status})"
-            else:
-                what = f"entered state {lldb.SBDebugger.StateAsCString(state)}"
-            self.fail(f"GPU process {what} before stopping")
+    def wait_for_gpu_to_stop(self, timeout_seconds: int = 60) -> None:
+        """Wait for the running GPU process to stop. Nothing is resumed."""
+        self.wait_for_stop(self.gpu_process, timeout_seconds)
 
     def continue_cpu_and_wait_for_gpu_to_stop(self, timeout_seconds: int = 60):
         """Resume the CPU process and wait for the GPU process to stop.
@@ -482,3 +578,24 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
             )
         return vals
+
+    def thread_coords(
+        self, thread: lldb.SBThread
+    ) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+        """Return a GPU thread's (blockIdx, threadIdx), each as (x, y, z), from
+        the CUDA coordinates lldb-server reports for it. Tell threads apart by
+        these, not by their names, which are for display."""
+
+        def read(path: str) -> int:
+            stream = lldb.SBStream()
+            self.assertTrue(
+                thread.GetInfoItemByPathAsString(path, stream),
+                f"{thread.GetName()} has no {path}",
+            )
+            # The SB API writes integers in hex, as "0x1f". Base 0 reads that
+            # and a decimal alike, instead of misreading a decimal as hex.
+            return int(stream.GetData(), 0)
+
+        block = tuple(read(f"cuda.block_idx.{axis}") for axis in "xyz")
+        index = tuple(read(f"cuda.thread_idx.{axis}") for axis in "xyz")
+        return block, index

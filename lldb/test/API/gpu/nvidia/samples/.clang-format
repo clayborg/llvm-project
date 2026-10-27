@@ -1,0 +1,4 @@
+# Copies of cuda-samples programs keep the samples' own formatting, so that a
+# copy can be compared with its sample when it is copied again from a newer tag.
+DisableFormat: true
+SortIncludes: Never
