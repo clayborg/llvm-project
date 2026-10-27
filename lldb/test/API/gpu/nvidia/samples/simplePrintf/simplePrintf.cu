@@ -1,0 +1,78 @@
+/* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+// Based on
+// https://github.com/NVIDIA/cuda-samples/blob/5443602d89ed99aede2e4b7bf329daddeadb320e/cpp/0_Introduction/simplePrintf/simplePrintf.cu
+
+// System includes
+#include <assert.h>
+#include <stdio.h>
+
+// CUDA runtime
+#include <cuda_runtime.h>
+
+#ifndef MAX
+#define MAX(a, b) (a > b ? a : b)
+#endif
+
+// Each thread calls device-side printf, printing its linear block index, its
+// linear thread index, and val. Output is flushed on host sync; line order is
+// not deterministic since blocks/threads run concurrently.
+__global__ void simplePrintfKernel(int val)
+{
+    printf("[%d, %d]:\t\tValue is:%d\n", // gpu breakpoint at printf
+           blockIdx.y * gridDim.x + blockIdx.x,                                            // linear block index
+           threadIdx.z * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x, // linear thread index
+           val);
+} // gpu breakpoint after printf
+
+int main(int argc, char **argv)
+{
+    // Select device 0 as the active GPU
+    int devID = 0;
+    cudaSetDevice(devID);
+
+    // Query compute capability (major.minor) and number of SMs on the device
+    int major = 0, minor = 0, smCount = 0;
+    cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, devID);
+    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, devID);
+    cudaDeviceGetAttribute(&smCount, cudaDevAttrMultiProcessorCount, devID);
+
+    // Print device info
+    printf("GPU Device %d: with compute capability %d.%d and Number of SMs %d\n\n", devID, major, minor, smCount);
+
+    printf("printf() is called. Output:\n\n"); // cpu breakpoint before launch
+
+    // Kernel configuration, where a two-dimensional grid and
+    // three-dimensional blocks are configured.
+    dim3 dimGrid(2, 2);
+    dim3 dimBlock(2, 2, 2);
+    simplePrintfKernel<<<dimGrid, dimBlock>>>(10);
+    cudaDeviceSynchronize();
+
+    return EXIT_SUCCESS;
+}
