@@ -4,6 +4,7 @@ import re
 import lldb
 from lldbsuite.test import lldbutil
 from lldbsuite.test.lldbtest import line_number
+from lldbsuite.test.tools.gpu.nvgpu_decorators import SM, skipUnlessNVGPU
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -108,26 +109,9 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
             }
         )
 
-        # TODO: Replace this check with capability support in NVGPUTestCaseBase.
-        # Do not copy this check into other tests.
-        capability_line = line_number(
-            source, "// capability queried before cluster launch"
+        self.run_to_cpu_line(
+            source, "// capability queried before cluster launch", executable
         )
-        _, _, cpu_thread, _ = lldbutil.run_to_line_breakpoint(
-            self,
-            lldb.SBFileSpec(source),
-            capability_line,
-            exe_name=executable,
-        )
-        frame = cpu_thread.GetFrameAtIndex(0)
-        major_value = frame.FindVariable("device_major")
-        self.assertTrue(major_value.IsValid())
-        major = major_value.GetValueAsSigned()
-        if major < 9:
-            self.skipTest(
-                f"thread-block clusters require compute capability 9.0; got {major}"
-            )
-
         self.continue_cpu_and_wait_for_gpu_to_stop()
         self.select_gpu()
 
@@ -146,10 +130,13 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
                 cuda["cluster_dim"], {"x": cluster_x, "y": 1, "z": 1}
             )
 
+    # Thread-block clusters need sm_90 or newer.
+    @skipUnlessNVGPU(SM(at_least=90))
     def test_clustered_thread_coordinates(self):
         """Test live transport of Hopper thread-block cluster coordinates."""
         self._test_clustered_thread_coordinates(2)
 
+    @skipUnlessNVGPU(SM(at_least=90))
     def test_singleton_cluster_is_still_clustered(self):
         """An explicit 1x1x1 cluster must not look like a normal launch."""
         self._test_clustered_thread_coordinates(1)

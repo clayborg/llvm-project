@@ -67,6 +67,10 @@ if(NOT NVGPU_NVCC_PATH)
   endif()
 endif()
 
+# The test suites and lldb-dotest read this through their site configuration.
+set(NVGPU_TEST_LD_LIBRARY_PATH "" CACHE STRING
+    "LD_LIBRARY_PATH for the NVIDIA GPU tests, the debugger they run, and the programs it debugs, such as the directory of a libcuda.so.1 that is not installed. Empty leaves LD_LIBRARY_PATH as lit sets it.")
+
 # Function to verify NVCC compiler is available
 # Some CUDA plugins require the NVCC compiler for runtime compilation
 function(lldb_verify_nvcc_available)

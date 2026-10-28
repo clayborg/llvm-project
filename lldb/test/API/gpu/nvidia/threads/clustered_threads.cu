@@ -15,8 +15,7 @@ int main() {
   if (cudaGetDeviceProperties(&properties, 0) != cudaSuccess)
     return 1;
 
-  volatile int device_major = properties.major;
-  if (device_major < 9) // capability queried before cluster launch
+  if (properties.major < 9) // capability queried before cluster launch
     return 0;
 
   cudaLaunchConfig_t config = {};

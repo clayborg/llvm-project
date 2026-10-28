@@ -74,8 +74,10 @@ CMake variables
 - `NVGPU_DISASSEMBLER_PATH`: a default path to the nvdisasm disassembler that
   will be hardcoded in LLDB. It bypasses the regular disassembler discovery
   logic.
-- `NVGPU_TEST_LD_LIBRARY_PATH`: a way to override LD_LIBRARY_PATH for NVGPU
-  tests. This doesn't affect regular builds.
+- `NVGPU_TEST_LD_LIBRARY_PATH`: the LD_LIBRARY_PATH that lit gives the
+  NVIDIA GPU tests, the lldb they run, and the programs it debugs, for
+  example the directory of a `libcuda.so.1` that is not installed. Empty leaves
+  LD_LIBRARY_PATH as is. This doesn't affect regular builds.
 
 Environment variables
 ^^^^^^^^^^^^^^^^^^^^^
@@ -197,6 +199,10 @@ runs lit, so they are also UNSUPPORTED on a remote platform
 instead. ``--param nvgpu-no-device`` hides the GPUs, to run on a GPU machine
 what a machine without one would.
 
+Run the GPU tests through lit. ``lldb-dotest`` does not pass them the plugin,
+the nvcc, or the environment that lit does, so a test run with it alone fails
+to build its program.
+
 Writing GPU tests
 ^^^^^^^^^^^^^^^^^
 
@@ -205,6 +211,19 @@ needs a GPU and is skipped on a machine that cannot run it. A test that only
 reads core files or other files from disk needs no GPU and runs anywhere. The
 test base classes in ``lldbsuite.test.tools.gpu`` apply this by default; its
 ``nvgpu_decorators`` module describes how to mark a test that differs.
+
+A test method that needs a particular GPU, such as one with a minimum compute
+capability, carries ``@skipUnlessNVGPU`` with the requirements from
+``nvgpu_decorators``, and is skipped on a machine whose GPU does not meet them:
+
+.. code-block:: python
+
+  @skipUnlessNVGPU(SM(at_least=90))  # device 0 is sm_90 or newer
+  def test_clusters(self):
+      ...
+
+Device 0 is the first GPU the program sees, in CUDA's device order, which puts
+the fastest GPU first unless ``CUDA_DEVICE_ORDER`` says otherwise.
 
 A test that needs no GPU but builds a CUDA program sets the GPU architecture in
 its Makefile, for example ``NVCC_ARCHFLAGS := -arch=sm_80``. The default,
