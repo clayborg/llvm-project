@@ -1,0 +1,35 @@
+# Interpret expressions for a target whose globals and allocas are in
+# non-default address spaces (allocas use 32-bit pointers).
+
+# REQUIRES: amdgpu
+
+# RUN: yaml2obj %s -o %t.obj
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'expr 1 + 1' \
+# RUN:   -o 'expr (long)3 * 7' \
+# RUN:   -o 'expr int x = 5; x * 2' \
+# RUN:   -o 'expr int a = 1; int *p = &a; *p = 4; a + *p' \
+# RUN:   -o 'expr $0 + 40' \
+# RUN:   | FileCheck %s
+
+# CHECK: (lldb) expr 1 + 1
+# CHECK-NEXT: (int) $0 = 2
+# CHECK: (lldb) expr (long)3 * 7
+# CHECK-NEXT: (long) $1 = 21
+# CHECK: (lldb) expr int x = 5; x * 2
+# CHECK-NEXT: (int) $2 = 10
+# CHECK: (lldb) expr int a = 1; int *p = &a; *p = 4; a + *p
+# CHECK-NEXT: (int) $3 = 8
+# CHECK: (lldb) expr $0 + 40
+# CHECK-NEXT: (int) $4 = 42
+
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_DYN
+  Machine:         EM_AMDGPU
+  OSABI:           ELFOSABI_AMDGPU_HSA
+  ABIVersion:      4 # ELFABIVERSION_AMDGPU_HSA_V6
+  Flags:           [ EF_AMDGPU_MACH_AMDGCN_GFX942 ]
+...
