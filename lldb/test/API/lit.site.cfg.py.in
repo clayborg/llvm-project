@@ -69,8 +69,8 @@ if lldb_enable_amdgpu_plugin:
     config.rocgdb_ld_preload = '@ROCGDB_LD_PRELOAD@'
     config.rocgdb_ld_library_path = '@ROCGDB_LD_LIBRARY_PATH@'
 
-lldb_enable_nvgpu_plugin = '@LLDB_ENABLE_NVGPU_PLUGIN@'
-if lldb_enable_nvgpu_plugin in ('ON', '1'):
+lldb_enable_nvgpu_plugin = @LLDB_ENABLE_NVGPU_PLUGIN@
+if lldb_enable_nvgpu_plugin:
     config.enabled_plugins.append('nvgpu')
     config.nvcc_path = '@NVGPU_NVCC_PATH@'
     config.nvgpu_test_ld_library_path = '@NVGPU_TEST_LD_LIBRARY_PATH@'

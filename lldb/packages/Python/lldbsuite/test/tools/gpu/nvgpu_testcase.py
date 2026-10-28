@@ -20,14 +20,18 @@ _shared_builds: Dict[Tuple[type, str], str] = {}
 
 def _with_gpu_check(setup):
     """Wrap a test's setUp. A test that needs a GPU is skipped before setUp
-    runs, on a machine that cannot run a CUDA program, so that the base setUp
-    does not delete the build directory of the last run. After setUp, it fails
-    if the configured nvcc cannot build for this machine's GPUs."""
+    runs, on a machine that cannot run a CUDA program or whose GPU does not
+    meet the requirements of the method's @skipUnlessNVGPU marks, so that the
+    base setUp does not delete the build directory of the last run. After
+    setUp, it fails if the configured nvcc cannot build for this machine's
+    GPUs."""
 
     def checked_setUp(self):
         needs_gpu = nvgpu_decorators.needs_gpu(self)
         if needs_gpu:
-            self.skip_without_gpu()
+            reason = nvgpu_decorators.skip_reason(self)
+            if reason:
+                self.skipTest(reason)
         setup(self)
         if needs_gpu:
             self.fail_on_unusable_nvcc()
@@ -91,7 +95,8 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     # Tests on this base class debug a live CUDA program, so they need a GPU.
     # NVGPUCoreTestCaseBase sets this to False. A test class can set it too,
     # and @skipUnlessNVGPUDevice from nvgpu_decorators marks one method of a
-    # class that needs no GPU.
+    # class that needs no GPU. @skipUnlessNVGPU marks a method that needs more
+    # of the GPU, such as a compute capability.
     NEEDS_GPU = True
 
     def __init_subclass__(cls, **kwargs):

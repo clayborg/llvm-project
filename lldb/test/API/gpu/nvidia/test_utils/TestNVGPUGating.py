@@ -21,6 +21,11 @@ from lldbsuite.test import configuration
 from lldbsuite.test.lldbtest import TestBase
 from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu import nvgpu_host
+from lldbsuite.test.tools.gpu.nvgpu_decorators import (
+    SM,
+    skipUnlessNVGPU,
+    skipUnlessNVGPUDevice,
+)
 from lldbsuite.test.tools.gpu.nvgpu_core_testcase import NVGPUCoreTestCaseBase
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -378,6 +383,62 @@ class TestNVGPUGating(TestBase):
                     cls("test_method").setUp()
             self.assertFalse(base_setup.called)
             Core("test_method").setUp()
+
+    def test_compute_capability(self):
+        # Device 0 decides, here sm_120.
+        self.assertIsNone(SM(at_least=120).reason(TWO_GPUS))
+        self.assertIsNone(SM(at_least=90).reason(TWO_GPUS))
+        self.assertEqual(
+            SM(at_least=121).reason(TWO_GPUS),
+            "device 0 is sm_120; the test needs sm_121 or newer",
+        )
+        self.assertIn("device 0 is sm_86", SM(at_least=90).reason(TWO_GPUS[::-1]))
+        # A requirement that every GPU meets, such as 9 meant as sm_90, fails
+        # when the test file is loaded, not by never skipping.
+        with self.assertRaisesRegex(ValueError, "such as 90 for sm_90"):
+            SM(at_least=9)
+        with self.assertRaises(TypeError):
+            SM(90)
+
+    def test_setup_skips_on_unmet_requirements(self):
+        # Device 0 is sm_86.
+        nvgpu_decorators._gpu_info = gpu_info(TWO_GPUS[::-1], MAJOR)
+
+        class Core(NVGPUCoreTestCaseBase):
+            @skipUnlessNVGPU(SM(at_least=90))
+            def test_clusters(self):
+                pass
+
+            @skipUnlessNVGPU(SM(at_least=86))
+            def test_sm_86(self):
+                pass
+
+        # A requirement implies a GPU, even in a class that needs none.
+        self.assertTrue(nvgpu_decorators.needs_gpu(Core("test_clusters")))
+        with self.remote_platform(None), mock.patch.object(
+            TestBase, "setUp"
+        ) as base_setup:
+            with self.assertRaisesRegex(
+                unittest.SkipTest,
+                "nvgpu: device 0 is sm_86; the test needs sm_90 or newer",
+            ):
+                Core("test_clusters").setUp()
+            self.assertFalse(base_setup.called)
+            Core("test_sm_86").setUp()
+            # Without a GPU, the test skips for that reason first.
+            nvgpu_decorators._gpu_info = gpu_info([], MAJOR)
+            with self.assertRaisesRegex(unittest.SkipTest, "no CUDA device"):
+                Core("test_clusters").setUp()
+        with self.assertRaises(TypeError):
+            skipUnlessNVGPU(SM(at_least=90))(Core)
+
+        # One mark holds all of a method's requirements, so a second mark
+        # fails when the test file is loaded.
+        def test_method(self):
+            pass
+
+        with self.assertRaisesRegex(TypeError, "more than one"):
+            skipUnlessNVGPU(SM(at_least=90))(skipUnlessNVGPUDevice(test_method))
 
     def test_setup_fails_on_unusable_nvcc(self):
         # setUp checks the nvcc that dotest builds with. lit passes its
