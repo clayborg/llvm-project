@@ -1070,18 +1070,23 @@ public:
   /// Find a GPU thread by block and thread indices.
   ///
   /// This method searches for a GPU thread matching the specified block and
-  /// thread coordinates. The default implementation returns nullptr.
+  /// thread coordinates. Platform implementations may apply context-based
+  /// defaults to the input patterns, such as inheriting an omitted coordinate
+  /// group from the selected GPU thread. The default implementation returns
+  /// nullptr.
   ///
   /// \param[in] process
   ///     The process to search for threads.
   ///
   /// \param[in] block_idx
-  ///     The block index pattern to match. Unspecified dimensions match any
-  ///     value.
+  ///     The block index pattern to match. Unspecified dimensions within a
+  ///     supplied group match any value; an entirely unspecified group may
+  ///     receive a context-based default as described above.
   ///
   /// \param[in] thread_idx
-  ///     The thread index pattern to match. Unspecified dimensions match any
-  ///     value.
+  ///     The thread index pattern to match. Unspecified dimensions within a
+  ///     supplied group match any value; an entirely unspecified group may
+  ///     receive a context-based default as described above.
   ///
   /// \return
   ///     The matching thread, or nullptr if not found or if this platform
@@ -1114,27 +1119,6 @@ public:
   /// \return
   ///     Status indicating success or error with description.
   static Status ParseGPUCoordinate(llvm::StringRef input, GPUDim3 &dim);
-
-  /// Parse a GPU thread name to extract block and thread indices.
-  ///
-  /// The default implementation returns false, indicating the platform does
-  /// not support GPU thread name parsing.
-  ///
-  /// \param[in] name
-  ///     The thread name to parse.
-  ///
-  /// \param[out] block_idx
-  ///     The parsed block index.
-  ///
-  /// \param[out] thread_idx
-  ///     The parsed thread index.
-  ///
-  /// \return
-  ///     True if parsing succeeded, false otherwise.
-  virtual bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
-                                  GPUDim3 &thread_idx) {
-    return false;
-  }
 
 protected:
   /// Create a list of ArchSpecs with the given OS and a architectures. The

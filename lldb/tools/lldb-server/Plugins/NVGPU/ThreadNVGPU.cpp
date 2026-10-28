@@ -32,14 +32,15 @@ std::string ThreadNVGPU::GetName() {
   if (!m_thread_state)
     return "Invalid thread";
 
-  const WarpState &warp_state = m_thread_state->GetWarpState();
-  const std::optional<ThreadIdx> &thread_idx = m_thread_state->GetThreadIdx();
-  const std::optional<BlockIdx> &block_idx = warp_state.GetBlockIdx();
-  if (!thread_idx || !block_idx)
+  // Synthetic dynamic-loader stops have no current device snapshot.
+  std::optional<nvgpu::ThreadCoords> coords = GetCurrentThreadCoords();
+  if (!coords || !coords->logical.block_idx || !coords->logical.thread_idx)
     return "CUDA thread coordinates unavailable";
 
-  return nvgpu::FormatThreadName(block_idx->x, block_idx->y, block_idx->z,
-                                 thread_idx->x, thread_idx->y, thread_idx->z);
+  const nvgpu::Dim3u &block_idx = *coords->logical.block_idx;
+  const nvgpu::Dim3u &thread_idx = *coords->logical.thread_idx;
+  return nvgpu::FormatThreadName(block_idx.x, block_idx.y, block_idx.z,
+                                 thread_idx.x, thread_idx.y, thread_idx.z);
 }
 
 lldb::StateType ThreadNVGPU::GetState() { return m_state; }
@@ -60,7 +61,7 @@ ThreadNVGPU::GetExtendedInfo(const llvm::json::Value &) {
     return llvm::json::Value(llvm::json::Object{});
 
   return llvm::json::Value(
-      llvm::json::Object{{"cuda", nvgpu::toJSON(*coords)}});
+      llvm::json::Object{{nvgpu::g_thread_coords_key, nvgpu::toJSON(*coords)}});
 }
 
 lldb::StopReason ThreadNVGPU::GetStopReason() const {

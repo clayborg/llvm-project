@@ -157,6 +157,32 @@ If the CUDA debugger API fails to initialize, for example because no CUDA
 device is visible, LLDB reports the error and adds no GPU target. The program
 keeps running, without GPU debugging.
 
+GPU thread coordinates
+^^^^^^^^^^^^^^^^^^^^^^
+
+LLDB reads a GPU thread's block and thread indices from its structured CUDA
+metadata. Thread names are display labels and are not parsed for coordinates.
+Threads whose metadata is absent, incomplete, or malformed remain visible in
+the aggregated ``thread list`` output, but without a coordinate range. A row
+containing multiple such threads is labeled ``CUDA thread coordinates
+unavailable``; a single thread keeps its display name when available.
+
+Simulated module-load stops have no current GPU coordinate snapshot. Threads
+retained from an earlier real GPU stop are labeled ``CUDA thread coordinates
+unavailable`` until the next real GPU stop. These simulated stops are visible
+to the user when ``target.process.stop-on-sharedlibrary-events`` is ``true``.
+
+``thread select --blockidx`` and ``thread select --threadidx`` match that same
+metadata. A supplied coordinate axis matches only when the candidate thread
+has that axis and its value is equal. When an entire block or thread-index
+group is unconstrained, a thread may match even if that group is unavailable.
+The first matching thread in process order is selected.
+
+When only ``--threadidx`` is supplied, LLDB also uses the selected thread's
+entire block index when it is available. When only ``--blockidx`` is supplied,
+it similarly uses the selected thread's entire thread index. If the selected
+thread does not have the inherited group, that group stays unconstrained.
+
 GPU modules
 ^^^^^^^^^^^
 
