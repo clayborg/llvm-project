@@ -136,6 +136,38 @@ class TestNVGPUCoreThreadCoords(NVGPUCoreTestCaseBase):
         )
         self.assertIs(second_cuda["is_active"], False)
 
+    def test_incomplete_block_coordinates_have_neutral_label(self):
+        # A 16-byte CTA prefix retains the grid ID but truncates blockIdx,
+        # leaving the block coordinates incomplete.
+        _, process = self.generate_and_load_artificial_core(
+            self._build_core(cta_entry_size=16),
+            "incomplete-block-coordinates.nvcudmp",
+        )
+
+        self.assertEqual(process.GetNumThreads(), 2)
+        actual_thread_indices = set()
+        actual_lanes = set()
+        for thread in process:
+            cuda = self._json_info(thread)["cuda"]
+            self.assertEqual(cuda["context_id"], self.CONTEXT_ID)
+            self.assertEqual(cuda["grid_id"], self.GRID_ID)
+            self.assertNotIn("block_idx", cuda)
+            actual_thread_indices.add(tuple(cuda["thread_idx"][axis] for axis in "xyz"))
+            actual_lanes.add(cuda["lane"])
+            self.assertEqual(thread.GetFrameAtIndex(0).GetPC(), self.PC)
+
+        self.assertEqual(actual_thread_indices, set(self.THREAD_IDX))
+        self.assertEqual(actual_lanes, set(self.LANE_IDS))
+
+        self.runCmd("thread list")
+        output = self.res.GetOutput()
+        self.assertIn(
+            "2 thread(s) at pc=0x100000: CUDA thread coordinates unavailable",
+            output,
+        )
+        self.assertNotIn("blockIdx(", output)
+        self.assertNotIn("threadIdx(", output)
+
     def test_thread_format_printf_suffixes(self):
         self.generate_and_load_artificial_core(
             self._build_core(), "thread-format.nvcudmp"
@@ -324,6 +356,30 @@ class TestNVGPUCoreThreadCoords(NVGPUCoreTestCaseBase):
                     "warp": 0,
                 }
             },
+        )
+
+    def test_thread_selection_patterns_inherit_metadata(self):
+        _, process = self.generate_and_load_artificial_core(
+            self._build_core(), "coordinate-selection.nvcudmp"
+        )
+        first = self._thread(process, self.THREAD_IDX[0])
+        second = self._thread(process, self.THREAD_IDX[1])
+
+        self.assertTrue(process.SetSelectedThread(first))
+        # An explicit group is a per-axis pattern. Its unspecified y/z axes
+        # stay wildcards, while the omitted block group is inherited in full
+        # from the selected thread's typed metadata.
+        self.runCmd("thread select --threadidx '(x=21)'")
+        self.assertEqual(
+            process.GetSelectedThread().GetThreadID(), second.GetThreadID()
+        )
+
+        # Conversely, an omitted thread group inherits the selected thread's
+        # complete threadIdx. The first lane has the same block but must not
+        # win simply because it appears first in the process thread list.
+        self.runCmd("thread select --blockidx '(x=8)'")
+        self.assertEqual(
+            process.GetSelectedThread().GetThreadID(), second.GetThreadID()
         )
 
     def test_stop_attribution_precedence_and_active_lane_gating(self):

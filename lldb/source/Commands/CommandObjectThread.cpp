@@ -1234,37 +1234,11 @@ protected:
         return;
       }
 
-      // Get the currently selected thread to preserve its coordinates if
-      // needed.
-      GPUDim3 search_block_idx = m_options.m_block_idx;
-      GPUDim3 search_thread_idx = m_options.m_thread_idx;
-
-      ThreadSP current_thread = process->GetThreadList().GetSelectedThread();
-      if (current_thread) {
-        const char *current_name = current_thread->GetName();
-        if (current_name) {
-          GPUDim3 current_block_idx, current_thread_idx;
-          if (platform_sp->ParseGPUThreadName(current_name, current_block_idx,
-                                              current_thread_idx)) {
-            // If only threadidx is specified, preserve blockidx from current
-            // thread.
-            if (!m_options.m_thread_idx.IsEmpty() &&
-                m_options.m_block_idx.IsEmpty()) {
-              search_block_idx = current_block_idx;
-            }
-            // If only blockidx is specified, preserve threadidx from current
-            // thread.
-            else if (!m_options.m_block_idx.IsEmpty() &&
-                     m_options.m_thread_idx.IsEmpty()) {
-              search_thread_idx = current_thread_idx;
-            }
-          }
-        }
-      }
-
-      // Find the thread matching the GPU coordinates using the platform.
+      // Pass the requested patterns unchanged. The GPU platform
+      // applies any selected-thread coordinate inheritance from typed thread
+      // metadata.
       ThreadSP new_thread_sp = platform_sp->FindGPUThread(
-          *process, search_block_idx, search_thread_idx);
+          *process, m_options.m_block_idx, m_options.m_thread_idx);
       if (!new_thread_sp) {
         result.AppendError(
             "no GPU thread found matching the specified coordinates");

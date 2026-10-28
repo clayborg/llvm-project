@@ -455,7 +455,7 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
         self.expect(
             "thread list",
             substrs=[
-                "3 thread(s): no kernel context, "
+                "3 thread(s): CUDA thread coordinates unavailable, "
                 "stop reason = CUDA Exception: Device Illegal Address",
                 self.SYMBOL_NAME,
             ],
