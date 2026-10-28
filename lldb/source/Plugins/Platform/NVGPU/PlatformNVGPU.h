@@ -90,9 +90,6 @@ public:
   lldb::ThreadSP FindGPUThread(Process &process, const GPUDim3 &block_idx,
                                const GPUDim3 &thread_idx) override;
 
-  bool ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
-                          GPUDim3 &thread_idx) override;
-
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 

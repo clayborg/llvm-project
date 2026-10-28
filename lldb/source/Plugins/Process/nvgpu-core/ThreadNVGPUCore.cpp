@@ -304,6 +304,7 @@ bool ThreadNVGPUCore::CalculateStopInfo() {
 
 StructuredData::ObjectSP ThreadNVGPUCore::FetchThreadExtendedInfo() {
   auto info_sp = std::make_shared<StructuredData::Dictionary>();
-  info_sp->AddItem("cuda", nvgpu::toStructuredData(m_cuda_thread_coords));
+  info_sp->AddItem(nvgpu::g_thread_coords_key,
+                   nvgpu::toStructuredData(m_cuda_thread_coords));
   return info_sp;
 }

@@ -22,6 +22,7 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadList.h"
 #include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Stream.h"
 
@@ -33,9 +34,9 @@
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Triple.h"
 
-#include <climits>
+#include <cinttypes>
+#include <limits>
 #include <map>
-#include <regex>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -591,40 +592,38 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
   return 0;
 }
 
-/// Represents the 3D index of a CUDA block or thread.
-struct Dim3 {
-  int x = 0;
-  int y = 0;
-  int z = 0;
-};
+/// Return the typed CUDA coordinate snapshot carried in thread extended info.
+/// Missing or malformed metadata is represented by an entirely unknown
+/// snapshot so callers can retain the thread while treating every field as
+/// unavailable.
+static nvgpu::ThreadCoords GetThreadCoords(Thread &thread) {
+  StructuredData::ObjectSP extended_info_sp = thread.GetExtendedInfo();
+  if (!extended_info_sp)
+    return {};
 
-/// Represents a CUDA thread's full coordinates.
-struct CUDAThreadCoord {
-  Dim3 block_idx;
-  Dim3 thread_idx;
-  lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
-};
+  StructuredData::Dictionary *extended_info =
+      extended_info_sp->GetAsDictionary();
+  if (!extended_info) {
+    LLDB_LOG(GetLog(LLDBLog::Thread),
+             "CUDA thread {0} extended info is not a dictionary",
+             thread.GetID());
+    return {};
+  }
 
-/// Parse a CUDA thread name in the format:
-/// "blockIdx(x=79 y=0 z=0) threadIdx(x=14 y=0 z=0)"
-static bool ParseCUDAThreadName(llvm::StringRef name, CUDAThreadCoord &coord) {
-  // Pattern: blockIdx(x=N y=N z=N) threadIdx(x=N y=N z=N)
-  static std::regex pattern(
-      R"(blockIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\)\s+)"
-      R"(threadIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\))");
+  StructuredData::ObjectSP cuda_sp =
+      extended_info->GetValueForKey(nvgpu::g_thread_coords_key);
+  if (!cuda_sp)
+    return {};
 
-  std::string name_str = name.str();
-  std::smatch match;
-  if (!std::regex_search(name_str, match, pattern))
-    return false;
-
-  coord.block_idx.x = std::stoi(match[1].str());
-  coord.block_idx.y = std::stoi(match[2].str());
-  coord.block_idx.z = std::stoi(match[3].str());
-  coord.thread_idx.x = std::stoi(match[4].str());
-  coord.thread_idx.y = std::stoi(match[5].str());
-  coord.thread_idx.z = std::stoi(match[6].str());
-  return true;
+  llvm::Expected<nvgpu::ThreadCoords> coords =
+      nvgpu::FromStructuredData(*cuda_sp);
+  if (!coords) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Thread), coords.takeError(),
+                   "Failed to decode CUDA metadata for thread {1}: {0}",
+                   thread.GetID());
+    return {};
+  }
+  return std::move(*coords);
 }
 
 /// Per-dimension value tracker for the aggregated thread-list path.
@@ -634,11 +633,13 @@ static bool ParseCUDAThreadName(llvm::StringRef name, CUDAThreadCoord &coord) {
 /// forms: a single value, a contiguous range, or a wildcard when the values
 /// are non-contiguous.
 struct DimSet {
-  int min_v = INT_MAX;
-  int max_v = INT_MIN;
-  llvm::DenseSet<int> values;
+  uint32_t min_v = std::numeric_limits<uint32_t>::max();
+  uint32_t max_v = std::numeric_limits<uint32_t>::min();
+  // DenseSet<uint32_t> reserves UINT32_MAX and UINT32_MAX - 1 as sentinels.
+  // Widening the storage preserves every valid uint32_t coordinate.
+  llvm::DenseSet<uint64_t> values;
 
-  void Insert(int v) {
+  void Insert(uint32_t v) {
     min_v = std::min(min_v, v);
     max_v = std::max(max_v, v);
     values.insert(v);
@@ -646,8 +647,8 @@ struct DimSet {
   bool IsEmpty() const { return values.empty(); }
   bool IsSingle() const { return values.size() == 1; }
   bool IsContiguous() const {
-    return !IsEmpty() &&
-           static_cast<size_t>(max_v - min_v + 1) == values.size();
+    return !IsEmpty() && static_cast<uint64_t>(max_v) - min_v + 1 ==
+                             static_cast<uint64_t>(values.size());
   }
 };
 
@@ -682,10 +683,9 @@ struct GroupKey {
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
   uint64_t stop_value = 0;
-  /// False for a thread that has no block/thread coordinates: an SM-level
-  /// fault whose warps had all exited before the dump (see
-  /// `ThreadNVGPUCore`). Part of the identity so such a thread never shares
-  /// a row with coordinate-bearing threads that faulted at the same place.
+  /// False unless both block and thread coordinates are available. Part of
+  /// the identity so incomplete metadata never shares a row with complete
+  /// coordinates at the same location.
   bool has_coord = true;
 
   bool operator==(const GroupKey &other) const {
@@ -766,7 +766,7 @@ template <> struct DenseMapInfo<::GroupKey> {
 /// Aggregated representation of all threads sharing one GroupKey.
 struct AggregatedThreadGroup {
   GroupKey key;
-  llvm::SmallVector<CUDAThreadCoord, 32> coords;
+  size_t thread_count = 0;
   ThreadSP representative_thread;
   /// SymbolContext that produced the group key for the representative thread,
   /// kept around so the renderer can pull display fields (module name, frame
@@ -789,11 +789,11 @@ static void FormatDimSet(Stream &strm, const char *name, const DimSet &dim) {
     return;
   }
   if (dim.IsSingle()) {
-    strm.Printf("%s=%d", name, dim.min_v);
+    strm.Printf("%s=%" PRIu32, name, dim.min_v);
     return;
   }
   if (dim.IsContiguous()) {
-    strm.Printf("%s=[%d...%d]", name, dim.min_v, dim.max_v);
+    strm.Printf("%s=[%" PRIu32 "...%" PRIu32 "]", name, dim.min_v, dim.max_v);
     return;
   }
   strm.Printf("%s=*", name);
@@ -815,10 +815,10 @@ static void FormatDim3Set(Stream &strm, const char *prefix, const DimSet &x,
 /// not hold the thread-list lock while iterating frames and symbols.
 struct ThreadSnapshot {
   ThreadSP thread_sp;
-  CUDAThreadCoord coord;
-  /// False when the thread's name carries no block/thread coordinates, in
-  /// which case only `coord.tid` is meaningful. See `GroupKey::has_coord`.
-  bool has_coord = true;
+  nvgpu::ThreadCoords coord;
+  /// True only when both logical coordinate groups are available. See
+  /// `GroupKey::has_coord`.
+  bool has_coord = false;
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   /// Per-warp errorPC reported by the NVIDIA debugger backend, or
   /// LLDB_INVALID_ADDRESS when no valid errorPC is available. The backend
@@ -831,31 +831,32 @@ struct ThreadSnapshot {
   uint64_t stop_value = 0;
 };
 
-/// Accumulate one snapshot's coordinates into a group: per-dim DimSets and
-/// the coords vector. The caller is responsible for setting `representative_*`
-/// fields on first insertion.
+/// Accumulate one snapshot into a group: its thread count and per-dim DimSets.
+/// The caller is responsible for setting `representative_*` fields on first
+/// insertion.
 static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
                                         const ThreadSnapshot &snap) {
-  group.coords.push_back(snap.coord);
-  // A coordinate-less thread still counts towards the row's thread total, but
-  // contributes no dimension values: feeding its zeroed coord into the
-  // DimSets would render as block/thread 0 instead of "no coordinates".
+  ++group.thread_count;
+  // Threads without complete block/thread coordinates still count towards the
+  // row's thread total, but contribute no dimension values.
   if (!snap.has_coord)
     return;
-  group.bx.Insert(snap.coord.block_idx.x);
-  group.by.Insert(snap.coord.block_idx.y);
-  group.bz.Insert(snap.coord.block_idx.z);
-  group.tx.Insert(snap.coord.thread_idx.x);
-  group.ty.Insert(snap.coord.thread_idx.y);
-  group.tz.Insert(snap.coord.thread_idx.z);
+  const nvgpu::Dim3u &block_idx = *snap.coord.logical.block_idx;
+  const nvgpu::Dim3u &thread_idx = *snap.coord.logical.thread_idx;
+  group.bx.Insert(block_idx.x);
+  group.by.Insert(block_idx.y);
+  group.bz.Insert(block_idx.z);
+  group.tx.Insert(thread_idx.x);
+  group.ty.Insert(thread_idx.y);
+  group.tz.Insert(thread_idx.z);
 }
 
 /// Collect per-thread snapshots needed to build groups. Threads without a
 /// register context or PC are dropped here so neither group builder has to
-/// special-case them. A thread whose name carries no CUDA coordinates is
-/// kept with `has_coord == false` -- an SM-level fault with no surviving
-/// lane is precisely the thread a user must not miss, so it gets a row
-/// labelled by name instead of by coordinates. List-time filters such as
+/// special-case them. Threads with missing, malformed, or incomplete CUDA
+/// metadata are kept with `has_coord == false`: an SM-level fault with no
+/// surviving lane is precisely the thread a user must not miss, and malformed
+/// metadata must not hide an otherwise valid thread. List-time filters such as
 /// --exceptions are applied later in the group-building phase by routing
 /// non-matching threads to a synthetic FilteredOut group.
 static llvm::SmallVector<ThreadSnapshot, 64>
@@ -895,14 +896,6 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
         (!stop_info_sp || !stop_info_sp->ShouldShow()))
       continue;
 
-    const char *name = thread_sp->GetName();
-    if (!name || !name[0])
-      continue;
-
-    CUDAThreadCoord coord;
-    const bool has_coord = ParseCUDAThreadName(name, coord);
-    coord.tid = thread_sp->GetID();
-
     RegisterContextSP reg_ctx_sp = thread_sp->GetRegisterContext();
     if (!reg_ctx_sp)
       continue;
@@ -916,8 +909,9 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
 
     ThreadSnapshot snap;
     snap.thread_sp = thread_sp;
-    snap.coord = coord;
-    snap.has_coord = has_coord;
+    snap.coord = GetThreadCoords(*thread_sp);
+    snap.has_coord = snap.coord.logical.block_idx.has_value() &&
+                     snap.coord.logical.thread_idx.has_value();
     snap.pc = pc;
     if (*err_pc_info) {
       RegisterValue val;
@@ -1047,7 +1041,7 @@ static void RenderAggregatedGroup(Stream &strm,
                                   const AggregatedThreadGroup &group) {
   strm.Indent();
   strm.Printf("%c %zu thread(s)", group.contains_selected ? '*' : ' ',
-              group.coords.size());
+              group.thread_count);
 
   // For PC-only groups (no function name was resolvable), keep an
   // "at pc=0x..." prefix so users can still navigate to the address. When the
@@ -1064,15 +1058,16 @@ static void RenderAggregatedGroup(Stream &strm,
     strm.PutChar(' ');
     FormatDim3Set(strm, "threadIdx", group.tx, group.ty, group.tz);
   } else {
-    // No coordinates exist for these threads. Rendering wildcard DimSets
-    // would print `blockIdx(x=* y=* z=*)`, which reads as "every block"
-    // rather than "no block", so label the row instead: by the thread's own
-    // name when it is alone, which is how `thread list -v` identifies it,
-    // and generically once several SMs have collapsed onto one location.
-    const char *name = group.coords.size() == 1
+    // Block/thread coordinates are unknown or incomplete for these threads.
+    // Rendering wildcard DimSets as `blockIdx(x=* y=* z=*)` would read as
+    // "every block" rather than "coordinates unavailable", so label the row
+    // instead: by the thread's own name when it is alone, which is how
+    // `thread list -v` identifies it, and neutrally once several threads share
+    // one location.
+    const char *name = group.thread_count == 1
                            ? group.representative_thread->GetName()
                            : nullptr;
-    strm.PutCString(name ? name : "no kernel context");
+    strm.PutCString(name ? name : "CUDA thread coordinates unavailable");
   }
 
   if (group.key.kind == GroupKind::FilteredOut) {
@@ -1157,9 +1152,7 @@ RenderAggregated(Process &process, Stream &strm,
   if (snapshots.empty())
     return 0;
 
-  lldb::tid_t selected_tid = LLDB_INVALID_THREAD_ID;
-  if (ThreadSP selected_thread = process.GetThreadList().GetSelectedThread())
-    selected_tid = selected_thread->GetID();
+  ThreadSP selected_thread = process.GetThreadList().GetSelectedThread();
 
   // Map each GroupKey to an index into `groups`. Insertion order in `groups`
   // gives us deterministic output; the map is only used for O(1) lookup of
@@ -1185,8 +1178,7 @@ RenderAggregated(Process &process, Stream &strm,
     }
     AggregatedThreadGroup &group = groups[it->second];
     AccumulateSnapshotIntoGroup(group, snap);
-    if (selected_tid != LLDB_INVALID_THREAD_ID &&
-        snap.coord.tid == selected_tid)
+    if (snap.thread_sp == selected_thread)
       group.contains_selected = true;
   }
 
@@ -1217,60 +1209,65 @@ size_t PlatformNVGPU::GetGPUThreadStatus(
                           stop_reason_filter);
 }
 
-bool PlatformNVGPU::ParseGPUThreadName(llvm::StringRef name, GPUDim3 &block_idx,
-                                       GPUDim3 &thread_idx) {
-  // Pattern: blockIdx(x=N y=N z=N) threadIdx(x=N y=N z=N)
-  static std::regex pattern(
-      R"(blockIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\)\s+)"
-      R"(threadIdx\(x=(-?\d+)\s+y=(-?\d+)\s+z=(-?\d+)\))");
-
-  std::string name_str = name.str();
-  std::smatch match;
-  if (!std::regex_search(name_str, match, pattern))
+static bool CoordinateMatches(uint32_t actual,
+                              const std::optional<int> &requested) {
+  if (!requested)
+    return true;
+  if (*requested < 0)
     return false;
+  return static_cast<uint64_t>(actual) == static_cast<uint64_t>(*requested);
+}
 
-  block_idx.x = std::stoi(match[1].str());
-  block_idx.y = std::stoi(match[2].str());
-  block_idx.z = std::stoi(match[3].str());
-  thread_idx.x = std::stoi(match[4].str());
-  thread_idx.y = std::stoi(match[5].str());
-  thread_idx.z = std::stoi(match[6].str());
-  return true;
+static bool
+CoordinateGroupMatches(const std::optional<nvgpu::Dim3u> &actual,
+                       const GPUDim3 &requested,
+                       const std::optional<nvgpu::Dim3u> &inherited) {
+  if (inherited) {
+    return actual && actual->x == inherited->x && actual->y == inherited->y &&
+           actual->z == inherited->z;
+  }
+  if (requested.IsEmpty())
+    return true;
+  return actual && CoordinateMatches(actual->x, requested.x) &&
+         CoordinateMatches(actual->y, requested.y) &&
+         CoordinateMatches(actual->z, requested.z);
 }
 
 lldb::ThreadSP PlatformNVGPU::FindGPUThread(Process &process,
                                             const GPUDim3 &block_idx,
                                             const GPUDim3 &thread_idx) {
+  llvm::SmallVector<ThreadSP, 64> threads;
+  ThreadSP selected_thread_sp;
   ThreadList &thread_list = process.GetThreadList();
-  std::lock_guard<std::recursive_mutex> guard(thread_list.GetMutex());
+  {
+    std::lock_guard<std::recursive_mutex> guard(thread_list.GetMutex());
+    const uint32_t num_threads = thread_list.GetSize();
+    threads.reserve(num_threads);
+    for (uint32_t i = 0; i < num_threads; ++i)
+      threads.push_back(thread_list.GetThreadAtIndex(i));
+    selected_thread_sp = thread_list.GetSelectedThread();
+  }
 
-  uint32_t num_threads = thread_list.GetSize();
-  for (uint32_t i = 0; i < num_threads; ++i) {
-    ThreadSP thread_sp = thread_list.GetThreadAtIndex(i);
+  std::optional<nvgpu::Dim3u> inherited_block_idx;
+  std::optional<nvgpu::Dim3u> inherited_thread_idx;
+  if (selected_thread_sp && block_idx.IsEmpty() != thread_idx.IsEmpty()) {
+    nvgpu::ThreadCoords selected_coords =
+        GetThreadCoords(*selected_thread_sp);
+    if (block_idx.IsEmpty())
+      inherited_block_idx = selected_coords.logical.block_idx;
+    else
+      inherited_thread_idx = selected_coords.logical.thread_idx;
+  }
+
+  for (const ThreadSP &thread_sp : threads) {
     if (!thread_sp)
       continue;
 
-    const char *name = thread_sp->GetName();
-    if (!name)
-      continue;
-
-    GPUDim3 actual_block_idx, actual_thread_idx;
-    if (!ParseGPUThreadName(name, actual_block_idx, actual_thread_idx))
-      continue;
-
-    // Helper lambda to check if a coordinate matches.
-    auto coordinate_matches = [](int actual_value,
-                                 const std::optional<int> &pattern) -> bool {
-      return !pattern.has_value() || actual_value == pattern.value();
-    };
-
-    // Check if this thread matches the pattern.
-    if (coordinate_matches(actual_block_idx.x.value_or(0), block_idx.x) &&
-        coordinate_matches(actual_block_idx.y.value_or(0), block_idx.y) &&
-        coordinate_matches(actual_block_idx.z.value_or(0), block_idx.z) &&
-        coordinate_matches(actual_thread_idx.x.value_or(0), thread_idx.x) &&
-        coordinate_matches(actual_thread_idx.y.value_or(0), thread_idx.y) &&
-        coordinate_matches(actual_thread_idx.z.value_or(0), thread_idx.z))
+    nvgpu::ThreadCoords coords = GetThreadCoords(*thread_sp);
+    if (CoordinateGroupMatches(coords.logical.block_idx, block_idx,
+                               inherited_block_idx) &&
+        CoordinateGroupMatches(coords.logical.thread_idx, thread_idx,
+                               inherited_thread_idx))
       return thread_sp;
   }
 
