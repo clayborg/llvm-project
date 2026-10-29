@@ -227,9 +227,6 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
     if (changed)
       loaded_modules.AppendIfNeeded(module_sp);
 
-    if (PlatformSP platform_sp = target.GetPlatform())
-      platform_sp->RecordLoadedModule(module_sp, target);
-
     LLDB_LOG(log, "  loaded cubin module {0} ({1}) at offset {2:x} ({3} bytes)",
              cubin_count, cubin->GetName(), cubin_offset, cubin_size);
     ++cubin_count;

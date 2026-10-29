@@ -415,11 +415,6 @@ public:
                                                  // use existing one
                                  Status &error) = 0;
 
-  virtual void RecordLoadedModule(const lldb::ModuleSP &module_sp,
-                                  Target &target) {
-    return;
-  }
-
   /// Attach to an existing process by process name.
   ///
   /// This function is not meant to be overridden by Process subclasses. It
