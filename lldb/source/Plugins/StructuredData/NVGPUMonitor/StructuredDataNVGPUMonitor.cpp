@@ -41,10 +41,6 @@ void StructuredDataNVGPUMonitor::HandleArrivalOfStructuredData(
     if (dictionary->GetValueForKeyAsString("subtype", subtype)) {
       llvm::StringRef message;
       dictionary->GetValueForKeyAsString("message", message);
-      if (subtype == "log") {
-        llvm::errs() << "NVIDIA GPU: " << message << "\n";
-        return;
-      }
       if (subtype == "error") {
         Debugger::ReportError(message.str(),
                               process.GetTarget().GetDebugger().GetID());

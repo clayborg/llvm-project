@@ -253,10 +253,11 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
     return api_or.takeError();
 
   m_cuda_api = std::move(*api_or);
-  this->m_gpu->SetDebuggerAPI(*m_cuda_api);
   // Undo the partial setup if a step below fails, so that nothing is left
   // pointing into an API the next initialization attempt replaces.
   auto release_api = llvm::make_scope_exit([this] { ReleaseDebuggerAPI(); });
+  if (Error err = m_gpu->SetDebuggerAPI(*m_cuda_api))
+    return err;
 
   // We are registering the event notifier in the GPU main loop. We might want
   // to use the CPU main loop at some point if needed.
@@ -406,6 +407,9 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
       // change once we support multiple contexts.
       if (Error err = m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded))
         return std::move(err);
+      // A cubin that does not parse is skipped, which leaves nothing to load.
+      if (!m_gpu->HasUnreportedLibraries())
+        break;
       m_gpu->ReportDyldStop();
       return events_handled;
     }
@@ -421,9 +425,9 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
       LLDB_LOG(log, "broken devices {0:x}, faulted devices {1:x}",
                event.cases.allDevicesSuspended.brokenDevicesMask,
                event.cases.allDevicesSuspended.faultedDevicesMask);
-      m_gpu->OnAllDevicesSuspended(
-          event.cases.allDevicesSuspended,
-          [this](llvm::StringRef message) { SendMonitorLogToClient(message); });
+      if (Error err =
+              m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended))
+        return std::move(err);
       if (CPUStopsWithGPU())
         HaltNativeProcessIfNeeded();
       break;
@@ -451,17 +455,6 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
   return events_handled;
 }
 
-void LLDBServerPluginNVGPU::SendMonitorLogToClient(llvm::StringRef message) {
-  if (m_gpu->GetState() != lldb::eStateRunning) {
-    LLDB_LOG(GetLog(GDBRLog::Plugin),
-             "not sending to the client, the GPU is not running: {0}", message);
-    return;
-  }
-
-  m_gdb_server->SendStructuredDataPacket(llvm::json::Value(llvm::json::Object{
-      {"type", "nvgpu-monitor"}, {"subtype", "log"}, {"message", message}}));
-}
-
 void LLDBServerPluginNVGPU::ReportDebuggerAPIFault(std::string description) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "{0}", description);
@@ -476,8 +469,7 @@ void LLDBServerPluginNVGPU::ReportDebuggerAPIFault(std::string description) {
   }
 
   // Stop with an exception-class reason so the client keeps the GPU stopped and
-  // shows the error. Refreshing device state would go through the poisoned API,
-  // and the decoding treats a failed read as fatal.
+  // shows the error. Refreshing device state would go through the poisoned API.
   m_gpu->OnDebuggerAPIFault(std::move(description));
   if (CPUStopsWithGPU())
     HaltNativeProcessIfNeeded();

@@ -98,11 +98,11 @@ size_t ThreadState::DecodeThreadInfoBuffer(
   return buffer_offset;
 }
 
-size_t WarpState::DecodeWarpInfoBuffer(
+llvm::Expected<size_t> WarpState::DecodeWarpInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
-    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-    std::function<void(llvm::StringRef message)> log_to_client_callback,
+    std::function<llvm::Expected<const CUDBGGridInfo &>(uint64_t)>
+        get_grid_info,
     bool at_breakpoint) {
   Log *log = GetLog(GDBRLog::Plugin);
   llvm::StringRef log_indent = "    ";
@@ -170,27 +170,29 @@ size_t WarpState::DecodeWarpInfoBuffer(
   }
 
   if (errorPC.has_value() && exception == CUDBG_EXCEPTION_NONE)
-    logAndReportFatalError(log_to_client_callback,
-                           "WarpInformation::DecodeWarpInfoBuffer(). "
-                           "errorPC set to {} without an exception",
-                           errorPC);
+    return createStringErrorFmt(
+        "Warp {0} of SM {1} has error PC {2:x} but no exception",
+        *m_physical_coords.warp, *m_physical_coords.sm, *errorPC);
 
   if (exception != CUDBG_EXCEPTION_NONE)
     m_exception = ExceptionInfo(exception, errorPC);
 
-  const CUDBGGridInfo &grid_info = get_grid_info(warp_info.gridId);
-  m_logical_coords.context_id = grid_info.context;
+  llvm::Expected<const CUDBGGridInfo &> grid_info =
+      get_grid_info(warp_info.gridId);
+  if (!grid_info)
+    return grid_info.takeError();
+  m_logical_coords.context_id = grid_info->context;
   m_logical_coords.grid_id = warp_info.gridId;
   // The driver omits both cluster attributes for a warp outside a cluster,
   // whose grid has zero cluster dimensions.
   m_logical_coords.cluster = nvgpu::ClusterInfo{
       cluster_idx.value_or(nvgpu::Dim3u{0, 0, 0}),
-      cluster_dim.value_or(nvgpu::ToDim3u(grid_info.clusterDim))};
+      cluster_dim.value_or(nvgpu::ToDim3u(grid_info->clusterDim))};
   m_logical_coords.block_idx = nvgpu::ToDim3u(warp_info.blockIdx);
   m_logical_coords.thread_idx.reset();
 
   uint64_t flat_thread_idx =
-      CalculateFlatThreadIdx(warp_info.baseThreadIdx, grid_info.blockDim);
+      CalculateFlatThreadIdx(warp_info.baseThreadIdx, grid_info->blockDim);
 
   LLDB_LOGV(log, "{}Updated threads mask: {:x}", log_indent,
             thread_update_mask.GetStorage());
@@ -215,7 +217,8 @@ size_t WarpState::DecodeWarpInfoBuffer(
             buffer + buffer_offset, device_info, device_info_sizes,
             thread_attributes_present,
             m_exception ? &m_exception.value() : nullptr,
-            CalculateThreadIdx(flat_thread_idx + thread_id, grid_info.blockDim),
+            CalculateThreadIdx(flat_thread_idx + thread_id,
+                               grid_info->blockDim),
             at_breakpoint, is_active);
       }
       // An invalid thread in this case means that the thread has exited.
@@ -226,11 +229,11 @@ size_t WarpState::DecodeWarpInfoBuffer(
   return buffer_offset;
 }
 
-size_t SMState::DecodeSMInfoBuffer(
+llvm::Expected<size_t> SMState::DecodeSMInfoBuffer(
     uint8_t *buffer, const CUDBGDeviceInfo &device_info,
     const CUDBGDeviceInfoSizes &device_info_sizes,
-    std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+    std::function<llvm::Expected<const CUDBGGridInfo &>(uint64_t)>
+        get_grid_info) {
   Log *log = GetLog(GDBRLog::Plugin);
   llvm::StringRef log_indent = "  ";
 
@@ -272,18 +275,20 @@ size_t SMState::DecodeSMInfoBuffer(
     bool is_updated = updated_warps_mask[warp_id];
 
     LLDB_LOGV(log, "{}Warp {} is updated: {}", log_indent, warp_id, is_updated);
-    if (is_updated)
-      buffer_offset += m_warps[warp_id].DecodeWarpInfoBuffer(
-          buffer + buffer_offset, device_info, device_info_sizes, get_grid_info,
-          log_to_client_callback, warps_at_breakpoint[warp_id]);
+    if (!is_updated)
+      continue;
+    llvm::Expected<size_t> consumed = m_warps[warp_id].DecodeWarpInfoBuffer(
+        buffer + buffer_offset, device_info, device_info_sizes, get_grid_info,
+        warps_at_breakpoint[warp_id]);
+    if (!consumed)
+      return consumed.takeError();
+    buffer_offset += *consumed;
   }
 
   return buffer_offset;
 }
 
-void DeviceState::DecodeDeviceInfoBuffer(
-    uint8_t *buffer, size_t size,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+llvm::Error DeviceState::DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size) {
   Log *log = GetLog(GDBRLog::Plugin);
 
   size_t buffer_offset = 0;
@@ -337,35 +342,39 @@ void DeviceState::DecodeDeviceInfoBuffer(
     bool is_active = m_sm_active_mask[sm_index];
     m_sms[sm_index].SetIsActive(is_active);
     LLDB_LOGV(log, "SM {} is updated, active: {}", sm_index, is_active);
-    if (is_active)
-      buffer_offset += m_sms[sm_index].DecodeSMInfoBuffer(
-          buffer + buffer_offset, device_info, m_device_info_sizes,
-          [this](uint64_t grid_id) -> const CUDBGGridInfo & {
-            return this->GetGridInfo(grid_id);
-          },
-          log_to_client_callback);
+    if (!is_active)
+      continue;
+    llvm::Expected<size_t> consumed = m_sms[sm_index].DecodeSMInfoBuffer(
+        buffer + buffer_offset, device_info, m_device_info_sizes,
+        [this](uint64_t grid_id) -> llvm::Expected<const CUDBGGridInfo &> {
+          return this->GetGridInfo(grid_id);
+        });
+    if (!consumed)
+      return consumed.takeError();
+    buffer_offset += *consumed;
   }
 
   if (buffer_offset != size)
-    logAndReportFatalError(log_to_client_callback,
-                           "DeviceInformation::DecodeDeviceInfoBuffer(). "
-                           "Didn't parse the entire device info buffer. "
-                           "Expected {} bytes but read {} bytes",
-                           size, buffer_offset);
+    return createStringErrorFmt("The CUDA debugger API reported {0} bytes of "
+                                "device info, but decoding read {1}",
+                                size, buffer_offset);
+  return llvm::Error::success();
 }
 
-void DeviceState::BatchUpdate(
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+llvm::Error DeviceState::BatchUpdate() {
   uint32_t data_length = 0;
   CUDBGResult res = m_api->getDeviceInfo(
       m_device_id, CUDBG_RESPONSE_TYPE_UPDATE, m_device_info_buffer.data(),
       m_device_info_sizes.requiredBufferSize, &data_length);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError(log_to_client_callback,
-                           "DeviceInformation::BatchUpdate(). "
-                           "getDeviceInfo failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt(
+        "Failed to read the state of CUDA device {0}. {1}", m_device_id,
+        cudbgGetErrorString(res));
 
-  DecodeDeviceInfoBuffer(m_device_info_buffer.data(), data_length,
-                         log_to_client_callback);
+  if (llvm::Error err =
+          DecodeDeviceInfoBuffer(m_device_info_buffer.data(), data_length))
+    return createStringErrorFmt(
+        "Failed to decode the state of CUDA device {0}. {1}", m_device_id,
+        llvm::toString(std::move(err)));
+  return llvm::Error::success();
 }

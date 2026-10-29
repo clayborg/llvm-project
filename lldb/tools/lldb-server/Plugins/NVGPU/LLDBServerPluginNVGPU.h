@@ -105,10 +105,11 @@ private:
   /// taking appropriate action based on event type.
   void OnDebuggerAPIEvent();
 
-  /// Stop using the debugger API after it reports an internal error or a call
-  /// into it fails, and stop the GPU process with \a description. lldb also
-  /// gets \a description as an error if it is waiting for a stop reply, and
-  /// the native process stops too unless NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1.
+  /// Stop using the debugger API after it reports an internal error, a call
+  /// into it fails, or the device state it reports cannot be decoded, and stop
+  /// the GPU process with \a description. lldb also gets \a description as an
+  /// error if it is waiting for a stop reply, and the native process stops too
+  /// unless NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1.
   ///
   /// \param[in] description
   ///     What went wrong, which the stop shows.
@@ -122,11 +123,6 @@ private:
   /// Finalize and drop the debugger API along with everything holding a
   /// pointer into it, to undo an InitializeAPIAndConnect that failed partway.
   void ReleaseDebuggerAPI();
-
-  /// Send a monitor log line to the client while the GPU is running, when the
-  /// client is waiting for a stop reply. At any other time the client would
-  /// take the line for the reply to its next request, so it is only logged.
-  void SendMonitorLogToClient(llvm::StringRef message);
 
   /// Bring the debugger API up from a breakpoint hit, which runs on the native
   /// server's thread, the only one that may use \a native_process.

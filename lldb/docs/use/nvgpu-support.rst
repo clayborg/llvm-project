@@ -157,11 +157,15 @@ If the CUDA debugger API fails to initialize, for example because no CUDA
 device is visible, LLDB reports the error and adds no GPU target. The program
 keeps running, without GPU debugging.
 
-If the CUDA debugger API reports an internal error, or a call into it fails
-while LLDB handles its events or resumes the GPU, the GPU stops with an
-exception that the error describes. LLDB does not use the API again in that
-session, so the GPU can no longer be resumed, nor its memory read: continuing
-or stepping it reports the same exception again.
+If the CUDA debugger API reports an internal error, a call into it fails while
+LLDB handles its events or resumes the GPU, or LLDB cannot decode the state of
+a stopped GPU that the API reports, the GPU stops with an exception that the
+error describes. LLDB does not use the API again in that session, so the GPU
+can no longer be resumed, nor its memory read: continuing or stepping it
+reports the same exception again.
+
+A call into the API that fails while LLDB reads a GPU thread's registers makes
+only the registers it reads unavailable.
 
 GPU thread coordinates
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -211,6 +215,9 @@ built from several source files, such as one device-linked with ``-rdc``, after
 only the first. The name is a label for display and may change. It does not
 identify a kernel or a source file: use the module's symbols and line tables
 for that.
+
+A cubin that is not a valid ELF file becomes no module. lldb-server logs why to
+its ``gdb-remote plugin`` log channel.
 
 Running the tests
 ^^^^^^^^^^^^^^^^^
