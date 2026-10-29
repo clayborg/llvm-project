@@ -106,8 +106,13 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
 
     def verify_reg_read(self, gpr, expected):
         """Read a value from a register and verify the result."""
-        reg_value_str = f"{gpr} = " + self.get_reg_value_str(gpr, expected)
-        self.expect(f"register read {gpr}", substrs=[reg_value_str])
+        if self.is_vector_reg(gpr):
+            # Vector registers show one 32-bit hex value per lane, while
+            # "register write" takes their bytes.
+            value_str = "{" + " ".join(f"0x{v:08x}" for v in expected) + "}"
+        else:
+            value_str = self.get_scalar_reg_str(expected)
+        self.expect(f"register read {gpr}", substrs=[f"{gpr} = {value_str}"])
 
     def verify_reg_write(self, gpr, value):
         """Write the value to a register and verify we read back the same value."""
@@ -124,10 +129,13 @@ class RegisterAmdGpuTestCase(AmdGpuTestCaseBase):
         return gpr.startswith("v") or gpr.startswith("a")
 
     def get_reg_value_str(self, gpr, value):
-        """Return the string representation used by lldb for the value in the register.
+        """Return the string "register write" takes for the value.
         Expands the value to the correct width if needed for vector registers.
         """
         if self.is_vector_reg(gpr):
+            # TODO: Make "register write" accept the per-lane values that
+            # "register read" prints, so a value can be copied back, and
+            # pass them here instead of bytes.
             return self.get_vector_reg_str(value)
         else:
             return self.get_scalar_reg_str(value)
