@@ -149,6 +149,12 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
 
   m_cuda_thread_coords = std::move(coords);
 
+  // The coordinates of a core-file thread never change, so its activity is
+  // set once. Without a recorded active mask, Thread's default of active
+  // stands.
+  if (m_cuda_thread_coords.is_active)
+    SetIsActive(*m_cuda_thread_coords.is_active);
+
   // Build the thread name from validated coordinates.
   const auto &logical = m_cuda_thread_coords.logical;
   if (logical.block_idx && logical.thread_idx) {
@@ -177,6 +183,8 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
     return;
   }
 
+  // Only lanes known to be active claim the warp's trap or the SM's
+  // exception: any other lane may not have run the faulting instruction.
   if (!m_cuda_thread_coords.is_active.value_or(false))
     return;
 

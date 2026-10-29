@@ -166,7 +166,8 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
     def test_stand_in_exposes_only_recorded_device_and_sm(self):
         """A lane-less stand-in still knows the hardware IDs recorded by its
         device and SM rows, including when the device ID differs from the
-        hierarchy row index. It has no launch, lane, or activity state."""
+        hierarchy row index. It has no launch, lane, or activity state, and
+        with no warp's active mask to exclude it, it counts as active."""
         b, dev = self._builder(device_id=42)
         b.add_sm(
             dev,
@@ -178,10 +179,12 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
             b, name="standin-coordinates.nvcudmp"
         )
 
+        thread = process.GetThreadAtIndex(0)
         self.assertEqual(
-            self._json_info(process.GetThreadAtIndex(0)),
+            self._json_info(thread),
             {"cuda": {"device": 42, "sm": 17}},
         )
+        self.assertTrue(thread.IsActive())
 
     def test_only_the_fault_pc_is_readable(self):
         """PC and errorPC come from the SM row and read back; every other

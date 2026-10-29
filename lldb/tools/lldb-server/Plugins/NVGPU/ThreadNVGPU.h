@@ -31,6 +31,12 @@ public:
 
   lldb::StateType GetState() override;
 
+  /// \return
+  ///     False if, at a real GPU stop, the decoded active mask of this
+  ///     thread's warp excludes the thread, and true otherwise, including
+  ///     when activity is unknown.
+  bool GetIsActive() const override;
+
   bool GetStopReason(ThreadStopInfo &stop_info,
                      std::string &description) override;
 
