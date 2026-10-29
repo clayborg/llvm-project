@@ -441,3 +441,4 @@ class TestNVGPUCoreThreadCoords(NVGPUCoreTestCaseBase):
                 self.assertIs(
                     self._json_info(thread)["cuda"]["is_active"], active
                 )
+                self.assertEqual(thread.IsActive(), active)

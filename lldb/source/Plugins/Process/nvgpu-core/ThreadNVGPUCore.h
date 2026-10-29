@@ -23,8 +23,10 @@ namespace nvgpu_core {
 struct SMEntry;
 }
 
-/// One thread per active GPU lane, plus one stand-in thread per faulted SM
-/// that has no surviving lane.
+/// One thread per valid GPU lane, plus one stand-in thread per faulted SM
+/// that has no surviving lane. A lane is valid while it holds a CUDA thread
+/// that has not exited, and active while that thread participates in its
+/// warp's current instruction, so a valid lane can be inactive.
 ///
 /// A lane-backed thread identifies its lane via a `lldb::SectionSP` to the
 /// lane container in the synthetic NVGPU hierarchy
