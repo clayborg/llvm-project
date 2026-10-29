@@ -7,8 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "StructuredDataNVGPUMonitor.h"
+#include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Target/Process.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/StreamString.h"
 
 using namespace lldb;
@@ -37,10 +39,15 @@ void StructuredDataNVGPUMonitor::HandleArrivalOfStructuredData(
   if (StructuredData::Dictionary *dictionary = object_sp->GetAsDictionary()) {
     llvm::StringRef subtype;
     if (dictionary->GetValueForKeyAsString("subtype", subtype)) {
+      llvm::StringRef message;
+      dictionary->GetValueForKeyAsString("message", message);
       if (subtype == "log") {
-        llvm::StringRef message;
-        dictionary->GetValueForKeyAsString("message", message);
         llvm::errs() << "NVIDIA GPU: " << message << "\n";
+        return;
+      }
+      if (subtype == "error") {
+        Debugger::ReportError(message.str(),
+                              process.GetTarget().GetDebugger().GetID());
         return;
       }
     }

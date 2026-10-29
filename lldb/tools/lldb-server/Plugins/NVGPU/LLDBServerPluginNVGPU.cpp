@@ -31,6 +31,44 @@ using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 using namespace llvm;
 
+namespace {
+/// Whether a GPU stop, at a breakpoint, an exception or an internal error,
+/// stops the native process too. NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1 leaves it
+/// running.
+bool CPUStopsWithGPU() {
+  return sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1";
+}
+
+StringRef EventKindName(CUDBGEventKind kind) {
+#define CUDBG_EVENT_CASE(x)                                                    \
+  case x:                                                                      \
+    return #x;
+  switch (kind) {
+    CUDBG_EVENT_CASE(CUDBG_EVENT_INVALID)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_ELF_IMAGE_LOADED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_KERNEL_READY)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_KERNEL_FINISHED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_INTERNAL_ERROR)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CTX_PUSH)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CTX_POP)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CTX_CREATE)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CTX_DESTROY)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_TIMEOUT)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_ATTACH_COMPLETE)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_DETACH_COMPLETE)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_ELF_IMAGE_UNLOADED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_FUNCTIONS_LOADED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_ALL_DEVICES_SUSPENDED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_AVAILABLE)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_THRESHOLD_REACHED)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_SINGLE_STEP_COMPLETE)
+    CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_RULESET_CHANGED)
+  }
+#undef CUDBG_EVENT_CASE
+  return "unknown CUDBGEventKind";
+}
+} // namespace
+
 /// Helper function to set environment variables with logging.
 ///
 /// Checks if the environment variable already exists and either uses the
@@ -230,6 +268,15 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
     return main_loop_event_notifier.takeError();
   m_main_loop_event_notifier_up = std::move(*main_loop_event_notifier);
 
+  // The driver only notifies for newly enqueued events, so anything sitting
+  // behind a deferred CUDBG_EVENT_ELF_IMAGE_LOADED would never be drained on
+  // its own. Let the GPU process re-run the drain to pick those up.
+  m_gpu->SetSyncEventDrainNotifier(
+      [this]() { m_main_loop_event_notifier_up->FireEvent(); });
+  m_gpu->SetDebuggerAPIFaultHandler([this](std::string description) {
+    ReportDebuggerAPIFault(std::move(description));
+  });
+
   CUDBGResult res =
       (*m_cuda_api)
           ->setNotifyNewEventCallback31(
@@ -320,129 +367,120 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
 
 void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
   Log *log = GetLog(GDBRLog::Plugin);
-  CUDBGEvent event;
-  CUDBGResult res;
-  CUDADebuggerAPI &cuda_api = *m_cuda_api;
   LLDB_LOGV(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
+  if (Expected<int> handled = DrainSyncEvents(); !handled)
+    ReportDebuggerAPIFault(llvm::toString(handled.takeError()));
+}
 
-  res = cuda_api->getNextEvent(CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC,
-                               &event);
-  if (res == CUDBGResult::CUDBG_ERROR_NO_EVENT_AVAILABLE) {
-    // We shouldn't be getting spurious calls to this function, so all
-    // invocations should have a corresponding event.
-    logAndReportFatalError(
-        "We didnt' get an event from the CUDA Debugger API queue. {}",
+Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
+  // A poisoned API must not be touched again.
+  if (m_gpu->HasDebuggerAPIFaulted())
+    return 0;
+
+  Log *log = GetLog(GDBRLog::Plugin);
+  CUDADebuggerAPI &cuda_api = *m_cuda_api;
+
+  int events_handled = 0;
+  while (true) {
+    CUDBGEvent event;
+    CUDBGResult res = cuda_api->getNextEvent(
+        CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC, &event);
+    if (res == CUDBGResult::CUDBG_ERROR_NO_EVENT_AVAILABLE)
+      break; // queue drained
+    if (res != CUDBG_SUCCESS)
+      return createStringErrorFmt(
+          "Failed to get the next CUDA Debugger API event. {0}",
+          cudbgGetErrorString(res));
+    // The API also signals "no more events" with this sentinel kind.
+    if (event.kind == CUDBG_EVENT_INVALID)
+      break;
+
+    ++events_handled;
+    LLDB_LOG(log, "{0}", EventKindName(event.kind));
+
+    switch (event.kind) {
+    case CUDBG_EVENT_ELF_IMAGE_LOADED: {
+      // Report a dyld stop to the client and stop draining: the events stay
+      // unacknowledged until the client resumes (Resume acknowledges them), and
+      // the next notification picks up where we left off. This will need to
+      // change once we support multiple contexts.
+      if (Error err = m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded))
+        return std::move(err);
+      m_gpu->ReportDyldStop();
+      return events_handled;
+    }
+    case CUDBG_EVENT_INTERNAL_ERROR: {
+      // Acknowledging would go through the poisoned API.
+      ReportDebuggerAPIFault(
+          formatv("CUDA debugger API internal error: {0}",
+                  cudbgGetErrorString(event.cases.internalError.errorType))
+              .str());
+      return events_handled;
+    }
+    case CUDBG_EVENT_ALL_DEVICES_SUSPENDED: {
+      LLDB_LOG(log, "broken devices {0:x}, faulted devices {1:x}",
+               event.cases.allDevicesSuspended.brokenDevicesMask,
+               event.cases.allDevicesSuspended.faultedDevicesMask);
+      m_gpu->OnAllDevicesSuspended(
+          event.cases.allDevicesSuspended,
+          [this](llvm::StringRef message) { SendMonitorLogToClient(message); });
+      if (CPUStopsWithGPU())
+        HaltNativeProcessIfNeeded();
+      break;
+    }
+    default:
+      // Logged above; nothing else to do.
+      break;
+    }
+  }
+
+  LLDB_LOGV(log, "Done servicing CUDA API events ({0} handled)",
+            events_handled);
+
+  // Nothing to acknowledge. Not fatal: a prior drain may have consumed them.
+  if (events_handled == 0) {
+    LLDB_LOG(log, "notification with no pending events");
+    return events_handled;
+  }
+
+  CUDBGResult res = cuda_api->acknowledgeSyncEvents();
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to acknowledge CUDA Debugger API events. {0}",
         cudbgGetErrorString(res));
-  }
+  return events_handled;
+}
 
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("Failed to get the next CUDA Debugger API event. {}",
-                           cudbgGetErrorString(res));
-  }
-
-  switch (event.kind) {
-  case CUDBG_EVENT_ELF_IMAGE_LOADED: {
-    LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_LOADED");
-    // When we get an elf file, we report a dyld stop to the client.
-    // We hold ack'ing this event until we have gotten the autoresume from the
-    // client. This will need to be changed once we support multiple contexes.
-    m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded);
-    m_gpu->ReportDyldStop();
+void LLDBServerPluginNVGPU::SendMonitorLogToClient(llvm::StringRef message) {
+  if (m_gpu->GetState() != lldb::eStateRunning) {
+    LLDB_LOG(GetLog(GDBRLog::Plugin),
+             "not sending to the client, the GPU is not running: {0}", message);
     return;
   }
-  case CUDBG_EVENT_KERNEL_READY: {
-    LLDB_LOG(log, "CUDBG_EVENT_KERNEL_READY");
-    break;
-  }
-  case CUDBG_EVENT_KERNEL_FINISHED: {
-    LLDB_LOG(log, "CUDBG_EVENT_KERNEL_FINISHED");
-    break;
-  }
-  case CUDBG_EVENT_INTERNAL_ERROR: {
-    LLDB_LOG(log, "CUDBG_EVENT_INTERNAL_ERROR");
-    break;
-  }
-  case CUDBG_EVENT_CTX_PUSH: {
-    LLDB_LOG(log, "CUDBG_EVENT_CTX_PUSH");
-    break;
-  }
-  case CUDBG_EVENT_CTX_POP: {
-    LLDB_LOG(log, "CUDBG_EVENT_CTX_POP");
-    break;
-  }
-  case CUDBG_EVENT_CTX_CREATE: {
-    LLDB_LOG(log, "CUDBG_EVENT_CTX_CREATE");
-    break;
-  }
-  case CUDBG_EVENT_CTX_DESTROY: {
-    LLDB_LOG(log, "CUDBG_EVENT_CTX_DESTROY");
-    break;
-  }
-  case CUDBG_EVENT_TIMEOUT: {
-    LLDB_LOG(log, "CUDBG_EVENT_TIMEOUT");
-    break;
-  }
-  case CUDBG_EVENT_ATTACH_COMPLETE: {
-    LLDB_LOG(log, "CUDBG_EVENT_ATTACH_COMPLETE");
-    break;
-  }
-  case CUDBG_EVENT_DETACH_COMPLETE: {
-    LLDB_LOG(log, "CUDBG_EVENT_DETACH_COMPLETE");
-    break;
-  }
-  case CUDBG_EVENT_ELF_IMAGE_UNLOADED: {
-    LLDB_LOG(log, "CUDBG_EVENT_ELF_IMAGE_UNLOADED");
-    break;
-  }
-  case CUDBG_EVENT_FUNCTIONS_LOADED: {
-    LLDB_LOG(log, "CUDBG_EVENT_FUNCTIONS_LOADED");
-    break;
-  }
-  case CUDBG_EVENT_ALL_DEVICES_SUSPENDED: {
-    LLDB_LOG(log, "CUDBG_EVENT_ALL_DEVICES_SUSPENDED {0:x} {1:x}",
-             event.cases.allDevicesSuspended.brokenDevicesMask,
-             event.cases.allDevicesSuspended.faultedDevicesMask);
-    auto log_to_client_callback = [this](llvm::StringRef message) {
-      // The structured data packet can only be sent when the client is waiting
-      // for the stop reply packet. Otherwise, it might think that this is the
-      // response to a pending query packet. Creating the callback at this point
-      // is safe because we are about to report that the state is stopped, which
-      // means that we are running.
-      if (m_gpu->GetState() != lldb::eStateRunning) {
-        logAndReportFatalError(
-            "Logging to client is only supported when the GPU is running.");
-      }
 
-      m_gdb_server->SendStructuredDataPacket(
-          llvm::json::Value(llvm::json::Object{{"type", "nvgpu-monitor"},
-                                               {"subtype", "log"},
-                                               {"message", message}}));
-    };
-    m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended,
-                                 log_to_client_callback);
-    // Here we can force the two processes to be in sync.
-    // Not synchronizing them allows for a non-stop mode for the native process.
-    if (sys::Process::GetEnv("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1")
-      HaltNativeProcessIfNeeded();
-    break;
-  }
-  case CUDBG_EVENT_INVALID: {
-    LLDB_LOG(log, "CUDBG_EVENT_INVALID");
-    break;
-  }
-  default:
-    LLDB_LOG(log, "Unknown event kind: {}", event.kind);
-    break;
+  m_gdb_server->SendStructuredDataPacket(llvm::json::Value(llvm::json::Object{
+      {"type", "nvgpu-monitor"}, {"subtype", "log"}, {"message", message}}));
+}
+
+void LLDBServerPluginNVGPU::ReportDebuggerAPIFault(std::string description) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "{0}", description);
+
+  // Only valid while the GPU is running: the client is then waiting for a stop
+  // reply and will not mistake this for a query response.
+  if (m_gpu->GetState() == lldb::eStateRunning) {
+    m_gdb_server->SendStructuredDataPacket(
+        llvm::json::Value(llvm::json::Object{{"type", "nvgpu-monitor"},
+                                             {"subtype", "error"},
+                                             {"message", description}}));
   }
 
-  LLDB_LOGV(log, "Done servicing CUDA API events");
-
-  // Handled all pending events. Acknowledge them.
-  res = cuda_api->acknowledgeSyncEvents();
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("Failed to acknowledge CUDA Debugger API events. {}",
-                           cudbgGetErrorString(res));
-  }
+  // Stop with an exception-class reason so the client keeps the GPU stopped and
+  // shows the error. Refreshing device state would go through the poisoned API,
+  // and the decoding treats a failed read as fatal.
+  m_gpu->OnDebuggerAPIFault(std::move(description));
+  if (CPUStopsWithGPU())
+    HaltNativeProcessIfNeeded();
 }
 
 void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
@@ -452,6 +490,8 @@ void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
   // driver's event callback uses the notifier, so the notifier outlives the
   // session that finalizing shuts down. It still goes before this returns to
   // the GPU MainLoop, which would otherwise dispatch into the finalized API.
+  m_gpu->SetSyncEventDrainNotifier(nullptr);
+  m_gpu->SetDebuggerAPIFaultHandler(nullptr);
   m_gpu->ClearDebuggerAPI();
   if (m_cuda_api) {
     LLDB_LOG(log, "finalizing the debugger API");
