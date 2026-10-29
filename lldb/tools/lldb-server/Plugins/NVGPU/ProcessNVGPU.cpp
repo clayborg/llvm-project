@@ -129,16 +129,21 @@ void ProcessNVGPU::ReportFaultAfterResume(std::string description) {
   });
 }
 
-void ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
+llvm::Error ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
   Log *log = GetLog(GDBRLog::Plugin);
   m_api = api.GetRawAPI();
   m_api_version = api.GetAPIVersion();
-  m_devices = DeviceStateRegistry(*this);
+  llvm::Expected<DeviceStateRegistry> devices =
+      DeviceStateRegistry::Create(*this);
+  if (!devices)
+    return devices.takeError();
+  m_devices = std::move(*devices);
   size_t max_num_threads = m_devices.GetMaxNumSupportedThreads();
   LLDB_LOG(log,
            "NVGPU::SetDebuggerAPI(). Reserving space for max num threads: {}",
            max_num_threads);
   m_threads.reserve(max_num_threads);
+  return llvm::Error::success();
 }
 
 Status ProcessNVGPU::Halt() {
@@ -309,8 +314,9 @@ ProcessNVGPU::Manager::Attach(
 ///     The parsed cubin.
 ///
 /// \return
-///     Vector of GPUSectionInfo structures containing section details.
-static std::vector<GPUSectionInfo>
+///     Vector of GPUSectionInfo structures containing section details, or an
+///     error if the section headers do not parse.
+static llvm::Expected<std::vector<GPUSectionInfo>>
 GetLoadSectionsForCubin(const llvm::object::ELF64LEObjectFile &elf) {
   Log *log = GetLog(GDBRLog::Plugin);
   std::vector<GPUSectionInfo> loaded_sections;
@@ -318,11 +324,8 @@ GetLoadSectionsForCubin(const llvm::object::ELF64LEObjectFile &elf) {
   const llvm::object::ELF64LEFile &elf_file = elf.getELFFile();
   llvm::Expected<llvm::object::ELF64LEFile::Elf_Shdr_Range> sections_or_err =
       elf_file.sections();
-  if (!sections_or_err) {
-    logAndReportFatalError(
-        "GetLoadSectionsForCubin(). Failed to get sections: {}",
-        llvm::toString(sections_or_err.takeError()));
-  }
+  if (!sections_or_err)
+    return sections_or_err.takeError();
 
   LLDB_LOGV(log, "GetLoadSectionsForCubin(). Iterating through ELF sections");
 
@@ -511,14 +514,27 @@ llvm::Error ProcessNVGPU::OnElfImageLoaded(
         "Failed to get the ELF image of CUDA module {0:x}. {1}", handle,
         cudbgGetErrorString(res));
 
-  // Create a MemoryBufferRef from the data buffer
+  // A cubin that does not parse has no name or section load addresses to
+  // report. Skip it rather than stop debugging the GPU.
   llvm::MemoryBufferRef elf_buffer_ref(*data_buffer);
   llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
       llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
-  if (!elf_or_err)
-    logAndReportFatalError(
-        "NVGPU::OnElfImageLoaded(). Failed to parse elf image: {}",
-        llvm::toString(elf_or_err.takeError()));
+  if (!elf_or_err) {
+    LLDB_LOG_ERROR(log, elf_or_err.takeError(),
+                   "NVGPU::OnElfImageLoaded(). Skipping the ELF image of CUDA "
+                   "module {1:x}, which does not parse: {0}",
+                   handle);
+    return llvm::Error::success();
+  }
+  llvm::Expected<std::vector<GPUSectionInfo>> loaded_sections =
+      GetLoadSectionsForCubin(*elf_or_err);
+  if (!loaded_sections) {
+    LLDB_LOG_ERROR(log, loaded_sections.takeError(),
+                   "NVGPU::OnElfImageLoaded(). Skipping the ELF image of CUDA "
+                   "module {1:x}, whose sections do not parse: {0}",
+                   handle);
+    return llvm::Error::success();
+  }
 
   // The client finds a cubin's module by this name, and keeps the modules of
   // cubins that were unloaded, so a name is never given out twice.
@@ -536,8 +552,7 @@ llvm::Error ProcessNVGPU::OnElfImageLoaded(
   lib1.load = true;
   lib1.elf_image_base64_sp = std::make_shared<std::string>(
       llvm::encodeBase64(elf_buffer_ref.getBuffer()));
-  // Parse ELF sections to extract load addresses
-  lib1.loaded_sections = GetLoadSectionsForCubin(*elf_or_err);
+  lib1.loaded_sections = std::move(*loaded_sections);
 
   m_unreported_libraries.push_back(lib1);
   m_all_libraries.push_back(lib1);
@@ -575,13 +590,13 @@ ProcessNVGPU::~ProcessNVGPU() {
   ReleaseAndClearThreads(m_threads);
 }
 
-void ProcessNVGPU::OnAllDevicesSuspended(
-    const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+llvm::Error ProcessNVGPU::OnAllDevicesSuspended(
+    const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
-  m_devices.BatchUpdate(GetNextStopID(), log_to_client_callback);
+  if (llvm::Error err = m_devices.BatchUpdate(GetNextStopID()))
+    return err;
   LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
 
   ReleaseAndClearThreads(m_threads);
@@ -625,6 +640,7 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   SetCurrentThreadID(exception_thread_id.value_or(
       breakpoint_thread_id.value_or(m_threads.front()->GetID())));
   ChangeStateToStopped();
+  return llvm::Error::success();
 }
 
 void ProcessNVGPU::ReportFallbackStop(llvm::StringRef description) {

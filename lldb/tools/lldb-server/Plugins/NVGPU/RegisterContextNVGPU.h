@@ -64,9 +64,9 @@ public:
   void InvalidateAllRegisters();
 
 private:
-  /// Read the registers from the device. The results are cached. Any failures
-  /// to read individual registers are signaled in invalid states of the
-  /// registers.
+  /// Read the registers from the device. The results are cached. A read that
+  /// fails is logged, and leaves invalid only the registers that it reads, so
+  /// that the PC is always available.
   const ThreadRegisterCache &ReadAllRegsFromDevice();
 
   CUDBGAPI GetDebuggerAPI();

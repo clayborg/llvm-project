@@ -35,17 +35,6 @@ template <typename... Args>
   logAndReportFatalError(llvm::formatv(format, args...).str());
 }
 
-/// Variant of `logAndReportFatalError` that allows passing a callback that
-/// gets invoked with the error message.
-template <typename... Args>
-[[noreturn]] void logAndReportFatalError(
-    std::function<void(llvm::StringRef)> additional_log_callback,
-    const char *format, Args &&...args) {
-  std::string err_msg = llvm::formatv(format, args...).str();
-  additional_log_callback(err_msg);
-  logAndReportFatalError(err_msg);
-}
-
 /// Get a user-friendly string representation of a state.
 llvm::StringRef StateToString(lldb::StateType state);
 
