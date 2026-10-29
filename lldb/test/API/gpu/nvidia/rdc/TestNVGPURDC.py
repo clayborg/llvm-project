@@ -26,8 +26,8 @@ class TestNVGPURDC(NVGPUTestCaseBase):
         )
 
         # The program checks the kernel's results and exits with 1 if the
-        # kernel that parent launches did not run. The CPU is still running;
-        # both processes report the program's exit status.
+        # kernel that parent launches did not run. Both processes report the
+        # program's exit status.
         self.gpu_target.BreakpointDelete(breakpoint.GetID())
         self.assertSuccess(self.gpu_process.Continue())
         self.assertEqual(self.wait_for_exit(self.gpu_process), 0, "GPU exit status")
