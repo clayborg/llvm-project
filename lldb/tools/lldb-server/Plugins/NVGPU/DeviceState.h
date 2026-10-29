@@ -14,6 +14,7 @@
 #include "cudadebugger.h"
 #include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/Stream.h"
+#include "llvm/Support/Error.h"
 #include <functional>
 #include <optional>
 #include <string>
@@ -189,12 +190,14 @@ public:
   ///     Whether the warp is at a breakpoint.
   ///
   /// \return
-  ///     The number of bytes consumed from the buffer.
-  size_t DecodeWarpInfoBuffer(
+  ///     The number of bytes consumed from the buffer, or an error if the
+  ///     warp information is inconsistent or its grid information is not
+  ///     available.
+  llvm::Expected<size_t> DecodeWarpInfoBuffer(
       uint8_t *buffer, const CUDBGDeviceInfo &device_info,
       const CUDBGDeviceInfoSizes &device_info_sizes,
-      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-      std::function<void(llvm::StringRef message)> log_to_client_callback,
+      std::function<llvm::Expected<const CUDBGGridInfo &>(uint64_t)>
+          get_grid_info,
       bool at_breakpoint);
 
   /// \return
@@ -225,15 +228,13 @@ public:
   /// Get the number of regular registers currently used by this warp. It is
   /// cached until the warp state changes.
   ///
-  /// \param[in] gpu
-  ///     The GPU that this warp state belongs to.
-  ///
   /// \return
-  ///     The number of regular registers currently used by this warp.
-  std::optional<uint32_t> GetCurrentNumRegularRegisters();
+  ///     The number of regular registers currently used by this warp, or an
+  ///     error if the debugger API cannot read it.
+  llvm::Expected<uint32_t> GetCurrentNumRegularRegisters();
 
   /// Get the registers for this warp. The result is cached until the warp state
-  /// changes.
+  /// changes. A read that fails is logged and leaves its registers invalid.
   ///
   /// \return
   ///     A reference to the registers for this warp.
@@ -329,16 +330,15 @@ public:
   ///     Size information for device data structures.
   /// \param[in] get_grid_info
   ///     Function to retrieve grid information by grid ID.
-  /// \param[in] log_to_client_callback
-  ///     Function to log messages to the client.
   ///
   /// \return
-  ///     The number of bytes consumed from the buffer.
-  size_t DecodeSMInfoBuffer(
+  ///     The number of bytes consumed from the buffer, or an error if a warp
+  ///     cannot be decoded.
+  llvm::Expected<size_t> DecodeSMInfoBuffer(
       uint8_t *buffer, const CUDBGDeviceInfo &device_info,
       const CUDBGDeviceInfoSizes &device_info_sizes,
-      std::function<const CUDBGGridInfo &(uint64_t)> get_grid_info,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+      std::function<llvm::Expected<const CUDBGGridInfo &>(uint64_t)>
+          get_grid_info);
 
   /// Set the activity status of this SM.
   void SetIsActive(bool is_active);
@@ -379,13 +379,26 @@ private:
 /// Manages and caches information about a particular CUDA device.
 class DeviceState {
 public:
-  /// Construct a device state manager for the specified device.
+  /// Construct a device state manager for the specified device. It has no SMs
+  /// until \a Initialize succeeds.
   ///
   /// \param[in] gpu
   ///     The GPU that this device state belongs to.
   /// \param[in] device_id
   ///     The ID of the CUDA device to manage.
   DeviceState(ProcessNVGPU &gpu, uint32_t device_id);
+
+  /// Query the information that is constant for the lifetime of the device,
+  /// and create the state of its SMs. The SMs point back at this object, so it
+  /// cannot be set up elsewhere and moved into place: DeviceStateRegistry
+  /// constructs it where it stays, then calls this once.
+  ///
+  /// \param[in] gpu
+  ///     The GPU that this device state belongs to.
+  ///
+  /// \return
+  ///     An error if the debugger API cannot describe the device.
+  llvm::Error Initialize(ProcessNVGPU &gpu);
 
   /// \return
   ///     The ID of the CUDA device.
@@ -395,36 +408,43 @@ public:
   /// the lifetime of the device.
   ///
   /// \return
-  ///     The number of R registers for the device.
-  size_t GetMaxNumSupportedRegularRegister();
+  ///     The number of R registers for the device, or an error if the debugger
+  ///     API cannot report it.
+  llvm::Expected<size_t> GetMaxNumSupportedRegularRegister();
 
   /// Get the number of predicate registers available on this device. This is
   /// cached for the lifetime of the device.
   ///
   /// \return
-  ///     The number of predicate registers for the device.
-  size_t GetNumPredicateRegisters();
+  ///     The number of predicate registers for the device, or an error if the
+  ///     debugger API cannot report it.
+  llvm::Expected<size_t> GetNumPredicateRegisters();
 
   /// Get the number of uniform registers available on this device. This is
   /// cached for the lifetime of the device.
   ///
   /// \return
-  ///     The number of uniform registers for the device.
-  size_t GetNumUniformRegisters();
+  ///     The number of uniform registers for the device, or an error if the
+  ///     debugger API cannot report it.
+  llvm::Expected<size_t> GetNumUniformRegisters();
 
   /// Get the number of uniform predicate registers available on this device.
   /// This is cached for the lifetime of the device.
   ///
   /// \return
-  ///     The number of uniform predicate registers for the device.
-  size_t GetNumUniformPredicateRegisters();
+  ///     The number of uniform predicate registers for the device, or an error
+  ///     if the debugger API cannot report it.
+  llvm::Expected<size_t> GetNumUniformPredicateRegisters();
 
   /// Update all device state information from the CUDA debugger API.
   ///
   /// This method performs a batch update of all dynamic state information
   /// including SM states, warp states, and thread states.
-  void BatchUpdate(
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+  ///
+  /// \return
+  ///     An error if the debugger API cannot report the state, or the state
+  ///     cannot be decoded. The state is then partially updated.
+  llvm::Error BatchUpdate();
 
   /// Output device state information to a stream for debugging.
   void Dump(Stream &s);
@@ -435,8 +455,9 @@ public:
   ///     The ID of the grid to retrieve information for.
   ///
   /// \return
-  ///     A reference to the grid information structure.
-  const CUDBGGridInfo &GetGridInfo(uint64_t grid_id);
+  ///     A reference to the grid information structure, or an error if the
+  ///     debugger API cannot report it.
+  llvm::Expected<const CUDBGGridInfo &> GetGridInfo(uint64_t grid_id);
 
   /// \return
   ///     A reference to the collection of SM states.
@@ -468,11 +489,10 @@ private:
   ///     Buffer containing device information data.
   /// \param[in] size
   ///     Size of the buffer in bytes.
-  /// \param[in] log_to_client_callback
-  ///     Function to log messages to the client.
-  void DecodeDeviceInfoBuffer(
-      uint8_t *buffer, size_t size,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+  ///
+  /// \return
+  ///     An error if the buffer cannot be decoded.
+  llvm::Error DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size);
 
   /// Reference to the CUDA debugger API structure.
   CUDBGAPI m_api;
@@ -492,13 +512,13 @@ private:
   std::optional<size_t> m_num_uniform_predicate_registers;
 
   /// The total number of streaming multiprocessors on this device.
-  uint32_t m_num_sms;
+  uint32_t m_num_sms = 0;
 
   /// The number of warps per streaming multiprocessor.
-  uint32_t m_num_warps_per_sm;
+  uint32_t m_num_warps_per_sm = 0;
 
   /// The number of threads per warp.
-  uint32_t m_num_threads_per_warp;
+  uint32_t m_num_threads_per_warp = 0;
   /// @}
 
   /// Information that changes upon every stop.
@@ -519,7 +539,7 @@ private:
   /// Fields that are used to decode the device information from the batch API.
   /// @{
   /// Size information for various device data structures.
-  CUDBGDeviceInfoSizes m_device_info_sizes;
+  CUDBGDeviceInfoSizes m_device_info_sizes{};
 
   /// Temporary buffer for device information (disposed after each stop).
   /// Objects should not hold references to data in this buffer beyond a stop.
@@ -533,22 +553,28 @@ public:
   /// Default constructor creates an empty registry.
   DeviceStateRegistry() = default;
 
-  /// Construct a registry and initialize it with all available CUDA devices.
+  /// Create a registry with all available CUDA devices.
   ///
   /// \param[in] gpu
   ///     The GPU that this device state registry belongs to.
-  DeviceStateRegistry(ProcessNVGPU &gpu);
+  ///
+  /// \return
+  ///     The registry, or an error if the debugger API cannot describe the
+  ///     devices.
+  static llvm::Expected<DeviceStateRegistry> Create(ProcessNVGPU &gpu);
 
   /// Update state information for all registered devices and associate the
   /// complete snapshot with \p stop_id.
   ///
-  /// The snapshot is invalid while any device is being updated.
+  /// The snapshot is invalid while any device is being updated, and stays
+  /// invalid if an update fails.
   ///
   /// \param[in] stop_id
   ///     The process stop ID that owns the completed snapshot.
-  void BatchUpdate(
-      uint32_t stop_id,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+  ///
+  /// \return
+  ///     An error if the state of a device cannot be read or decoded.
+  llvm::Error BatchUpdate(uint32_t stop_id);
 
   /// Return whether the cached device snapshot belongs to \p stop_id.
   bool HasSnapshotForStopID(uint32_t stop_id) const {

@@ -96,105 +96,119 @@ static bool HasRequiredWarpCoords(const nvgpu::PhysicalCoords &physical) {
   return physical.device && physical.sm && physical.warp;
 }
 
-std::optional<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
+llvm::Expected<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
   if (m_current_num_regular_registers)
-    return m_current_num_regular_registers;
+    return *m_current_num_regular_registers;
 
   const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
   if (!HasRequiredWarpCoords(physical))
-    return std::nullopt;
+    return llvm::createStringError(
+        "The physical coordinates of the warp are unknown");
 
   CUDBGWarpResources resources;
   CUDBGResult res = GetSMState().GetDeviceState().GetAPI()->readWarpResources(
       *physical.device, *physical.sm, *physical.warp, &resources);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("WarpState::GetCurrentNumRegularRegisters(). "
-                           "readWarpResources failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt("Failed to read the resources of the warp. {0}",
+                                cudbgGetErrorString(res));
 
   m_current_num_regular_registers = resources.numRegisters;
-  return m_current_num_regular_registers;
+  return resources.numRegisters;
 }
 
-static void
+static llvm::Error
 ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                const nvgpu::PhysicalCoords &physical,
                                WarpSharedRegisterCache &regs) {
   if (!HasRequiredWarpCoords(physical))
-    return;
-  size_t num_regs = device_info.GetNumUniformRegisters();
-  if (num_regs == 0)
-    return;
+    return llvm::Error::success();
+  llvm::Expected<size_t> num_regs = device_info.GetNumUniformRegisters();
+  if (!num_regs)
+    return num_regs.takeError();
+  if (*num_regs == 0)
+    return llvm::Error::success();
 
-  if (num_regs > kNumURRegs)
-    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
-                           "uniform registers, but only {} are supported",
-                           num_regs, kNumURRegs);
+  if (*num_regs > kNumURRegs)
+    return createStringErrorFmt(
+        "The device reported {0} uniform registers, but only {1} are supported",
+        *num_regs, kNumURRegs);
 
   CUDBGResult res = api->readUniformRegisterRange(
-      *physical.device, *physical.sm, *physical.warp, 0, num_regs,
+      *physical.device, *physical.sm, *physical.warp, 0, *num_regs,
       regs.val.uniform);
 
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("WarpState::GetRegisters(). "
-                           "readUniformRegisterRange failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt("Failed to read the uniform registers. {0}",
+                                cudbgGetErrorString(res));
 
-  for (size_t i = 0; i < num_regs; ++i)
+  for (size_t i = 0; i < *num_regs; ++i)
     regs.is_valid.uniform[i] = true;
+  return llvm::Error::success();
 }
 
-static void
+static llvm::Error
 ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                         const nvgpu::PhysicalCoords &physical,
                                         WarpSharedRegisterCache &regs) {
   if (!HasRequiredWarpCoords(physical))
-    return;
-  size_t num_regs = device_info.GetNumUniformPredicateRegisters();
-  if (num_regs == 0)
-    return;
+    return llvm::Error::success();
+  llvm::Expected<size_t> num_regs =
+      device_info.GetNumUniformPredicateRegisters();
+  if (!num_regs)
+    return num_regs.takeError();
+  if (*num_regs == 0)
+    return llvm::Error::success();
 
-  if (num_regs > kNumUPRegs)
-    logAndReportFatalError("WarpState::GetRegisters(). device reported {} "
-                           "uniform predicate registers, but only {} are "
-                           "supported",
-                           num_regs, kNumUPRegs);
+  if (*num_regs > kNumUPRegs)
+    return createStringErrorFmt("The device reported {0} uniform predicate "
+                                "registers, but only {1} are supported",
+                                *num_regs, kNumUPRegs);
 
   CUDBGResult res =
       api->readUniformPredicates(*physical.device, *physical.sm, *physical.warp,
-                                 num_regs, regs.val.uniform_predicate);
+                                 *num_regs, regs.val.uniform_predicate);
 
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("WarpState::GetRegisters(). "
-                           "readUniformPredicates failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt(
+        "Failed to read the uniform predicate registers. {0}",
+        cudbgGetErrorString(res));
 
-  for (size_t i = 0; i < num_regs; ++i) {
+  for (size_t i = 0; i < *num_regs; ++i) {
     regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
     regs.is_valid.uniform_predicate[i] = true;
   }
+  return llvm::Error::success();
 }
 
 const WarpSharedRegisterCache &WarpState::GetRegisters() {
   if (m_regs_calculated)
     return m_shared_registers;
 
+  // Registers that fail to read stay invalid, instead of keeping the values of
+  // an earlier stop.
+  m_shared_registers = {};
+  m_regs_calculated = true;
+
   const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
-  if (!HasRequiredWarpCoords(physical)) {
-    m_shared_registers = {};
-    m_regs_calculated = true;
+  if (!HasRequiredWarpCoords(physical))
     return m_shared_registers;
-  }
 
   DeviceState &device_info = GetSMState().GetDeviceState();
   CUDBGAPI api = device_info.GetAPI();
+  auto log_error = [&physical](llvm::Error error) {
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
+                   "WarpState::GetRegisters(). Device {1}, SM {2}, warp {3}: "
+                   "{0}",
+                   *physical.device, *physical.sm, *physical.warp);
+  };
 
-  ReadUniformRegistersFromDevice(device_info, api, physical,
-                                 m_shared_registers);
-  ReadUniformPredicateRegistersFromDevice(device_info, api, physical,
-                                          m_shared_registers);
+  if (llvm::Error err = ReadUniformRegistersFromDevice(
+          device_info, api, physical, m_shared_registers))
+    log_error(std::move(err));
+  if (llvm::Error err = ReadUniformPredicateRegistersFromDevice(
+          device_info, api, physical, m_shared_registers))
+    log_error(std::move(err));
 
-  m_regs_calculated = true;
   return m_shared_registers;
 }
 
@@ -231,104 +245,98 @@ void SMState::Dump(Stream &s) {
 }
 
 DeviceState::DeviceState(ProcessNVGPU &gpu, uint32_t device_id)
-    : m_api(gpu.GetDebuggerAPI()), m_device_id(device_id) {
+    : m_api(gpu.GetDebuggerAPI()), m_device_id(device_id) {}
+
+llvm::Error DeviceState::Initialize(ProcessNVGPU &gpu) {
   CUDBGResult res =
       m_api->getDeviceInfoSizes(m_device_id, &m_device_info_sizes);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
-                           "getDeviceInfoSizes failed: {0}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the device info sizes of CUDA device {0}. {1}",
+        m_device_id, cudbgGetErrorString(res));
   m_device_info_buffer.resize(m_device_info_sizes.requiredBufferSize);
 
   res = m_api->getNumSMs(m_device_id, &m_num_sms);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
-                           "getNumSMs failed: {0}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of SMs of CUDA device {0}. {1}", m_device_id,
+        cudbgGetErrorString(res));
 
   res = m_api->getNumWarps(m_device_id, &m_num_warps_per_sm);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
-                           "getNumWarps failed: {0}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of warps per SM of CUDA device {0}. {1}",
+        m_device_id, cudbgGetErrorString(res));
 
   res = m_api->getNumLanes(m_device_id, &m_num_threads_per_warp);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::DeviceInformation(). "
-                           "getNumLanes failed: {0}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of lanes per warp of CUDA device {0}. {1}",
+        m_device_id, cudbgGetErrorString(res));
 
   m_sms.reserve(m_num_sms);
   for (uint32_t sm_id = 0; sm_id < m_num_sms; ++sm_id)
     m_sms.emplace_back(gpu, m_num_warps_per_sm, m_num_threads_per_warp,
                        m_device_id, sm_id, *this);
+  return llvm::Error::success();
 }
 
-size_t DeviceState::GetNumPredicateRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumPredicateRegisters() {
   if (m_num_predicate_registers)
     return *m_num_predicate_registers;
 
   uint32_t num_predicate_registers = 0;
   CUDBGResult res =
       m_api->getNumPredicates(m_device_id, &num_predicate_registers);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::GetNumPredicateRegisters(). "
-                           "getNumPredicates failed: {}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of predicate registers. {0}",
+        cudbgGetErrorString(res));
   m_num_predicate_registers = static_cast<size_t>(num_predicate_registers);
   return num_predicate_registers;
 }
 
-size_t DeviceState::GetNumUniformPredicateRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumUniformPredicateRegisters() {
   if (m_num_uniform_predicate_registers)
     return *m_num_uniform_predicate_registers;
 
   uint32_t num_uniform_predicate_registers = 0;
   CUDBGResult res = m_api->getNumUniformPredicates(
       m_device_id, &num_uniform_predicate_registers);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError(
-        "DeviceInformation::GetNumUniformPredicateRegisters(). "
-        "getNumUniformPredicates failed: {}",
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of uniform predicate registers. {0}",
         cudbgGetErrorString(res));
-  }
   m_num_uniform_predicate_registers =
       static_cast<size_t>(num_uniform_predicate_registers);
   return num_uniform_predicate_registers;
 }
 
-size_t DeviceState::GetNumUniformRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumUniformRegisters() {
   if (m_num_uniform_registers)
     return *m_num_uniform_registers;
 
   uint32_t num_uniform_registers = 0;
   CUDBGResult res =
       m_api->getNumUniformRegisters(m_device_id, &num_uniform_registers);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::GetNumUniformRegisters(). "
-                           "getNumUniformRegisters failed: {}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of uniform registers. {0}",
+        cudbgGetErrorString(res));
   m_num_uniform_registers = static_cast<size_t>(num_uniform_registers);
   return num_uniform_registers;
 }
 
-size_t DeviceState::GetMaxNumSupportedRegularRegister() {
+llvm::Expected<size_t> DeviceState::GetMaxNumSupportedRegularRegister() {
   if (m_num_r_registers)
     return *m_num_r_registers;
 
   uint32_t num_r_registers = 0;
   CUDBGResult res = m_api->getNumRegisters(m_device_id, &num_r_registers);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError("DeviceInformation::GetNumRRegisters(). "
-                           "getNumRegisters failed: {}",
-                           cudbgGetErrorString(res));
-  }
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the number of regular registers. {0}",
+        cudbgGetErrorString(res));
   m_num_r_registers = static_cast<size_t>(num_r_registers);
   return num_r_registers;
 }
@@ -351,26 +359,27 @@ void DeviceState::Dump(Stream &s) {
   s.IndentLess();
 }
 
-const CUDBGGridInfo &DeviceState::GetGridInfo(uint64_t grid_id) {
+llvm::Expected<const CUDBGGridInfo &>
+DeviceState::GetGridInfo(uint64_t grid_id) {
   auto it = m_grid_info.find(grid_id);
   if (it != m_grid_info.end())
     return it->second;
 
   CUDBGGridStatus grid_status = CUDBG_GRID_STATUS_INVALID;
-  m_api->getGridStatus(m_device_id, grid_id, &grid_status);
+  CUDBGResult res = m_api->getGridStatus(m_device_id, grid_id, &grid_status);
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt("Failed to get the status of grid {0}. {1}",
+                                grid_id, cudbgGetErrorString(res));
   if (grid_status == CUDBG_GRID_STATUS_INVALID)
-    logAndReportFatalError("DeviceInformation::GetGridInfo(). "
-                           "getGridStatus returned invalid grid status: {}",
-                           grid_status);
+    return createStringErrorFmt("Grid {0} is invalid", grid_id);
 
   CUDBGGridInfo grid_info;
   memset(&grid_info, 0, sizeof(CUDBGGridInfo));
 
-  CUDBGResult res = m_api->getGridInfo(m_device_id, grid_id, &grid_info);
+  res = m_api->getGridInfo(m_device_id, grid_id, &grid_info);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("DeviceInformation::GetGridInfo(). "
-                           "getGridInfo failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt("Failed to get the info of grid {0}. {1}",
+                                grid_id, cudbgGetErrorString(res));
 
   return m_grid_info.insert({grid_id, grid_info}).first->second;
 }
@@ -379,26 +388,32 @@ size_t DeviceState::GetMaxNumSupportedThreads() const {
   return m_num_threads_per_warp * m_num_warps_per_sm * m_num_sms;
 }
 
-DeviceStateRegistry::DeviceStateRegistry(ProcessNVGPU &gpu) {
-  uint32_t num_devices;
+llvm::Expected<DeviceStateRegistry>
+DeviceStateRegistry::Create(ProcessNVGPU &gpu) {
+  uint32_t num_devices = 0;
   CUDBGResult res = gpu.GetDebuggerAPI()->getNumDevices(&num_devices);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("AllDevices::AllDevices(). "
-                           "getNumDevices failed: {0}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt("Failed to get the number of CUDA devices. {0}",
+                                cudbgGetErrorString(res));
 
-  m_devices.reserve(num_devices);
-  for (uint32_t device_id = 0; device_id < num_devices; ++device_id)
-    m_devices.emplace_back(gpu, device_id);
+  DeviceStateRegistry registry;
+  // Reserve up front so that no device moves after it is initialized.
+  registry.m_devices.reserve(num_devices);
+  for (uint32_t device_id = 0; device_id < num_devices; ++device_id) {
+    DeviceState &device = registry.m_devices.emplace_back(gpu, device_id);
+    if (llvm::Error err = device.Initialize(gpu))
+      return err;
+  }
+  return registry;
 }
 
-void DeviceStateRegistry::BatchUpdate(
-    uint32_t stop_id,
-    std::function<void(llvm::StringRef message)> log_to_client_callback) {
+llvm::Error DeviceStateRegistry::BatchUpdate(uint32_t stop_id) {
   m_snapshot_stop_id.reset();
   for (DeviceState &device : m_devices)
-    device.BatchUpdate(log_to_client_callback);
+    if (llvm::Error err = device.BatchUpdate())
+      return err;
   m_snapshot_stop_id = stop_id;
+  return llvm::Error::success();
 }
 
 void DeviceStateRegistry::Dump(Stream &s) {

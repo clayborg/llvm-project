@@ -22,6 +22,7 @@
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::lldb_server;
+using namespace lldb_private::process_gdb_remote;
 
 using sass::kNumUPRegs;
 using sass::kNumURRegs;
@@ -44,22 +45,22 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
-static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
-                                           const nvgpu::PhysicalCoords &coords,
-                                           ThreadRegisterCache &regs) {
-  if (!warp_state.GetCurrentNumRegularRegisters().has_value())
-    return;
-
+static llvm::Error
+ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
+                               const nvgpu::PhysicalCoords &coords,
+                               ThreadRegisterCache &regs) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
-    return;
+    return llvm::Error::success();
 
-  const uint32_t num_regs_read = *warp_state.GetCurrentNumRegularRegisters();
+  llvm::Expected<uint32_t> num_regs_read =
+      warp_state.GetCurrentNumRegularRegisters();
+  if (!num_regs_read)
+    return num_regs_read.takeError();
 
-  if (num_regs_read > sass::kNumRRegs)
-    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
-                           "device reported {} regular registers, but only {} "
-                           "are supported",
-                           num_regs_read, sass::kNumRRegs);
+  if (*num_regs_read > sass::kNumRRegs)
+    return createStringErrorFmt(
+        "The device reported {0} regular registers, but only {1} are supported",
+        *num_regs_read, sass::kNumRRegs);
   // Always call the stable 7-arg entry point. It lives at a fixed offset in
   // every in-major driver's API table, so it works regardless of the
   // (possibly older) driver we attached to -- no runtime version check is
@@ -68,48 +69,49 @@ static void ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // use.
   CUDBGResult res = api->readRegisterRange60(*coords.device, *coords.sm,
                                              *coords.warp, *coords.lane, 0,
-                                             num_regs_read, regs.val.regular);
+                                             *num_regs_read, regs.val.regular);
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
-                           "readRegisterRange failed: {}",
-                           cudbgGetErrorString(res));
-  for (size_t i = 0; i < num_regs_read; ++i)
+    return createStringErrorFmt("Failed to read the regular registers. {0}",
+                                cudbgGetErrorString(res));
+  for (size_t i = 0; i < *num_regs_read; ++i)
     regs.is_valid.regular[i] = true;
+  return llvm::Error::success();
 }
 
-static void
+static llvm::Error
 ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                  const nvgpu::PhysicalCoords &coords,
                                  ThreadRegisterCache &regs) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
-    return;
+    return llvm::Error::success();
 
-  size_t num_regs = device_info.GetNumPredicateRegisters();
-  if (num_regs == 0)
-    return;
+  llvm::Expected<size_t> num_regs = device_info.GetNumPredicateRegisters();
+  if (!num_regs)
+    return num_regs.takeError();
+  if (*num_regs == 0)
+    return llvm::Error::success();
 
-  if (num_regs > sass::kNumPRegs)
-    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
-                           "device reported {} predicate registers, but only "
-                           "{} are supported",
-                           num_regs, sass::kNumPRegs);
+  if (*num_regs > sass::kNumPRegs)
+    return createStringErrorFmt("The device reported {0} predicate registers, "
+                                "but only {1} are supported",
+                                *num_regs, sass::kNumPRegs);
 
   CUDBGResult res =
       api->readPredicates(*coords.device, *coords.sm, *coords.warp,
-                          *coords.lane, num_regs, regs.val.predicate);
+                          *coords.lane, *num_regs, regs.val.predicate);
 
   if (res != CUDBG_SUCCESS)
-    logAndReportFatalError("RegisterContextNVGPU::ReadAllRegsFromDevice(). "
-                           "readPredicates failed: {}",
-                           cudbgGetErrorString(res));
+    return createStringErrorFmt("Failed to read the predicate registers. {0}",
+                                cudbgGetErrorString(res));
 
-  for (size_t i = 0; i < num_regs; ++i)
+  for (size_t i = 0; i < *num_regs; ++i)
     regs.is_valid.predicate[i] = true;
+  return llvm::Error::success();
 }
 
-static void ReadCUDABuiltinsFromDevice(const WarpState &warp_state,
-                                       const ThreadState &thread_state,
-                                       ThreadRegisterCache &regs) {
+static llvm::Error ReadCUDABuiltinsFromDevice(const WarpState &warp_state,
+                                              const ThreadState &thread_state,
+                                              ThreadRegisterCache &regs) {
   if (const std::optional<ThreadIdx> &thread_idx =
           thread_state.GetThreadIdx()) {
     regs.val.thread_idx[0] = thread_idx->x;
@@ -130,27 +132,32 @@ static void ReadCUDABuiltinsFromDevice(const WarpState &warp_state,
     regs.is_valid.block_idx[2] = true;
   }
 
-  if (logical.grid_id) {
-    const CUDBGGridInfo &grid_info =
-        warp_state.GetSMState().GetDeviceState().GetGridInfo(*logical.grid_id);
-    regs.val.block_dim[0] = grid_info.blockDim.x;
-    regs.val.block_dim[1] = grid_info.blockDim.y;
-    regs.val.block_dim[2] = grid_info.blockDim.z;
-    regs.is_valid.block_dim[0] = true;
-    regs.is_valid.block_dim[1] = true;
-    regs.is_valid.block_dim[2] = true;
-
-    regs.val.grid_dim[0] = grid_info.gridDim.x;
-    regs.val.grid_dim[1] = grid_info.gridDim.y;
-    regs.val.grid_dim[2] = grid_info.gridDim.z;
-    regs.is_valid.grid_dim[0] = true;
-    regs.is_valid.grid_dim[1] = true;
-    regs.is_valid.grid_dim[2] = true;
-  }
-
   regs.val.warp_size =
       warp_state.GetSMState().GetDeviceState().GetNumThreadsPerWarp();
   regs.is_valid.warp_size = true;
+
+  if (!logical.grid_id)
+    return llvm::Error::success();
+
+  llvm::Expected<const CUDBGGridInfo &> grid_info =
+      warp_state.GetSMState().GetDeviceState().GetGridInfo(*logical.grid_id);
+  if (!grid_info)
+    return grid_info.takeError();
+
+  regs.val.block_dim[0] = grid_info->blockDim.x;
+  regs.val.block_dim[1] = grid_info->blockDim.y;
+  regs.val.block_dim[2] = grid_info->blockDim.z;
+  regs.is_valid.block_dim[0] = true;
+  regs.is_valid.block_dim[1] = true;
+  regs.is_valid.block_dim[2] = true;
+
+  regs.val.grid_dim[0] = grid_info->gridDim.x;
+  regs.val.grid_dim[1] = grid_info->gridDim.y;
+  regs.val.grid_dim[2] = grid_info->gridDim.z;
+  regs.is_valid.grid_dim[0] = true;
+  regs.is_valid.grid_dim[1] = true;
+  regs.is_valid.grid_dim[2] = true;
+  return llvm::Error::success();
 }
 
 const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
@@ -187,9 +194,19 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
 
   WarpState &warp_state = thread_state->GetWarpState();
   DeviceState &device_info = warp_state.GetSMState().GetDeviceState();
+  auto log_error = [&thread](llvm::Error error) {
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
+                   "RegisterContextNVGPU::ReadAllRegsFromDevice(). Thread {1}: "
+                   "{0}",
+                   thread.GetID());
+  };
 
-  ReadRegularRegistersFromDevice(api, warp_state, physical, regs);
-  ReadPredicateRegistersFromDevice(device_info, api, physical, regs);
+  if (llvm::Error err =
+          ReadRegularRegistersFromDevice(api, warp_state, physical, regs))
+    log_error(std::move(err));
+  if (llvm::Error err =
+          ReadPredicateRegistersFromDevice(device_info, api, physical, regs))
+    log_error(std::move(err));
 
   const WarpSharedRegisterCache &warp_regs = warp_state.GetRegisters();
 
@@ -214,7 +231,9 @@ const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
     regs.is_valid.uniform_zero = true;
   }
 
-  ReadCUDABuiltinsFromDevice(warp_state, *thread_state, regs);
+  if (llvm::Error err =
+          ReadCUDABuiltinsFromDevice(warp_state, *thread_state, regs))
+    log_error(std::move(err));
 
   return regs;
 }
