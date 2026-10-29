@@ -66,7 +66,15 @@ public:
 
   ~ProcessNVGPU() override;
 
-  void SetDebuggerAPI(CUDADebuggerAPI &api);
+  /// Start using \a api and set up the state of the devices it reports.
+  ///
+  /// \param[in] api
+  ///     The initialized debugger API.
+  ///
+  /// \return
+  ///     An error if the debugger API cannot describe the devices. The caller
+  ///     then has to release the API with ClearDebuggerAPI.
+  llvm::Error SetDebuggerAPI(CUDADebuggerAPI &api);
 
   CUDBGAPI GetDebuggerAPI() const { return m_api; }
 
@@ -319,18 +327,22 @@ public:
   ///
   /// \param[in] event
   ///     Event data containing information about the suspended devices.
-  void OnAllDevicesSuspended(
-      const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
-      std::function<void(llvm::StringRef message)> log_to_client_callback);
+  ///
+  /// \return
+  ///     An error if the state of the devices cannot be read or decoded. The
+  ///     threads are then partially updated, so the caller has to stop with
+  ///     OnDebuggerAPIFault, which reports the fallback thread alone.
+  llvm::Error OnAllDevicesSuspended(
+      const CUDBGEvent::cases_st::allDevicesSuspended_st &event);
 
   /// Stop using the debugger API after it faults, by reporting an internal
-  /// error or failing a call, and report an exception-class stop with
-  /// \a description on the fallback thread alone. From then on, requests that
-  /// need the API fail with \a description, and each resume reports this stop
-  /// again.
+  /// error, failing a call, or reporting a device state that cannot be
+  /// decoded, and report an exception-class stop with \a description on the
+  /// fallback thread alone. From then on, requests that need the API fail with
+  /// \a description, and each resume reports this stop again.
   ///
   /// \param[in] description
-  ///     The internal error or the failed call, which the stop shows.
+  ///     What went wrong, which the stop shows.
   void OnDebuggerAPIFault(std::string description);
 
   /// \return
@@ -341,7 +353,8 @@ public:
   /// Handle the ElfImageLoaded event.
   ///
   /// Processes the event indicating that a new ELF image (cubin) has been
-  /// loaded, adding it to the list of available libraries.
+  /// loaded, adding it to the list of available libraries. A cubin that does
+  /// not parse is logged and skipped, so HasUnreportedLibraries can stay false.
   ///
   /// \param[in] event
   ///     Event data containing information about the loaded ELF image.
@@ -416,8 +429,8 @@ private:
   /// using the class used for CPU processes for this for simplicity.
   ProcessInstanceInfo m_process_info;
   CUDBGAPI m_api;
-  /// The internal error or failed call after which this process stopped using
-  /// the debugger API, if the API faulted.
+  /// What went wrong when the debugger API faulted, after which this process
+  /// stopped using it. See OnDebuggerAPIFault.
   std::optional<std::string> m_api_fault;
   /// API version in use with the live driver, for runtime gating of
   /// version-specific API calls.
