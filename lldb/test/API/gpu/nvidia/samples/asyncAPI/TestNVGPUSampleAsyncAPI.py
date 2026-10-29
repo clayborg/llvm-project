@@ -97,8 +97,7 @@ class TestNVGPUSampleAsyncAPI(NVGPUTestCaseBase):
         n = grid_dim[0] * block_dim[0]
         self.assertEqual(self.read_global_ints(array, n), [0] * n)
 
-        # The CPU keeps running while the GPU is stopped, and waits in its loop
-        # for the GPU work to finish.
+        # The CPU waits in its loop for the GPU work to finish.
         self.wait_for_stop(self.cpu_process)
         cpu_threads = lldbutil.get_threads_stopped_at_breakpoint(
             self.cpu_process, wait_breakpoint
