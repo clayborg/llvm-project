@@ -209,7 +209,7 @@ private:
   /// characters. Setting this to 10K works pretty well for that editor.
   std::optional<int> m_gdb_remote_log_packet_contents_size_limit;
 
-#if defined(HAVE_LIBCOMPRESSION)
+#if HAVE_LIBCOMPRESSION
   CompressionType m_decompression_scratch_type = CompressionType::None;
   void *m_decompression_scratch = nullptr;
 #endif
