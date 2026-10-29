@@ -12,7 +12,9 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
+#include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolContext.h"
+#include "lldb/Symbol/Symtab.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -248,9 +250,9 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
   LLDB_LOG(log, "ReadVirtualRegister: reg_kind={0}, reg_num={1}", reg_kind,
            reg_num);
   lldb::StackFrameSP frame_sp = reg_ctx->CalculateStackFrame();
+  const Address &pc = frame_sp->GetFrameCodeAddress();
   uint64_t locations =
-      FindRegisterLocations(frame_sp->GetFrameCodeAddress().GetModule(),
-                            frame_sp->GetStackID().GetPC(), reg_num);
+      FindRegisterLocations(pc.GetModule(), pc.GetFileAddress(), reg_num);
   if (locations == 0) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "register location not found");
@@ -306,25 +308,21 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
 ///   The low 24 bits are either the register index, or the offset in local
 ///   memory, or the stack pointer register index and the offset.
 ///
-void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
-                                       Target &target) {
+void PlatformNVGPU::ParseRegisterMap(const lldb::ModuleSP &module_sp,
+                                     PTXModuleRegMap &functions) {
   Log *log = GetLog(LLDBLog::Modules);
   std::string module_name = module_sp->GetSpecificationDescription();
-  if (m_entries.find(module_sp) != m_entries.end()) {
-    LLDB_LOG(log, "RecordLoadedModule: module {0} already loaded", module_name);
-    return;
-  }
 
   ObjectFile *obj_file = module_sp->GetObjectFile();
   if (!obj_file) {
-    LLDB_LOG(log, "RecordLoadedModule: no object file for module {0}",
+    LLDB_LOG(log, "ParseRegisterMap: no object file for module {0}",
              module_name);
     return;
   }
 
   SectionList *sections = obj_file->GetSectionList();
   if (!sections) {
-    LLDB_LOG(log, "RecordLoadedModule: no section list for module {0}",
+    LLDB_LOG(log, "ParseRegisterMap: no section list for module {0}",
              module_name);
     return;
   }
@@ -333,7 +331,7 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
   SectionSP section_sp = sections->FindSectionByName(section_name);
   if (!section_sp) {
     LLDB_LOG(log,
-             "RecordLoadedModule: .nv_debug_info_reg_sass section not "
+             "ParseRegisterMap: .nv_debug_info_reg_sass section not "
              "found in module {0}",
              module_name);
     return;
@@ -343,53 +341,73 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
   DataExtractor data;
   if (!obj_file->ReadSectionData(section_sp.get(), data)) {
     LLDB_LOG(log,
-             "RecordLoadedModule: failed to read section data from module {0}",
+             "ParseRegisterMap: failed to read section data from module {0}",
              module_name);
     return;
   }
 
+  // The section holds one block of entries per function.
   lldb::offset_t offset = 0;
+  while (data.ValidOffset(offset)) {
+    lldb::offset_t block_offset = offset;
+    if (!RecordFunctionRegisterMap(module_sp, data, offset, functions)) {
+      LLDB_LOG(log,
+               "ParseRegisterMap: failed to read the function block at offset "
+               "{0:x} in module {1}",
+               block_offset, module_name);
+      return;
+    }
+  }
+}
+
+/// Add the entries of the function block that starts at `offset` in `data` to
+/// the function's map in `functions`, and move `offset` past the block. Return
+/// false if the data is malformed or ends inside the block.
+bool PlatformNVGPU::RecordFunctionRegisterMap(const lldb::ModuleSP &module_sp,
+                                              const DataExtractor &data,
+                                              lldb::offset_t &offset,
+                                              PTXModuleRegMap &functions) {
+  Log *log = GetLog(LLDBLog::Modules);
 
   // Read header
   if (!data.ValidOffsetForDataOfSize(offset, 8)) {
-    LLDB_LOG(log, "RecordLoadedModule: section too small for header");
-    return;
+    LLDB_LOG(log, "ParseRegisterMap: section too small for header");
+    return false;
   }
 
   const char *function_name = data.GetCStr(&offset);
+  if (!function_name) {
+    LLDB_LOG(log, "ParseRegisterMap: truncated function name");
+    return false;
+  }
   uint32_t num_entries = data.GetU32(&offset);
 
-  LLDB_LOG(log, "RecordLoadedModule: function={0}, num_entries={1}",
+  LLDB_LOG(log, "ParseRegisterMap: function={0}, num_entries={1}",
            function_name, num_entries);
 
-  // Find the function loaded start and end addresses in the module
+  // Find the function's file address range from its symbol, by its whole
+  // name: one function's name can contain another's. Looking it up in the
+  // symbol table does not need the DWARF name index.
   lldb::addr_t func_start = 0;
   lldb::addr_t func_end = 0;
-  SymbolContextList sc_list;
-  module_sp->FindFunctions(RegularExpression(function_name),
-                           ModuleFunctionSearchOptions(), sc_list);
-  uint32_t i = 0;
-  for (; i < sc_list.GetSize(); ++i) {
-    SymbolContext sc;
-    sc_list.GetContextAtIndex(i, sc);
-
-    if (sc.function && sc.function->GetAddressRanges().size() == 1) {
-      AddressRange func_range = sc.function->GetAddressRanges()[0];
-      func_start = func_range.GetBaseAddress().GetLoadAddress(&target);
-      func_end = func_start + func_range.GetByteSize();
-      LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name, func_start,
-               func_end);
-      break;
-    }
-  }
-
-  if (i == sc_list.GetSize()) {
+  const Symbol *symbol = nullptr;
+  if (Symtab *symtab = module_sp->GetSymtab())
+    symbol = symtab->FindFirstSymbolWithNameAndType(
+        ConstString(function_name), eSymbolTypeCode, Symtab::eDebugAny,
+        Symtab::eVisibilityAny);
+  // Each function has a map of its own, so that a register's list holds only
+  // that function's ranges.
+  PTXPRegMap *function_map = nullptr;
+  if (symbol && symbol->ValueIsAddress()) {
+    func_start = symbol->GetFileAddress();
+    func_end = func_start + symbol->GetByteSize();
+    function_map = &functions[func_start];
+    LLDB_LOG(log, "Function {0}: [{1:x} - {2:x})", function_name, func_start,
+             func_end);
+  } else {
+    // Still read past the function's entries to reach the next block.
     LLDB_LOG(log, "Function {0} symbol not found.", function_name);
-    return;
   }
-
-  PTXPRegMap &ptx_reg_map = m_entries[module_sp];
-  ptx_reg_map.clear();
 
   // Parse each entry, but we don't support overlapping code ranges for
   // the same PTX register with the same index. If such cases are found,
@@ -397,24 +415,28 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
   for (uint32_t i = 0; i < num_entries; ++i) {
     // Read PTX location index
     if (!data.ValidOffsetForDataOfSize(offset, 4)) {
-      LLDB_LOG(log, "RecordLoadedModule: truncated entry {0} index", i);
-      return;
+      LLDB_LOG(log, "ParseRegisterMap: truncated entry {0} index", i);
+      return false;
     }
 
     uint32_t idx = data.GetU32(&offset);
     // We only support up to 64-bit PTX registers
     if (idx > 1) {
-      LLDB_LOG(log, "RecordLoadedModule: malformed entry {0} with index {1}", i,
+      LLDB_LOG(log, "ParseRegisterMap: malformed entry {0} with index {1}", i,
                idx);
-      return;
+      return false;
     }
 
-    std::string reg_name = std::string(data.GetCStr(&offset));
+    const char *reg_name_cstr = data.GetCStr(&offset);
+    if (!reg_name_cstr) {
+      LLDB_LOG(log, "ParseRegisterMap: truncated entry {0} register name", i);
+      return false;
+    }
+    std::string reg_name = reg_name_cstr;
 
     if (reg_name.size() > sizeof(uint64_t)) {
-      LLDB_LOG(log,
-               "RecordLoadedModule: at entry {0} register name {1} too long", i,
-               idx);
+      LLDB_LOG(log, "ParseRegisterMap: at entry {0} register name {1} too long",
+               i, idx);
 
       data.GetU32(&offset);
       data.GetU32(&offset);
@@ -431,22 +453,25 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
 
     if (!data.ValidOffsetForDataOfSize(offset, 4)) {
       LLDB_LOG(log,
-               "RecordLoadedModule: truncated entry {0} location at index {1}",
-               i, idx);
-      return;
+               "ParseRegisterMap: truncated entry {0} location at index {1}", i,
+               idx);
+      return false;
     }
 
     uint32_t location = data.GetU32(&offset);
 
     // Read PC range
-    if (!data.ValidOffsetForDataOfSize(offset, 16)) {
-      LLDB_LOG(log, "RecordLoadedModule: truncated entry {0} PC range", i);
-      return;
+    if (!data.ValidOffsetForDataOfSize(offset, 8)) {
+      LLDB_LOG(log, "ParseRegisterMap: truncated entry {0} PC range", i);
+      return false;
     }
 
     lldb::addr_t pc_start = func_start + data.GetU32(&offset);
     lldb::addr_t pc_end = func_start + data.GetU32(&offset);
     lldb::addr_t pc_extended_end = func_end;
+    if (!function_map)
+      continue;
+    PTXPRegMap &ptx_reg_map = *function_map;
 
     auto map_iter = ptx_reg_map.find(reg_num);
     if (map_iter == ptx_reg_map.end()) {
@@ -559,36 +584,55 @@ void PlatformNVGPU::RecordLoadedModule(const lldb::ModuleSP &module_sp,
     }
   }
 
-  return;
+  return true;
+}
+
+/// Return the register maps of the functions of `module_sp`, which are read
+/// from the module the first time they are needed. A module without them gets
+/// an empty map. The caller holds m_entries_mutex.
+const PTXModuleRegMap &
+PlatformNVGPU::GetRegisterMap(const lldb::ModuleSP &module_sp) {
+  auto [iter, inserted] = m_entries.try_emplace(module_sp);
+  if (inserted)
+    ParseRegisterMap(module_sp, iter->second);
+  return iter->second;
 }
 
 uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
-                                              lldb::addr_t pc,
+                                              lldb::addr_t file_addr,
                                               uint64_t reg_num) {
+  if (!module_sp)
+    return 0;
+
   Log *log = GetLog(LLDBLog::Modules);
-  std::string module_name = module_sp->GetSpecificationDescription();
-  if (m_entries.find(module_sp) == m_entries.end()) {
-    LLDB_LOG(log, "RecordLoadedModule: module {0} not found", module_name);
+  std::lock_guard<std::mutex> guard(m_entries_mutex);
+  const PTXModuleRegMap &functions = GetRegisterMap(module_sp);
+  // The function that holds `file_addr` is the last one to start at or before
+  // it. An address past that function's end matches none of its entries.
+  auto function_iter = functions.upper_bound(file_addr);
+  if (function_iter == functions.begin()) {
+    LLDB_LOG(log,
+             "FindRegisterLocations: no PTX register map for {0:x} in the "
+             "module {1}",
+             file_addr, module_sp->GetSpecificationDescription());
     return 0;
   }
-
-  PTXPRegMap &ptx_reg_map = m_entries[module_sp];
+  const PTXPRegMap &ptx_reg_map = std::prev(function_iter)->second;
   auto map_iter = ptx_reg_map.find(reg_num);
   if (map_iter == ptx_reg_map.end()) {
-    LLDB_LOG(
-        log,
-        "RecordLoadedModule: PTX register mapping not found in the module {0}",
-        module_name);
+    LLDB_LOG(log,
+             "FindRegisterLocations: PTX register mapping not found in the "
+             "module {0}",
+             module_sp->GetSpecificationDescription());
     return 0;
   }
 
-  for (auto &entry : map_iter->second) {
-    if (pc >= entry.pc_start && pc < entry.pc_end) {
+  for (const PTXPieceToSassEntry &entry : map_iter->second) {
+    if (file_addr >= entry.pc_start && file_addr < entry.pc_end)
       return entry.locations;
-    }
   }
 
-  LLDB_LOG(log, "RecordLoadedModule: PTX register location not found");
+  LLDB_LOG(log, "FindRegisterLocations: PTX register location not found");
   return 0;
 }
 

@@ -12,6 +12,8 @@
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Target/Platform.h"
 
+#include <mutex>
+
 namespace lldb_private::platform_NVGPU {
 
 /// Single mapping entry for a PC range
@@ -25,6 +27,9 @@ struct PTXPieceToSassEntry {
 };
 
 typedef std::map<uint64_t, std::list<PTXPieceToSassEntry>> PTXPRegMap;
+
+/// The PTX register maps of a module's functions, by function start address.
+typedef std::map<lldb::addr_t, PTXPRegMap> PTXModuleRegMap;
 
 class PlatformNVGPU : public Platform {
 public:
@@ -79,9 +84,6 @@ public:
                                                  lldb::regnum64_t reg_num,
                                                  Value &value) override;
 
-  void RecordLoadedModule(const lldb::ModuleSP &module_sp,
-                          Target &target) override;
-
   size_t GetGPUThreadStatus(Process &process, Stream &strm,
                             bool only_threads_with_stop_reason,
                             std::optional<lldb::StopReason> stop_reason_filter =
@@ -93,8 +95,18 @@ public:
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
+  static void ParseRegisterMap(const lldb::ModuleSP &module_sp,
+                               PTXModuleRegMap &functions);
+
+  static bool RecordFunctionRegisterMap(const lldb::ModuleSP &module_sp,
+                                        const DataExtractor &data,
+                                        lldb::offset_t &offset,
+                                        PTXModuleRegMap &functions);
+
+  const PTXModuleRegMap &GetRegisterMap(const lldb::ModuleSP &module_sp);
+
   uint64_t FindRegisterLocations(const lldb::ModuleSP &module_sp,
-                                 lldb::addr_t pc, uint64_t reg_num);
+                                 lldb::addr_t file_addr, uint64_t reg_num);
 
   llvm::Error LocationToValue(RegisterContext *reg_ctx,
                               lldb::RegisterKind reg_kind, uint32_t location,
@@ -102,7 +114,9 @@ private:
 
   std::vector<ArchSpec> m_supported_architectures;
 
-  std::map<lldb::ModuleSP, PTXPRegMap> m_entries;
+  /// The register maps of each module whose virtual registers were read.
+  std::map<lldb::ModuleSP, PTXModuleRegMap> m_entries;
+  std::mutex m_entries_mutex;
 };
 
 } // namespace lldb_private::platform_NVGPU
