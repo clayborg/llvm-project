@@ -14,7 +14,7 @@
 /// `ObjectFileELF::CreateSections` builds for NVGPU corefiles
 /// (`nvgpucore` root -> `dev0` -> `sm0` -> `cta0` -> `warp0` -> `lane0` ->
 /// per-lane leaves, plus a sibling `dev0` -> `grid0` branch) and creates one
-/// `ThreadNVGPUCore` per active GPU lane, plus one per faulted SM whose lanes
+/// `ThreadNVGPUCore` per valid GPU lane, plus one per faulted SM whose lanes
 /// had all exited before the dump was written.
 ///
 //===----------------------------------------------------------------------===//
