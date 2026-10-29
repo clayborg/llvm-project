@@ -157,6 +157,12 @@ If the CUDA debugger API fails to initialize, for example because no CUDA
 device is visible, LLDB reports the error and adds no GPU target. The program
 keeps running, without GPU debugging.
 
+If the CUDA debugger API reports an internal error, or a call into it fails
+while LLDB handles its events or resumes the GPU, the GPU stops with an
+exception that the error describes. LLDB does not use the API again in that
+session, so the GPU can no longer be resumed, nor its memory read: continuing
+or stepping it reports the same exception again.
+
 GPU thread coordinates
 ^^^^^^^^^^^^^^^^^^^^^^
 
