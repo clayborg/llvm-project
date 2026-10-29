@@ -19,6 +19,8 @@
 
 #include "cudadebugger.h"
 
+#include <functional>
+
 namespace lldb_private::lldb_server {
 
 /// Manages GPU process debugging and thread execution state.
@@ -56,7 +58,11 @@ public:
   ///
   /// \param[in] delegate
   ///     Delegate for handling process events and notifications.
-  ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate);
+  ///
+  /// \param[in] main_loop
+  ///     The main loop of the GPU's gdb-remote server, for work that has to
+  ///     wait until the request being handled is answered.
+  ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate, MainLoop &main_loop);
 
   ~ProcessNVGPU() override;
 
@@ -68,6 +74,21 @@ public:
   /// destroys it, so this process cannot be left holding a dangling table.
   void ClearDebuggerAPI() { m_api = nullptr; }
 
+  /// Register a notifier that re-runs sync-event processing after the deferred
+  /// ack on a dyld fake-stop resume, without which events queued behind the
+  /// deferred CUDBG_EVENT_ELF_IMAGE_LOADED are never drained.
+  void SetSyncEventDrainNotifier(std::function<void()> notifier) {
+    m_sync_event_drain_notifier = std::move(notifier);
+  }
+
+  /// Register how to report a call into the debugger API that fails while a
+  /// resume request is handled. The plug-in reports it as it reports an
+  /// internal error.
+  void SetDebuggerAPIFaultHandler(
+      std::function<void(std::string description)> handler) {
+    m_api_fault_handler = std::move(handler);
+  }
+
   /// The API version this session runs at: the lesser of the compiled and the
   /// live driver's versions. Gate calls to entry points newer than the
   /// major's baseline on this -- `if (GetAPIVersion().AtLeast(13, 4, 0))
@@ -76,7 +97,10 @@ public:
   nvgpu::CudbgApiVersion GetAPIVersion() const { return m_api_version; }
 
   /// Mark the GPU process and its threads running, notify the delegate, then
-  /// resume GPU execution.
+  /// resume GPU execution. Without a debugger API, report a stop on the
+  /// fallback thread again instead of resuming. If a call into the API fails,
+  /// report the failure through the handler from SetDebuggerAPIFaultHandler
+  /// once the server has answered the request.
   ///
   /// \param[in] resume_actions
   ///     List of resume actions to apply to threads.
@@ -299,6 +323,21 @@ public:
       const CUDBGEvent::cases_st::allDevicesSuspended_st &event,
       std::function<void(llvm::StringRef message)> log_to_client_callback);
 
+  /// Stop using the debugger API after it faults, by reporting an internal
+  /// error or failing a call, and report an exception-class stop with
+  /// \a description on the fallback thread alone. From then on, requests that
+  /// need the API fail with \a description, and each resume reports this stop
+  /// again.
+  ///
+  /// \param[in] description
+  ///     The internal error or the failed call, which the stop shows.
+  void OnDebuggerAPIFault(std::string description);
+
+  /// \return
+  ///     True once the debugger API has faulted. Calling into it after that can
+  ///     wedge or crash the session.
+  bool HasDebuggerAPIFaulted() const { return m_api_fault.has_value(); }
+
   /// Handle the ElfImageLoaded event.
   ///
   /// Processes the event indicating that a new ELF image (cubin) has been
@@ -306,7 +345,11 @@ public:
   ///
   /// \param[in] event
   ///     Event data containing information about the loaded ELF image.
-  void OnElfImageLoaded(const CUDBGEvent::cases_st::elfImageLoaded_st &event);
+  ///
+  /// \return
+  ///     An error if the debugger API cannot provide the ELF image.
+  llvm::Error
+  OnElfImageLoaded(const CUDBGEvent::cases_st::elfImageLoaded_st &event);
 
   /// Report a stop reason for the dynamic loader. This is used to notify the
   /// client that it should fetch the new libraries. It uses a fake stop
@@ -337,14 +380,23 @@ public:
 private:
   friend class Manager;
 
-  /// Accessor for m_api that fails if it's not initialized.
+  /// Accessor for m_api.
   ///
   /// \return
-  ///     Reference to the CUDA debugger API structure.
-  ///
-  /// \throws
-  ///     Assertion failure if the API is not properly initialized.
-  const CUDBGAPI_st &GetCudaAPI();
+  ///     The CUDA debugger API, or an error that says why there is none: it is
+  ///     not set up yet, was released, or faulted.
+  llvm::Expected<const CUDBGAPI_st &> GetCudaAPI();
+
+  /// Report an exception-class stop on the fallback thread alone, without
+  /// calling into the debugger API, for when there is none or it can no longer
+  /// be trusted.
+  void ReportFallbackStop(llvm::StringRef description);
+
+  /// Stop using the debugger API after a call into it fails during a resume,
+  /// and report \a description through the handler from
+  /// SetDebuggerAPIFaultHandler once the server has answered the request: the
+  /// client takes a failed resume for a lost connection.
+  void ReportFaultAfterResume(std::string description);
 
   /// Utility for the Manager class to set the launch info for the GPU.
   ///
@@ -364,6 +416,9 @@ private:
   /// using the class used for CPU processes for this for simplicity.
   ProcessInstanceInfo m_process_info;
   CUDBGAPI m_api;
+  /// The internal error or failed call after which this process stopped using
+  /// the debugger API, if the API faulted.
+  std::optional<std::string> m_api_fault;
   /// API version in use with the live driver, for runtime gating of
   /// version-specific API calls.
   nvgpu::CudbgApiVersion m_api_version;
@@ -382,6 +437,14 @@ private:
   /// we stop processing more APU events until we have resumed after the dyld
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
+
+  /// See SetSyncEventDrainNotifier.
+  std::function<void()> m_sync_event_drain_notifier;
+
+  /// See SetDebuggerAPIFaultHandler.
+  std::function<void(std::string description)> m_api_fault_handler;
+
+  MainLoop &m_main_loop;
 
   /// Cached device information, updated at every real GPU stop.
   DeviceStateRegistry m_devices;
