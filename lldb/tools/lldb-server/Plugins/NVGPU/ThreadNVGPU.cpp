@@ -45,6 +45,13 @@ std::string ThreadNVGPU::GetName() {
 
 lldb::StateType ThreadNVGPU::GetState() { return m_state; }
 
+bool ThreadNVGPU::GetIsActive() const {
+  // Empty for the fallback thread, which no warp's active mask excludes, and
+  // outside a real GPU stop, such as at a dyld stop, which decodes nothing.
+  std::optional<nvgpu::ThreadCoords> coords = GetCurrentThreadCoords();
+  return !coords || coords->is_active.value_or(true);
+}
+
 bool ThreadNVGPU::GetStopReason(ThreadStopInfo &stop_info,
                                 std::string &description) {
   stop_info = m_stop_info;
