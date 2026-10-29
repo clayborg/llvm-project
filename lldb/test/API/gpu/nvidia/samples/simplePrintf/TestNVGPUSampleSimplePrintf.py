@@ -201,11 +201,7 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
         """A breakpoint on a kernel line, set before the program runs, stops
         the GPU but never the CPU. lldb also resolves the line in the kernel's
         host-side stub and stops the CPU there after the launch; cuda-gdb
-        creates that location disabled and stops only the GPU.
-
-        The CPU must keep running while the GPU is stopped, as it does under
-        lit's NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1. In the default mode the
-        CPU stops with the GPU, and the test fails for that reason instead."""
+        creates that location disabled and stops only the GPU."""
         target = self.make_target()
         breakpoint = target.BreakpointCreateByLocation(
             SOURCE, line_number(SOURCE, "// gpu breakpoint at printf")
@@ -217,8 +213,8 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
 
         self.gpu_target.BreakpointDelete(gpu_breakpoint.GetID())
         self.assertSuccess(self.gpu_process.Continue())
-        # The CPU kept running while the GPU was stopped, and nothing should
-        # stop it before the program exits.
+        # Apart from target-sync stops, nothing should stop the CPU before the
+        # program exits.
         self.assertEqual(self.wait_for_exit(self.cpu_process), 0, "CPU exit")
         self.assertEqual(self.wait_for_exit(self.gpu_process), 0, "GPU exit")
 

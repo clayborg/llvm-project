@@ -1,6 +1,7 @@
 import math
 import os
 import shutil
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import lldb
@@ -68,29 +69,38 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
       assert_gpu_stop_reason(reason), continue_gpu_until_stop_reason(reason)
           Shorthands for "a thread stopped for this reason".
       wait_for_stop(process)
-          wait_for_gpu_to_stop for either process. For the CPU: it kept running
-          while the GPU stopped, and the test needs it at one of its own
-          breakpoints too. Nothing is resumed.
+          wait_for_gpu_to_stop for either process. For the CPU: the test
+          resumed it, and needs it at one of its own breakpoints too. Nothing
+          is resumed, except the CPU from target-sync stops (see below).
       wait_for_exit(process)
           The test resumed both processes and expects them to finish. Nothing
-          is resumed.
+          is resumed, except the CPU from target-sync stops (see below).
       assert_exit_status(status)
           The same for both processes, which must exit with `status`.
 
     The verb says what happens to the GPU: `wait_for` and `assert` never resume
     it, `continue` does.
 
+    When the GPU stops at a breakpoint or an exception, lldb-server stops the
+    CPU too, with eStopReasonTargetSync: a "target-sync stop".
+    NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1 turns that off, and the helpers work
+    either way. continue_gpu_until, wait_for_exit and wait_for_stop on the CPU
+    resume the CPU from target-sync stops, since the program may need the CPU
+    to run on: to launch a kernel, load a module or exit. continue_gpu_until
+    still returns with the CPU stopped alongside the GPU.
+
     Each consumes only the state-changed events of the processes it waits on,
-    so the other process's events stay queued for whoever waits on it.
+    so the other process's events stay queued for whoever waits on it, except
+    that the helpers that resume the CPU consume its events too.
     """
 
     NO_DEBUG_INFO_TESTCASE = True
 
-    # TODO: the waits below assume the CPU keeps running while the
-    # GPU is stopped, which holds only because lit.local.cfg sets
-    # NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1. Once the plugin stops the CPU on a
-    # GPU stop, continue_gpu_until must resume the CPU (or drain its stop event)
-    # before resuming the GPU.
+    # How long continue_gpu_until waits for the CPU's target-sync stop after a
+    # GPU stop. The event is usually there already. The limit only matters for
+    # a GPU stop that doesn't stop the CPU, one that isn't a breakpoint or an
+    # exception.
+    CPU_STOP_GRACE_SECONDS = 5
 
     # Tests on this base class debug a live CUDA program, so they need a GPU.
     # NVGPUCoreTestCaseBase sets this to False. A test class can set it too,
@@ -232,6 +242,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         what: str,
         listener: lldb.SBListener,
         timeout_seconds: int,
+        keep_cpu_running: bool = False,
     ) -> int:
         """Pull the next state-changed event of `process` and return its state.
 
@@ -239,18 +250,16 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         process's events stay queued. Stopped events flagged as "restarted" (a
         stop lldb resumed from on its own) are skipped the way
         lldbutil.expect_state_changes does. Fails the test on timeout, naming
-        `what` ("CPU" or "GPU").
+        `what` ("CPU" or "GPU"). With `keep_cpu_running`, the CPU's events are
+        consumed too.
         """
         # SBListener waits take a uint32 second count; round fractions up once here.
         num_seconds = math.ceil(timeout_seconds)
         broadcaster = process.GetBroadcaster()
         while True:
             event = lldb.SBEvent()
-            if not listener.WaitForEventForBroadcasterWithType(
-                num_seconds,
-                broadcaster,
-                lldb.SBProcess.eBroadcastBitStateChanged,
-                event,
+            if not self._wait_for_event(
+                listener, broadcaster, num_seconds, event, keep_cpu_running
             ):
                 self.fail(
                     f"timed out after {timeout_seconds} s waiting for the {what} "
@@ -263,26 +272,175 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 continue
             return state
 
+    def _wait_for_event(
+        self,
+        listener: lldb.SBListener,
+        broadcaster: lldb.SBBroadcaster,
+        num_seconds: int,
+        event: lldb.SBEvent,
+        keep_cpu_running: bool,
+    ) -> bool:
+        """Wait up to `num_seconds` for a state-changed event from `broadcaster`.
+
+        With `keep_cpu_running`, wait in one-second slices, and resume the CPU
+        if it sat in a target-sync stop for a whole slice with no GPU event.
+        That happens when lldb resumed the GPU from a stop on its own: the
+        CPU's stop then has no GPU stop to go with it.
+
+        Don't resume the CPU sooner, or while a GPU event is queued. Its stop
+        may belong to the GPU stop this wait is about to return, since the two
+        events can arrive in either order, and resuming it would leave the CPU
+        running past that stop. That can still happen when the GPU stops just
+        as a slice ends, before its event reaches the listener.
+        """
+        mask = lldb.SBProcess.eBroadcastBitStateChanged
+        if not keep_cpu_running:
+            return listener.WaitForEventForBroadcasterWithType(
+                num_seconds, broadcaster, mask, event
+            )
+        deadline = time.monotonic() + max(num_seconds, 1)
+        cpu_was_held = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if cpu_was_held and not listener.PeekAtNextEventForBroadcasterWithType(
+                broadcaster, mask, lldb.SBEvent()
+            ):
+                self._keep_cpu_running(math.ceil(remaining))
+            cpu_was_held = self._cpu_held_for_target_sync()
+            if listener.WaitForEventForBroadcasterWithType(1, broadcaster, mask, event):
+                return True
+
+    def cpu_stops_with_gpu(self) -> bool:
+        """Whether lldb-server stops the CPU when the GPU stops. It does unless
+        NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP is "1" in this process's
+        environment, which lldb-server inherits."""
+        return os.environ.get("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1"
+
+    def _pull_cpu_state(self) -> int:
+        """Pull the CPU's queued state-changed events without waiting, and
+        return its latest state. A restarted stop counts as running.
+
+        GetState() is only updated as events are pulled, so until then it can
+        be out of date.
+        """
+        listener = self.dbg.GetListener()
+        broadcaster = self.cpu_process.GetBroadcaster()
+        state = self.cpu_process.GetState()
+        event = lldb.SBEvent()
+        while listener.GetNextEventForBroadcasterWithType(
+            broadcaster, lldb.SBProcess.eBroadcastBitStateChanged, event
+        ):
+            state = lldb.SBProcess.GetStateFromEvent(event)
+            if state == lldb.eStateStopped and lldb.SBProcess.GetRestartedFromEvent(
+                event
+            ):
+                state = lldb.eStateRunning
+        return state
+
+    def _cpu_stopped_only_for_target_sync(self) -> bool:
+        """Whether the stopped CPU is in a target-sync stop only: some thread
+        reports target sync and none stopped for anything else."""
+        reasons = {thread.GetStopReason() for thread in self.cpu_process.threads}
+        return lldb.eStopReasonTargetSync in reasons and reasons <= {
+            lldb.eStopReasonNone,
+            lldb.eStopReasonTargetSync,
+        }
+
+    def _cpu_held_for_target_sync(self) -> bool:
+        """Pull the CPU's queued events, then return whether it is in a
+        target-sync stop only."""
+        return (
+            bool(self.cpu_process)
+            and self._pull_cpu_state() == lldb.eStateStopped
+            and self._cpu_stopped_only_for_target_sync()
+        )
+
+    def _settle_cpu(self, timeout_seconds: int) -> None:
+        """After a GPU stop, wait up to `timeout_seconds` for the CPU to stop
+        too, and pull its stop event. Not every GPU stop stops the CPU, so
+        running out of time is not a failure.
+
+        Without this, a CPU that has stopped can still look running. Teardown
+        then interrupts it and waits for a stop that never comes, for the
+        whole target.process.interrupt-timeout.
+        """
+        listener = self.dbg.GetListener()
+        broadcaster = self.cpu_process.GetBroadcaster()
+        deadline = time.monotonic() + timeout_seconds
+        state = self._pull_cpu_state()
+        while state == lldb.eStateRunning:
+            remaining = deadline - time.monotonic()
+            event = lldb.SBEvent()
+            if remaining <= 0 or not listener.WaitForEventForBroadcasterWithType(
+                math.ceil(remaining),
+                broadcaster,
+                lldb.SBProcess.eBroadcastBitStateChanged,
+                event,
+            ):
+                return
+            state = lldb.SBProcess.GetStateFromEvent(event)
+            if state == lldb.eStateStopped and lldb.SBProcess.GetRestartedFromEvent(
+                event
+            ):
+                state = lldb.eStateRunning
+
+    def _keep_cpu_running(self, timeout_seconds: int) -> None:
+        """Resume the CPU if it is in a target-sync stop only. This doesn't
+        wait for a stop that hasn't arrived yet; a later call resumes it."""
+        if not self._cpu_held_for_target_sync():
+            return
+        cpu_process = self.cpu_process
+        self.assertSuccess(cpu_process.Continue(), "continue CPU process")
+        # Pull the running event now. Otherwise the CPU still looks stopped,
+        # and the next call would try to resume it again.
+        state = self._next_state(
+            cpu_process, "CPU", self.dbg.GetListener(), timeout_seconds
+        )
+        if state != lldb.eStateRunning:
+            self.fail(
+                f"CPU process entered state {lldb.SBDebugger.StateAsCString(state)} "
+                "instead of running"
+            )
+
     def _wait_for_state(
         self,
         process: lldb.SBProcess,
         wanted: int,
         doing: str,
         timeout_seconds: int,
+        keep_cpu_running: bool = False,
     ) -> None:
         """Pull the state-changed events of `process` until it enters `wanted`.
 
-        Running events (and restarted stops) are skipped. Any other state fails
-        the test, saying what the process did before `doing` ("stopping",
-        "exiting"): with the exit status and its description if it exited, so
-        that a lost connection to lldb-server (status -1) is told apart from
-        the program ending. A program that never gets where the test expects
-        fails instead of hanging the test.
+        Running events (and restarted stops) are skipped. With
+        `keep_cpu_running`, the CPU's target-sync stops are resumed and skipped
+        too. Any other state fails the test, saying what the process did before
+        `doing` ("stopping", "exiting"): with the exit status and its
+        description if it exited, so that a lost connection to lldb-server
+        (status -1) is told apart from the program ending. A program that never
+        gets where the test expects fails instead of hanging the test.
         """
         what = "GPU" if process.GetTarget() == self.gpu_target else "CPU"
         listener = self.dbg.GetListener()
         while True:
-            state = self._next_state(process, what, listener, timeout_seconds)
+            state = self._next_state(
+                process,
+                what,
+                listener,
+                timeout_seconds,
+                keep_cpu_running and what == "GPU",
+            )
+            if (
+                keep_cpu_running
+                and what == "CPU"
+                and state == lldb.eStateStopped
+                and self._cpu_stopped_only_for_target_sync()
+            ):
+                # The CPU stopped only because the GPU did.
+                self._keep_cpu_running(timeout_seconds)
+                continue
             if state == wanted:
                 return
             if state == lldb.eStateRunning:
@@ -299,18 +457,38 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             self.fail(f"{what} process {entered} before {doing}")
 
     def wait_for_stop(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> None:
-        """Wait for `process` (CPU or GPU), which is running, to stop. Nothing
-        is resumed."""
-        self._wait_for_state(process, lldb.eStateStopped, "stopping", timeout_seconds)
+        """Wait for `process` (CPU or GPU), which is running, to stop.
+
+        Nothing is resumed, except that a wait on the CPU resumes it from
+        target-sync stops, since the test wants a stop of the CPU's own.
+        """
+        keep_cpu_running = (
+            process.GetTarget() != self.gpu_target and self.cpu_stops_with_gpu()
+        )
+        self._wait_for_state(
+            process, lldb.eStateStopped, "stopping", timeout_seconds, keep_cpu_running
+        )
 
     def wait_for_exit(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> int:
         """Wait for `process` (CPU or GPU) to exit and return its exit status.
 
-        Nothing is resumed: the test resumes both processes first. A stop fails
-        the test, so a program that stops again instead of finishing fails
-        instead of hanging.
+        The test resumes the processes first; a CPU in a target-sync stop is
+        resumed here. Any other stop fails the test, so a program that stops
+        again instead of finishing fails instead of hanging.
         """
-        self._wait_for_state(process, lldb.eStateExited, "exiting", timeout_seconds)
+        keep_cpu_running = self.cpu_stops_with_gpu()
+        # An earlier wait on the GPU may already have pulled the CPU's exit.
+        if keep_cpu_running and process.GetState() == lldb.eStateExited:
+            return process.GetExitStatus()
+        if keep_cpu_running and process.GetTarget() == self.gpu_target:
+            # The GPU is already resumed, so the CPU's target-sync stop is from
+            # an earlier GPU stop and safe to resume now, which saves a slice in
+            # _wait_for_event. Not before a wait on the CPU: this pulls the
+            # CPU's events, and that wait needs its exit event.
+            self._keep_cpu_running(timeout_seconds)
+        self._wait_for_state(
+            process, lldb.eStateExited, "exiting", timeout_seconds, keep_cpu_running
+        )
         return process.GetExitStatus()
 
     def assert_exit_status(self, status: int, timeout_seconds: int = 60) -> None:
@@ -334,9 +512,22 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             chunks.append(chunk)
         return "".join(chunks)
 
-    def wait_for_gpu_to_stop(self, timeout_seconds: int = 60) -> None:
-        """Wait for the running GPU process to stop. Nothing is resumed."""
-        self.wait_for_stop(self.gpu_process, timeout_seconds)
+    def wait_for_gpu_to_stop(
+        self, timeout_seconds: int = 60, *, keep_cpu_running: bool = False
+    ) -> None:
+        """Wait for the running GPU process to stop.
+
+        Nothing is resumed, unless `keep_cpu_running` is set: then a CPU left
+        in a target-sync stop with no GPU stop to go with it is resumed (see
+        _wait_for_event).
+        """
+        self._wait_for_state(
+            self.gpu_process,
+            lldb.eStateStopped,
+            "stopping",
+            timeout_seconds,
+            keep_cpu_running and self.cpu_stops_with_gpu(),
+        )
 
     def continue_cpu_and_wait_for_gpu_to_stop(self, timeout_seconds: int = 60):
         """Resume the CPU process and wait for the GPU process to stop.
@@ -450,12 +641,23 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         own anchor (a breakpoint or function) and match on it, so a mismatch
         fails on the first resume instead of consuming the stops that belong to
         later checks.
+
+        A CPU in a target-sync stop is resumed along with the GPU. After each
+        GPU stop, this waits briefly for the CPU's matching stop, so that both
+        processes are stopped when it returns.
         """
         self.setAsync(True)
+        keep_cpu_running = self.cpu_stops_with_gpu()
         for _ in range(max_continues):
+            if keep_cpu_running:
+                self._keep_cpu_running(timeout_seconds)
             error = self.gpu_process.Continue()
             self.assertSuccess(error, "continue GPU process")
-            self.wait_for_gpu_to_stop(timeout_seconds)
+            self.wait_for_gpu_to_stop(
+                timeout_seconds, keep_cpu_running=keep_cpu_running
+            )
+            if keep_cpu_running:
+                self._settle_cpu(self.CPU_STOP_GRACE_SECONDS)
             found = match(self.gpu_process)
             if found is not None:
                 return found
