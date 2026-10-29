@@ -36,10 +36,12 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate)
+ProcessNVGPU::ProcessNVGPU(lldb::pid_t pid, NativeDelegate &delegate,
+                           MainLoop &main_loop)
     : NativeProcessProtocol(pid, -1, delegate), m_arch(GetNVPTXArchitecture()),
-      m_api(nullptr), m_fallback_thread(*this,
-                                        /*thread_state=*/nullptr, /*tid=*/1) {
+      m_api(nullptr), m_main_loop(main_loop),
+      m_fallback_thread(*this,
+                        /*thread_state=*/nullptr, /*tid=*/1) {
   // A tid like -1 would be better, but that would make the first real thread to
   // have a thread id of #2 in the client because the fallback thread would have
   // a different internal id. Therefore, we keep tid=1 for the first HW thread
@@ -70,26 +72,61 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
 
   SetState(StateType::eStateRunning, true);
 
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api) {
+    // The client takes a failed resume for a lost connection and drops the GPU
+    // process. Stop again for the same reason instead, once the server has
+    // finished handling the resume request.
+    std::string reason = llvm::toString(api.takeError());
+    LLDB_LOG(log, "NVGPU::Resume(). Stopping again: {0}", reason);
+    m_main_loop.AddPendingCallback(
+        [this, reason](MainLoopBase &) { ReportFallbackStop(reason); });
+    return Status();
+  }
+
   if (m_is_faking_a_stop_for_dyld) {
     m_is_faking_a_stop_for_dyld = false;
     // Ack'ing here is fine because the next call to OnDebuggerAPIEvent will
     // be triggered after the Resume packet has been fully processed.
-    CUDBGResult res = GetCudaAPI().acknowledgeSyncEvents();
+    CUDBGResult res = api->acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
-      logAndReportFatalError(
-          "Failed to acknowledge CUDA Debugger API events. {}",
-          cudbgGetErrorString(res));
+      ReportFaultAfterResume(
+          llvm::formatv("Failed to acknowledge CUDA Debugger API events. {0}",
+                        cudbgGetErrorString(res))
+              .str());
+      return Status();
     }
+    // The driver only notifies for newly enqueued events, so anything still
+    // queued behind the ELF image load would never be drained on its own.
+    if (m_sync_event_drain_notifier)
+      m_sync_event_drain_notifier();
   } else {
     for (DeviceState &device : m_devices.GetDevices()) {
-      CUDBGResult res = GetCudaAPI().resumeDevice(device.GetDeviceId());
-      if (res != CUDBG_SUCCESS)
-        logAndReportFatalError("Failed to resume device: {}",
-                               cudbgGetErrorString(res));
+      CUDBGResult res = api->resumeDevice(device.GetDeviceId());
+      if (res != CUDBG_SUCCESS) {
+        ReportFaultAfterResume(llvm::formatv("Failed to resume device {0}. {1}",
+                                             device.GetDeviceId(),
+                                             cudbgGetErrorString(res))
+                                   .str());
+        return Status();
+      }
     }
   }
 
   return Status();
+}
+
+void ProcessNVGPU::ReportFaultAfterResume(std::string description) {
+  LLDB_LOG(GetLog(GDBRLog::Plugin), "NVGPU::Resume(). {0}", description);
+  // The event drain can run before the callback, so stop using the API now.
+  m_api = nullptr;
+  m_api_fault = description;
+  m_main_loop.AddPendingCallback([this, description](MainLoopBase &) {
+    if (m_api_fault_handler)
+      m_api_fault_handler(description);
+    else
+      ReportFallbackStop(description);
+  });
 }
 
 void ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
@@ -107,8 +144,11 @@ void ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
 Status ProcessNVGPU::Halt() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::Halt(). Pre-halt state: {}", StateToString(GetState()));
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return Status::FromError(api.takeError());
   // According to Andrew, halting the devices takes ~0.2ms - ~10 ms.
-  CUDBGResult res = GetCudaAPI().suspendDevice(/*device_id=*/0);
+  CUDBGResult res = api->suspendDevice(/*device_id=*/0);
 
   Status status;
   if (res != CUDBG_SUCCESS) {
@@ -177,9 +217,13 @@ ArchSpec ProcessNVGPU::GetNVPTXArchitecture() {
 
 Status ProcessNVGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
                                    bool hardware) {
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return Status::FromError(api.takeError());
+
   // setBreakpoint doesn't return coherent errors, so we just ignore them.
   for (DeviceState &device : m_devices.GetDevices()) {
-    CUDBGResult res = m_api->setBreakpoint(device.GetDeviceId(), addr);
+    CUDBGResult res = api->setBreakpoint(device.GetDeviceId(), addr);
     if (res != CUDBG_SUCCESS) {
       LLDB_LOG(GetLog(GDBRLog::Plugin),
                "NVGPU::SetBreakpoint(). Failed to set breakpoint on device "
@@ -192,9 +236,13 @@ Status ProcessNVGPU::SetBreakpoint(lldb::addr_t addr, uint32_t size,
 }
 
 Status ProcessNVGPU::RemoveBreakpoint(lldb::addr_t addr, bool hardware) {
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return Status::FromError(api.takeError());
+
   // unsetBreakpoint doesn't return coherent errors, so we just ignore them.
   for (DeviceState &device : m_devices.GetDevices()) {
-    CUDBGResult res = m_api->unsetBreakpoint(device.GetDeviceId(), addr);
+    CUDBGResult res = api->unsetBreakpoint(device.GetDeviceId(), addr);
     if (res != CUDBG_SUCCESS) {
       LLDB_LOG(
           GetLog(GDBRLog::Plugin),
@@ -239,7 +287,8 @@ ProcessNVGPU::Manager::Launch(
     ProcessLaunchInfo &launch_info,
     NativeProcessProtocol::NativeDelegate &native_delegate) {
   lldb::pid_t pid = 1;
-  auto gpu_up = std::make_unique<ProcessNVGPU>(pid, native_delegate);
+  auto gpu_up =
+      std::make_unique<ProcessNVGPU>(pid, native_delegate, m_mainloop);
   gpu_up->SetLaunchInfo(launch_info);
   return gpu_up;
 }
@@ -433,7 +482,7 @@ GetCubinBaseName(const llvm::object::ELF64LEObjectFile &elf) {
   return GetCubinFunctionName(*first_global);
 }
 
-void ProcessNVGPU::OnElfImageLoaded(
+llvm::Error ProcessNVGPU::OnElfImageLoaded(
     const CUDBGEvent::cases_st::elfImageLoaded_st &event) {
   const auto &[dev_id, context_id, module_id, elf_image_size, handle,
                properties] = event;
@@ -446,29 +495,30 @@ void ProcessNVGPU::OnElfImageLoaded(
             "{}, module_id: {}, elf_image_size: {}, handle: {}, properties: {}",
             dev_id, context_id, module_id, elf_image_size, handle, properties);
 
+  // Only the event drain calls this, and the drain never runs without the API.
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return api.takeError();
+
   // Obtain the elf image
   std::unique_ptr<llvm::WritableMemoryBuffer> data_buffer =
       llvm::WritableMemoryBuffer::getNewUninitMemBuffer(elf_image_size);
-  CUDBGResult res = GetCudaAPI().getElfImageByHandle(
+  CUDBGResult res = api->getElfImageByHandle(
       dev_id, handle, CUDBGElfImageType::CUDBG_ELF_IMAGE_TYPE_RELOCATED,
       data_buffer->getBufferStart(), elf_image_size);
-  if (res != CUDBG_SUCCESS) {
-    logAndReportFatalError(
-        "NVGPU::OnElfImageLoaded(). Failed to get elf image: {}",
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt(
+        "Failed to get the ELF image of CUDA module {0:x}. {1}", handle,
         cudbgGetErrorString(res));
-    return;
-  }
 
   // Create a MemoryBufferRef from the data buffer
   llvm::MemoryBufferRef elf_buffer_ref(*data_buffer);
   llvm::Expected<llvm::object::ELF64LEObjectFile> elf_or_err =
       llvm::object::ELF64LEObjectFile::create(elf_buffer_ref);
-  if (!elf_or_err) {
+  if (!elf_or_err)
     logAndReportFatalError(
         "NVGPU::OnElfImageLoaded(). Failed to parse elf image: {}",
         llvm::toString(elf_or_err.takeError()));
-    return;
-  }
 
   // The client finds a cubin's module by this name, and keeps the modules of
   // cubins that were unloaded, so a name is never given out twice.
@@ -491,6 +541,7 @@ void ProcessNVGPU::OnElfImageLoaded(
 
   m_unreported_libraries.push_back(lib1);
   m_all_libraries.push_back(lib1);
+  return llvm::Error::success();
 }
 
 bool ProcessNVGPU::HasUnreportedLibraries() const {
@@ -576,6 +627,24 @@ void ProcessNVGPU::OnAllDevicesSuspended(
   ChangeStateToStopped();
 }
 
+void ProcessNVGPU::ReportFallbackStop(llvm::StringRef description) {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::ReportFallbackStop(). {0}", description);
+
+  ReleaseAndClearThreads(m_threads);
+  m_fallback_thread.SetStopped(lldb::eStopReasonException, description);
+  m_threads.push_back(
+      std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
+  SetCurrentThreadID(m_fallback_thread.GetID());
+  ChangeStateToStopped();
+}
+
+void ProcessNVGPU::OnDebuggerAPIFault(std::string description) {
+  m_api = nullptr;
+  m_api_fault = std::move(description);
+  ReportFallbackStop(*m_api_fault);
+}
+
 ProcessNVGPU::Extension ProcessNVGPU::Manager::GetSupportedExtensions() const {
   return Extension::lldb_settings | Extension::address_spaces;
 }
@@ -598,12 +667,12 @@ NVGPUThreadRange ProcessNVGPU::GPUThreads() {
   return NVGPUThreadRange(m_threads);
 }
 
-const CUDBGAPI_st &ProcessNVGPU::GetCudaAPI() {
-  if (!m_api) {
-    logAndReportFatalError("NVGPU::GetCudaAPI(). CUDA Debugger API is "
-                           "not initialized");
-  }
-  return *m_api;
+llvm::Expected<const CUDBGAPI_st &> ProcessNVGPU::GetCudaAPI() {
+  if (m_api)
+    return *m_api;
+  if (m_api_fault)
+    return llvm::createStringError(*m_api_fault);
+  return llvm::createStringError("The CUDA debugger API is not available");
 }
 
 std::vector<AddressSpaceInfo> ProcessNVGPU::GetAddressSpaces() {
@@ -614,6 +683,10 @@ std::vector<AddressSpaceInfo> ProcessNVGPU::GetAddressSpaces() {
 Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
                                 size_t size, size_t &bytes_read) {
   bytes_read = 0;
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return Status::FromError(api.takeError());
+
   const lldb::addr_t addr = process_addr.GetValue();
   const lldb::addr_space_t addr_space =
       process_addr.IsInDefaultAddressSpace()
@@ -639,7 +712,7 @@ Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
 
   if (!info->is_thread_specific) {
     // Const storage can be read as global storage.
-    CUDBGResult res = GetCudaAPI().readGlobalMemory(addr, buf, size);
+    CUDBGResult res = api->readGlobalMemory(addr, buf, size);
     if (res != CUDBG_SUCCESS)
       return Status::FromErrorString(cudbgGetErrorString(res));
 
@@ -675,25 +748,23 @@ Status ProcessNVGPU::ReadMemory(const ProcessAddress &process_addr, void *buf,
   CUDBGResult res;
   switch (addr_space) {
   case AddressSpace::LocalStorage: {
-    res = GetCudaAPI().readLocalMemory(*physical.device, *physical.sm,
-                                       *physical.warp, *physical.lane, addr,
-                                       buf, size);
+    res = api->readLocalMemory(*physical.device, *physical.sm, *physical.warp,
+                               *physical.lane, addr, buf, size);
     break;
   }
   case AddressSpace::ParamStorage: {
-    res = GetCudaAPI().readParamMemory(*physical.device, *physical.sm,
-                                       *physical.warp, addr, buf, size);
+    res = api->readParamMemory(*physical.device, *physical.sm, *physical.warp,
+                               addr, buf, size);
     break;
   }
   case AddressSpace::SharedStorage: {
-    res = GetCudaAPI().readSharedMemory(*physical.device, *physical.sm,
-                                        *physical.warp, addr, buf, size);
+    res = api->readSharedMemory(*physical.device, *physical.sm, *physical.warp,
+                                addr, buf, size);
     break;
   }
   case AddressSpace::GenericStorage: {
-    res = GetCudaAPI().readGenericMemory(*physical.device, *physical.sm,
-                                         *physical.warp, *physical.lane, addr,
-                                         buf, size);
+    res = api->readGenericMemory(*physical.device, *physical.sm, *physical.warp,
+                                 *physical.lane, addr, buf, size);
     break;
   }
   default:
