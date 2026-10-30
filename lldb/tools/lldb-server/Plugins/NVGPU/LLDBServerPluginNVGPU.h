@@ -115,9 +115,11 @@ private:
   ///     What went wrong, which the stop shows.
   void ReportDebuggerAPIFault(std::string description);
 
-  /// Drain the event queue until empty, then acknowledge once, returning how
-  /// many events were handled. One notification can cover several events, so
-  /// draining one at a time would strand the rest.
+  /// Drain the event queue until it is empty or a stop is reported, then
+  /// acknowledge once, returning how many events were handled. One
+  /// notification can cover several events, so draining one at a time would
+  /// strand the rest. While the GPU process is stopped, nothing is drained,
+  /// for the reasons in the class comment of ProcessNVGPU.
   llvm::Expected<int> DrainSyncEvents();
 
   /// Finalize and drop the debugger API along with everything holding a

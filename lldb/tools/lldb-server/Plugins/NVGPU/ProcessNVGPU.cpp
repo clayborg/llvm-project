@@ -13,6 +13,7 @@
 #include "ThreadNVGPU.h"
 #include "cudadebugger.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
+#include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/DataBufferLLVM.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/State.h"
@@ -90,34 +91,48 @@ Status ProcessNVGPU::Resume(const ResumeActionList &resume_actions) {
     // be triggered after the Resume packet has been fully processed.
     CUDBGResult res = api->acknowledgeSyncEvents();
     if (res != CUDBG_SUCCESS) {
-      ReportFaultAfterResume(
+      QueueDebuggerAPIFault(
           llvm::formatv("Failed to acknowledge CUDA Debugger API events. {0}",
                         cudbgGetErrorString(res))
               .str());
       return Status();
     }
-    // The driver only notifies for newly enqueued events, so anything still
-    // queued behind the ELF image load would never be drained on its own.
-    if (m_sync_event_drain_notifier)
-      m_sync_event_drain_notifier();
-  } else {
-    for (DeviceState &device : m_devices.GetDevices()) {
-      CUDBGResult res = api->resumeDevice(device.GetDeviceId());
-      if (res != CUDBG_SUCCESS) {
-        ReportFaultAfterResume(llvm::formatv("Failed to resume device {0}. {1}",
-                                             device.GetDeviceId(),
-                                             cudbgGetErrorString(res))
-                                   .str());
-        return Status();
-      }
-    }
+  } else if (llvm::Error err = ResumeDevices(*api)) {
+    QueueDebuggerAPIFault(llvm::toString(std::move(err)));
+    return Status();
   }
 
+  // The events that arrived while the GPU process was stopped wait in the
+  // queue, and the driver only notifies for newly enqueued events.
+  if (m_sync_event_drain_notifier)
+    m_sync_event_drain_notifier();
   return Status();
 }
 
-void ProcessNVGPU::ReportFaultAfterResume(std::string description) {
-  LLDB_LOG(GetLog(GDBRLog::Plugin), "NVGPU::Resume(). {0}", description);
+llvm::Error ProcessNVGPU::ResumeDevices(const CUDBGAPI_st &api) {
+  // Resuming the devices one at a time can miss events, but drivers older than
+  // CUDA 13.2 have no call that resumes them all.
+  if (GetAPIVersion().AtLeast(13, 2, 0)) {
+    CUDBGResult res = api.resumeAllDevices();
+    if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_RUNNING_DEVICE)
+      return createStringErrorFmt("Failed to resume the CUDA devices. {0}",
+                                  cudbgGetErrorString(res));
+    return llvm::Error::success();
+  }
+
+  for (DeviceState &device : m_devices.GetDevices()) {
+    CUDBGResult res = api.resumeDevice(device.GetDeviceId());
+    if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_RUNNING_DEVICE)
+      return createStringErrorFmt("Failed to resume device {0}. {1}",
+                                  device.GetDeviceId(),
+                                  cudbgGetErrorString(res));
+  }
+  return llvm::Error::success();
+}
+
+void ProcessNVGPU::QueueDebuggerAPIFault(std::string description) {
+  LLDB_LOG(GetLog(GDBRLog::Plugin), "NVGPU::QueueDebuggerAPIFault(). {0}",
+           description);
   // The event drain can run before the callback, so stop using the API now.
   m_api = nullptr;
   m_api_fault = description;
@@ -148,26 +163,7 @@ llvm::Error ProcessNVGPU::SetDebuggerAPI(CUDADebuggerAPI &api) {
 
 Status ProcessNVGPU::Halt() {
   Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVGPU::Halt(). Pre-halt state: {}", StateToString(GetState()));
-  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
-  if (!api)
-    return Status::FromError(api.takeError());
-  // According to Andrew, halting the devices takes ~0.2ms - ~10 ms.
-  CUDBGResult res = api->suspendDevice(/*device_id=*/0);
-
-  Status status;
-  if (res != CUDBG_SUCCESS) {
-    std::string error_string =
-        std::string("Failed to suspend device. ") + cudbgGetErrorString(res);
-    LLDB_LOG(log, "NVGPU::Halt(). {}", error_string);
-    status = Status::FromErrorString(error_string.c_str());
-  }
-  return status;
-}
-
-void ProcessNVGPU::ChangeStateToStopped() {
-  Log *log = GetLog(GDBRLog::Plugin);
-  LLDB_LOG(log, "NVGPU::ChangeStateToStopped(). Pre-stop state: {}",
+  LLDB_LOG(log, "NVGPU::Halt(). Pre-stop state: {0}",
            StateToString(GetState()));
 
   for (ThreadNVGPU &thread : GPUThreads()) {
@@ -176,6 +172,7 @@ void ProcessNVGPU::ChangeStateToStopped() {
   }
 
   SetState(StateType::eStateStopped, true);
+  return Status();
 }
 
 bool ProcessNVGPU::IsDeviceStateCurrent() const {
@@ -193,7 +190,47 @@ Status ProcessNVGPU::Signal(int signo) {
   return Status::FromErrorString("unimplemented");
 }
 
-Status ProcessNVGPU::Interrupt() { return Status(); }
+Status ProcessNVGPU::Interrupt() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "NVGPU::Interrupt(). Pre-interrupt state: {0}",
+           StateToString(GetState()));
+
+  // The interrupt crossed the stop that answers it.
+  if (!StateIsRunningState(GetState()))
+    return Status();
+
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api) {
+    // Without the API, the GPU runs only until the stop that the last resume
+    // queued when it found no API or failed. That stop answers the interrupt.
+    LLDB_LOG_ERROR(log, api.takeError(), "NVGPU::Interrupt(). {0}");
+    return Status();
+  }
+
+  if (!GetAPIVersion().AtLeast(13, 2, 0)) {
+    LLDB_LOG(log, "NVGPU::Interrupt(). Suspending the devices without waiting "
+                  "needs a CUDA 13.2 or newer driver");
+    return Status();
+  }
+
+  CUDBGResult res = api->suspendAllDevices(/*nonBlocking=*/1);
+  if (res == CUDBG_SUCCESS) {
+    m_interrupt_state = InterruptState::Waiting;
+    return Status();
+  }
+  // Something suspended the devices first, and its event answers the
+  // interrupt: a breakpoint's or an exception's, or the suspension that an
+  // earlier interrupt requested, whose event has not arrived yet.
+  if (res == CUDBG_ERROR_SUSPENDED_DEVICE) {
+    if (m_interrupt_state == InterruptState::StaleSuspension)
+      m_interrupt_state = InterruptState::Waiting;
+    return Status();
+  }
+  QueueDebuggerAPIFault(llvm::formatv("Failed to suspend the CUDA devices. {0}",
+                                      cudbgGetErrorString(res))
+                            .str());
+  return Status();
+}
 
 Status ProcessNVGPU::Kill() { return Status(); }
 
@@ -568,9 +605,13 @@ void ProcessNVGPU::ReportDyldStop() {
   LLDB_LOG(log, "NVGPU::ReportDyldStop()");
 
   m_is_faking_a_stop_for_dyld = true;
+  // This stop answers a waiting interrupt, but it leaves the devices running,
+  // so the suspension that Interrupt requested still reports itself.
+  if (m_interrupt_state == InterruptState::Waiting)
+    m_interrupt_state = InterruptState::StaleSuspension;
   ThreadNVGPU &thread = *GPUThreads().begin();
   thread.SetStoppedByDynamicLoader();
-  SetState(StateType::eStateStopped, true);
+  Halt();
 }
 
 /// Release all pointers to ThreadNVGPU objects and clear the vector.
@@ -590,13 +631,38 @@ ProcessNVGPU::~ProcessNVGPU() {
   ReleaseAndClearThreads(m_threads);
 }
 
-llvm::Error ProcessNVGPU::OnAllDevicesSuspended(
+llvm::Expected<ProcessNVGPU::SuspendStop> ProcessNVGPU::OnAllDevicesSuspended(
     const CUDBGEvent::cases_st::allDevicesSuspended_st &event) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
+  // The API sends this event for a breakpoint, an exception, or a suspension
+  // that Interrupt requested. Only the last has no broken or faulted device.
+  bool is_interrupted = !event.brokenDevicesMask && !event.faultedDevicesMask;
+  if (is_interrupted &&
+      m_interrupt_state == InterruptState::StaleSuspension) {
+    m_interrupt_state = InterruptState::None;
+    // Events wait while the GPU process is stopped, so the client has resumed
+    // from the dyld stop that answered the interrupt, and a resume from a dyld
+    // stop leaves the devices to this suspension.
+    LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended(). Resuming the devices "
+                  "that a stale suspension suspended");
+    llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+    if (!api)
+      return api.takeError();
+    if (llvm::Error err = ResumeDevices(*api))
+      return std::move(err);
+    return SuspendStop::None;
+  }
+
+  // This stop answers a waiting interrupt, whatever its reason. No event for
+  // the suspension follows: when a breakpoint or an exception suspends the
+  // devices first, the driver reports that instead.
+  bool answers_interrupt = m_interrupt_state == InterruptState::Waiting;
+  m_interrupt_state = InterruptState::None;
+
   if (llvm::Error err = m_devices.BatchUpdate(GetNextStopID()))
-    return err;
+    return std::move(err);
   LLDB_LOGV(log, "Device info dump:\n{}", m_devices.Dump());
 
   ReleaseAndClearThreads(m_threads);
@@ -639,8 +705,20 @@ llvm::Error ProcessNVGPU::OnAllDevicesSuspended(
 
   SetCurrentThreadID(exception_thread_id.value_or(
       breakpoint_thread_id.value_or(m_threads.front()->GetID())));
-  ChangeStateToStopped();
-  return llvm::Error::success();
+  // A thread that hit a breakpoint or raised an exception before the devices
+  // stopped keeps that stop, which answers the interrupt.
+  SuspendStop stop = SuspendStop::Stopped;
+  if (answers_interrupt && !exception_thread_id && !breakpoint_thread_id) {
+    // The client reads the signal in the GPU target's table, which
+    // UnixSignals::Create picks from the triple, so the host's SIGSTOP would
+    // read as another signal.
+    int sigstop = UnixSignals::Create(GetArchitecture())
+                      ->GetSignalNumberFromName("SIGSTOP");
+    static_cast<ThreadNVGPU &>(*m_threads.front()).SetStoppedBySignal(sigstop);
+    stop = SuspendStop::Interrupted;
+  }
+  Halt();
+  return stop;
 }
 
 void ProcessNVGPU::ReportFallbackStop(llvm::StringRef description) {
@@ -652,7 +730,7 @@ void ProcessNVGPU::ReportFallbackStop(llvm::StringRef description) {
   m_threads.push_back(
       std::unique_ptr<NativeThreadProtocol>(&m_fallback_thread));
   SetCurrentThreadID(m_fallback_thread.GetID());
-  ChangeStateToStopped();
+  Halt();
 }
 
 void ProcessNVGPU::OnDebuggerAPIFault(std::string description) {

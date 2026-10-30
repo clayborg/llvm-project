@@ -167,6 +167,25 @@ reports the same exception again.
 A call into the API that fails while LLDB reads a GPU thread's registers makes
 only the registers it reads unavailable.
 
+``process interrupt`` on the GPU target stops the GPU, along with any kernel it
+is running, and lists that kernel's threads. The selected thread stops with
+signal ``SIGSTOP``, as an interrupted CPU process does. A thread that hits a
+breakpoint or raises an exception before the GPU stops reports that stop
+instead. The CPU process keeps running, unlike when the GPU stops at a
+breakpoint or an exception: LLDB also interrupts the GPU to set, remove, or
+disable a breakpoint while a kernel runs, and resumes it at once, with no stop
+that the user sees, and lldb-server cannot tell the two interrupts apart.
+
+Interrupting the GPU needs a CUDA 13.2 or newer driver. With an older driver,
+no stop answers the interrupt, and LLDB ends the GPU process with "lost
+connection" once ``target.process.interrupt-timeout`` expires. Changing a GPU
+breakpoint while a kernel runs does the same.
+
+While the GPU process is stopped, lldb-server leaves the CUDA driver's events
+for when it resumes. A CPU thread that the driver holds until the debugger
+handles its event, such as one that creates a CUDA context or loads a module,
+waits until then.
+
 GPU thread coordinates
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -251,9 +270,10 @@ reads core files or other files from disk needs no GPU and runs anywhere. The
 test base classes in ``lldbsuite.test.tools.gpu`` apply this by default; its
 ``nvgpu_decorators`` module describes how to mark a test that differs.
 
-A test method that needs a particular GPU, such as one with a minimum compute
-capability, carries ``@skipUnlessNVGPU`` with the requirements from
-``nvgpu_decorators``, and is skipped on a machine whose GPU does not meet them:
+A test method that needs a particular GPU or driver, such as a minimum compute
+capability or CUDA driver version, carries ``@skipUnlessNVGPU`` with the
+requirements from ``nvgpu_decorators``, and is skipped on a machine that does
+not meet them:
 
 .. code-block:: python
 
@@ -261,8 +281,14 @@ capability, carries ``@skipUnlessNVGPU`` with the requirements from
   def test_clusters(self):
       ...
 
+  @skipUnlessNVGPU(Driver(at_least=(13, 2)))  # a CUDA 13.2 or newer driver
+  def test_interrupt(self):
+      ...
+
 Device 0 is the first GPU the program sees, in CUDA's device order, which puts
-the fastest GPU first unless ``CUDA_DEVICE_ORDER`` says otherwise.
+the fastest GPU first unless ``CUDA_DEVICE_ORDER`` says otherwise. A test needs
+a newer driver than the CUDA 13.0 minimum when LLDB uses a part of the CUDA
+debugger API that older drivers lack.
 
 A test that needs no GPU but builds a CUDA program sets the GPU architecture in
 its Makefile, for example ``NVCC_ARCHFLAGS := -arch=sm_80``. The default,

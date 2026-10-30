@@ -38,5 +38,6 @@ lldb_apply_cuda_env_definitions(lldbServerPluginNVGPU)
 # Link against CUDA libraries if needed
 target_link_libraries(lldbServerPluginNVGPU PRIVATE
   ${CUDA_LIBRARIES}
+  lldbTarget
   lldbUtilityNVGPU
 )
