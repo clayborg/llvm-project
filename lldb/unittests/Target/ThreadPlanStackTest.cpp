@@ -57,9 +57,7 @@ public:
   void PrepareThreadRefresh(std::vector<ThreadSP> threads) {
     next_threads = std::move(threads);
     refresh_threads = true;
-    // This branch records private state on Process. Upstream uses
-    // m_current_private_state_thread_sp, which is not here.
-    SetPrivateState(eStateStopped);
+    m_private_state.SetValue(eStateStopped);
     m_mod_id.BumpStopID();
   }
 
