@@ -29,6 +29,47 @@ namespace lldb_private::lldb_server {
 /// state. It extends NativeProcessProtocol, which was meant for CPU
 /// processes, but fortunately it provides most of the abstractions we need to
 /// manage the GPU.
+///
+/// How the GPU process stops:
+///
+/// The state of the GPU process is what lldb-server has told the client. It
+/// runs from Resume until a stop is reported, which sends the client a stop
+/// reply. The devices have a state of their own. The driver suspends every
+/// device when a thread hits a breakpoint or raises an exception, and when
+/// Interrupt asks it to, and reports the suspension with
+/// CUDBG_EVENT_ALL_DEVICES_SUSPENDED. A module load is reported as a dyld stop
+/// that leaves the devices running.
+///
+/// LLDBServerPluginNVGPU::DrainSyncEvents handles the driver's events only
+/// while the GPU process runs, that is, while the client waits for a stop.
+/// Reporting a stop ends the drain, and Resume drains the events that waited.
+/// Handling an event can report a stop, and over a stop that the client
+/// already has, it would rewrite that stop without telling the client. And
+/// acknowledgeSyncEvents acknowledges every event read so far, so the only way
+/// to keep an event unacknowledged, as a dyld stop keeps its module load to
+/// hold the CPU thread that loads the module, is to stop reading at it.
+///
+/// Only a thread whose own event stopped the GPU reports a stop reason: a
+/// breakpoint, an exception, or dyld for the first thread at a module load.
+/// The other threads stopped because their device did, and report none, as
+/// the other threads of a stopped CPU process do. Tools act on each thread
+/// that has a reason: lldb-dap sends a stopped event for each, for example.
+///
+/// The client takes the next stop after its interrupt for the answer,
+/// whatever its reason. When the suspension that Interrupt requested is the
+/// answer, the selected thread reports SIGSTOP, as a CPU process interrupted
+/// the same way does. A breakpoint or an exception that comes first answers
+/// it instead, and the driver sends no event for the suspension. A dyld stop
+/// that comes first leaves the devices running, so the suspension's event
+/// still comes, after the client has resumed, and only resumes the devices:
+/// see InterruptState. lldb also interrupts the GPU to send a packet
+/// while it runs, such as one that sets a breakpoint, and resumes it at once.
+/// lldb-server cannot tell that from the user's interrupt, so an interrupt
+/// leaves the CPU running, while a breakpoint or an exception stops it too,
+/// unless NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP is set.
+///
+/// Halt reports a stop, as in the other GPU plug-ins, and never suspends the
+/// devices.
 class ProcessNVGPU : public NativeProcessProtocol {
 public:
   /// Class that manages the creation of NVGPU objects.
@@ -82,16 +123,16 @@ public:
   /// destroys it, so this process cannot be left holding a dangling table.
   void ClearDebuggerAPI() { m_api = nullptr; }
 
-  /// Register a notifier that re-runs sync-event processing after the deferred
-  /// ack on a dyld fake-stop resume, without which events queued behind the
-  /// deferred CUDBG_EVENT_ELF_IMAGE_LOADED are never drained.
+  /// Register a notifier that Resume calls to drain the sync events that
+  /// waited while the GPU process was stopped. The driver notifies only for
+  /// newly enqueued events, so nothing else would drain them.
   void SetSyncEventDrainNotifier(std::function<void()> notifier) {
     m_sync_event_drain_notifier = std::move(notifier);
   }
 
   /// Register how to report a call into the debugger API that fails while a
-  /// resume request is handled. The plug-in reports it as it reports an
-  /// internal error.
+  /// resume or interrupt request is handled. The plug-in reports it as it
+  /// reports an internal error.
   void SetDebuggerAPIFaultHandler(
       std::function<void(std::string description)> handler) {
     m_api_fault_handler = std::move(handler);
@@ -117,20 +158,13 @@ public:
   ///     Status indicating success or failure of the resume operation.
   Status Resume(const ResumeActionList &resume_actions) override;
 
-  /// Perform \a Halt() and set the stop reason of the first thread to dyld.
-  ///
-  /// This is used to signal that dynamic libraries have been loaded/unloaded
-  /// and the client should update its symbol tables.
-  ///
-  /// \return
-  ///     Status indicating success or failure of the halt operation.
-  Status HaltDueToDyld();
-
-  /// Halt the GPU but don't change its state. That requires a call to
-  /// \a ChangeStateToStopped().
+  /// Report that the GPU stopped: mark the threads that still run as stopped,
+  /// and change the state of the process to stopped, which tells the client.
+  /// As in the other GPU plug-ins, this does not suspend the devices, which the
+  /// driver or Interrupt must already have done.
   ///
   /// \return
-  ///     Status indicating success or failure of the halt operation.
+  ///     Always success.
   Status Halt() override;
 
   /// Detach from the GPU process.
@@ -148,10 +182,18 @@ public:
   ///     Status indicating success or failure of the signal operation.
   Status Signal(int signo) override;
 
-  /// Interrupt execution of the GPU process.
+  /// Stop the GPU at the client's request. The devices are suspended in the
+  /// background, and the debugger API reports the suspension with
+  /// CUDBG_EVENT_ALL_DEVICES_SUSPENDED, whose handler reports the stop: see
+  /// OnAllDevicesSuspended. Suspending the devices this way needs a CUDA 13.2
+  /// or newer driver. With an older one, no stop answers the interrupt, and
+  /// the client ends the GPU process with "lost connection" when its
+  /// interrupt times out.
   ///
   /// \return
-  ///     Status indicating success or failure of the interrupt operation.
+  ///     Success. A failure to suspend the devices is reported as a fault of
+  ///     the debugger API instead, since the client takes a failed interrupt
+  ///     for a lost connection.
   Status Interrupt() override;
 
   /// Terminate the GPU process.
@@ -302,13 +344,6 @@ public:
   std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
-  /// Change the state of the process to stopped and notify delegates. It
-  /// assumes that the GPU is in fact stopped.
-  ///
-  /// This method updates internal state and notifies any registered delegates
-  /// that the process has stopped, allowing them to take appropriate action.
-  void ChangeStateToStopped();
-
   /// \return true if there are new cubins since the last time they were
   /// requested.
   ///
@@ -320,19 +355,41 @@ public:
   ///     True if unreported libraries exist, false otherwise.
   bool HasUnreportedLibraries() const;
 
-  /// Handle the AllDevicesSuspended event.
+  /// The stop that OnAllDevicesSuspended reports.
+  enum class SuspendStop {
+    /// No stop: a dyld stop answered the interrupt that requested the
+    /// suspension.
+    None,
+    /// A stop that answers an interrupt, which no thread stopped for on its
+    /// own. lldb interrupts the GPU for the user, and also to send a packet
+    /// while it runs, such as to set a breakpoint, after which it resumes the
+    /// GPU at once. lldb-server cannot tell the two apart.
+    Interrupted,
+    /// A stop that the GPU made on its own, such as for a breakpoint or an
+    /// exception.
+    Stopped,
+  };
+
+  /// Handle the AllDevicesSuspended event, which the driver sends once it has
+  /// suspended every device. The event drain handles it only while the GPU
+  /// process is running, that is, while the client waits for a stop.
   ///
-  /// Processes the event indicating that all GPU devices have been suspended,
-  /// updating internal state and notifying clients as appropriate.
+  /// Reads the state of the devices and reports a stop. While the client
+  /// waits for the stop that answers its interrupt, the selected thread stops
+  /// with SIGSTOP, unless a thread hit a breakpoint or raised an exception.
+  /// The event for the suspension that Interrupt requested reports no stop
+  /// when a dyld stop answered the interrupt first, and resumes the devices
+  /// instead, since the client has resumed the GPU from that stop.
   ///
   /// \param[in] event
   ///     Event data containing information about the suspended devices.
   ///
   /// \return
-  ///     An error if the state of the devices cannot be read or decoded. The
-  ///     threads are then partially updated, so the caller has to stop with
+  ///     The stop reported, or an error if the state of the devices cannot be
+  ///     read or decoded, or the devices cannot be resumed. The threads are
+  ///     then partially updated, so the caller has to stop with
   ///     OnDebuggerAPIFault, which reports the fallback thread alone.
-  llvm::Error OnAllDevicesSuspended(
+  llvm::Expected<SuspendStop> OnAllDevicesSuspended(
       const CUDBGEvent::cases_st::allDevicesSuspended_st &event);
 
   /// Stop using the debugger API after it faults, by reporting an internal
@@ -369,7 +426,7 @@ public:
   /// as described in the comment for m_is_faking_a_stop_for_dyld.
   ///
   /// This creates a temporary stop state to allow the client to process
-  /// dynamic library changes without actually halting GPU execution.
+  /// dynamic library changes without suspending the devices.
   void ReportDyldStop();
 
   /// \return the registry of all devices.
@@ -405,11 +462,21 @@ private:
   /// be trusted.
   void ReportFallbackStop(llvm::StringRef description);
 
-  /// Stop using the debugger API after a call into it fails during a resume,
-  /// and report \a description through the handler from
-  /// SetDebuggerAPIFaultHandler once the server has answered the request: the
-  /// client takes a failed resume for a lost connection.
-  void ReportFaultAfterResume(std::string description);
+  /// Stop using the debugger API after a call into it fails while a resume or
+  /// interrupt request is handled, and report \a description through the
+  /// handler from SetDebuggerAPIFaultHandler once the server has answered the
+  /// request: the client takes a failed request for a lost connection.
+  void QueueDebuggerAPIFault(std::string description);
+
+  /// Resume every device, with a single call on drivers that have one, CUDA
+  /// 13.2 and newer. A device that is already running is not an error.
+  ///
+  /// \param[in] api
+  ///     The debugger API to resume the devices through.
+  ///
+  /// \return
+  ///     An error if the debugger API fails to resume a device.
+  llvm::Error ResumeDevices(const CUDBGAPI_st &api);
 
   /// Utility for the Manager class to set the launch info for the GPU.
   ///
@@ -450,6 +517,20 @@ private:
   /// we stop processing more APU events until we have resumed after the dyld
   /// event.
   bool m_is_faking_a_stop_for_dyld = false;
+
+  /// Where an interrupt stands between Interrupt and the event for the
+  /// suspension it requested. The client takes the next stop after an
+  /// interrupt as its answer, whatever its reason.
+  enum class InterruptState {
+    /// No suspension that Interrupt requested is on its way.
+    None,
+    /// The client waits for the stop that answers the interrupt.
+    Waiting,
+    /// A dyld stop answered the interrupt, and the event for the suspension
+    /// is still to come. It answers nothing, and only resumes the devices.
+    StaleSuspension,
+  };
+  InterruptState m_interrupt_state = InterruptState::None;
 
   /// See SetSyncEventDrainNotifier.
   std::function<void()> m_sync_event_drain_notifier;

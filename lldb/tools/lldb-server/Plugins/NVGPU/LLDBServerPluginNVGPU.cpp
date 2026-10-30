@@ -14,6 +14,7 @@
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/State.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Error.h"
@@ -269,9 +270,9 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
     return main_loop_event_notifier.takeError();
   m_main_loop_event_notifier_up = std::move(*main_loop_event_notifier);
 
-  // The driver only notifies for newly enqueued events, so anything sitting
-  // behind a deferred CUDBG_EVENT_ELF_IMAGE_LOADED would never be drained on
-  // its own. Let the GPU process re-run the drain to pick those up.
+  // The driver only notifies for newly enqueued events, so the events that
+  // waited while the GPU process was stopped would never be drained on their
+  // own. Let the GPU process re-run the drain when it resumes.
   m_gpu->SetSyncEventDrainNotifier(
       [this]() { m_main_loop_event_notifier_up->FireEvent(); });
   m_gpu->SetDebuggerAPIFaultHandler([this](std::string description) {
@@ -382,7 +383,9 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
   CUDADebuggerAPI &cuda_api = *m_cuda_api;
 
   int events_handled = 0;
-  while (true) {
+  // Handle events only while the GPU process runs, that is, while the client
+  // waits for a stop. The class comment of ProcessNVGPU says why.
+  while (StateIsRunningState(m_gpu->GetState())) {
     CUDBGEvent event;
     CUDBGResult res = cuda_api->getNextEvent(
         CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC, &event);
@@ -402,9 +405,9 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
     switch (event.kind) {
     case CUDBG_EVENT_ELF_IMAGE_LOADED: {
       // Report a dyld stop to the client and stop draining: the events stay
-      // unacknowledged until the client resumes (Resume acknowledges them), and
-      // the next notification picks up where we left off. This will need to
-      // change once we support multiple contexts.
+      // unacknowledged until the client resumes, and Resume acknowledges them
+      // and drains the rest. This will need to change once we support multiple
+      // contexts.
       if (Error err = m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded))
         return std::move(err);
       // A cubin that does not parse is skipped, which leaves nothing to load.
@@ -425,10 +428,13 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
       LLDB_LOG(log, "broken devices {0:x}, faulted devices {1:x}",
                event.cases.allDevicesSuspended.brokenDevicesMask,
                event.cases.allDevicesSuspended.faultedDevicesMask);
-      if (Error err =
-              m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended))
-        return std::move(err);
-      if (CPUStopsWithGPU())
+      Expected<ProcessNVGPU::SuspendStop> stop =
+          m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
+      if (!stop)
+        return stop.takeError();
+      // An interrupt can be lldb sending a packet, after which it resumes the
+      // GPU at once, so the CPU keeps running.
+      if (*stop == ProcessNVGPU::SuspendStop::Stopped && CPUStopsWithGPU())
         HaltNativeProcessIfNeeded();
       break;
     }
@@ -441,9 +447,11 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
   LLDB_LOGV(log, "Done servicing CUDA API events ({0} handled)",
             events_handled);
 
-  // Nothing to acknowledge. Not fatal: a prior drain may have consumed them.
+  // Nothing to acknowledge, because the GPU process is stopped or a prior
+  // drain consumed the events. Not fatal.
   if (events_handled == 0) {
-    LLDB_LOG(log, "notification with no pending events");
+    LLDB_LOG(log, "no events handled while the GPU process is {0}",
+             StateToString(m_gpu->GetState()));
     return events_handled;
   }
 

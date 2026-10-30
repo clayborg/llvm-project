@@ -12,8 +12,8 @@ runs the test program on the GPU to make a core.
 
 In a class that needs no GPU, a method that runs a CUDA program on the GPU
 carries @skipUnlessNVGPUDevice. A method that needs more of the GPU, such as a
-minimum compute capability, carries @skipUnlessNVGPU with the requirements
-defined here, which implies a GPU too:
+minimum compute capability or driver, carries @skipUnlessNVGPU with the
+requirements defined here, which implies a GPU too:
 
     class TestNVGPUDisass(NVGPUTestCaseBase):
         NEEDS_GPU = False
@@ -82,10 +82,10 @@ class SM:
             )
         self.at_least = at_least
 
-    def reason(self, devices):
-        """Return None if `devices`, the compute capability of each GPU in
-        CUDA's device order, meet this requirement, otherwise why not."""
-        major, minor = devices[0]
+    def reason(self, info):
+        """Return None if device 0 of `info`, the GPU info, meets this
+        requirement, otherwise why not."""
+        major, minor = info["devices"][0]
         # A minor version is a single digit, so sm_XY is X * 10 + Y.
         if major * 10 + minor >= self.at_least:
             return None
@@ -94,10 +94,32 @@ class SM:
         )
 
 
+class Driver:
+    """A minimum CUDA version of the driver, which is the version of its CUDA
+    debugger API, written as (major, minor): Driver(at_least=(13, 2)) needs a
+    CUDA 13.2 or newer driver."""
+
+    def __init__(self, *, at_least):
+        major, minor = at_least
+        self.at_least = (major, minor)
+
+    def reason(self, info):
+        """Return None if the driver that `info`, the GPU info, describes
+        meets this requirement, otherwise why not. If the driver's version is
+        unknown, the test runs."""
+        version = (info["debugger_major"], info.get("debugger_minor"))
+        if None in version or version >= self.at_least:
+            return None
+        return "the driver is CUDA {}.{}; the test needs CUDA {}.{} or newer".format(
+            *version, *self.at_least
+        )
+
+
 def skipUnlessNVGPU(*requirements):
     """Mark a test method that runs a CUDA program on a GPU that meets
-    `requirements`, such as SM(at_least=90), so that it is skipped on a machine
-    without one. A method has one mark, which holds all its requirements."""
+    `requirements`, such as SM(at_least=90) or Driver(at_least=(13, 2)), so
+    that it is skipped on a machine without one. A method has one mark, which
+    holds all its requirements."""
 
     def mark(func):
         if isinstance(func, type):
@@ -143,15 +165,15 @@ def device_skip_reason():
 def skip_reason(test):
     """Return why the method that `test` runs, which needs a GPU, cannot run
     here, starting with "nvgpu: ", or None if it can: device_skip_reason(),
-    or a requirement of its @skipUnlessNVGPU marks that device 0 does not
+    or a requirement of its @skipUnlessNVGPU marks that this machine does not
     meet."""
     reason = device_skip_reason()
     if reason:
         return reason
-    devices = _get_gpu_info()["devices"]
+    info = _get_gpu_info()
     method = getattr(test, test._testMethodName)
     for requirement in getattr(method, "NVGPU_REQUIRES", ()):
-        reason = requirement.reason(devices)
+        reason = requirement.reason(info)
         if reason:
             return "nvgpu: " + reason
     return None

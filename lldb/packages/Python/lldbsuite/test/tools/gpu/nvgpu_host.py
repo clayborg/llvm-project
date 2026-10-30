@@ -48,7 +48,13 @@ _CC_MAJOR_ATTRIBUTE = 75
 _CC_MINOR_ATTRIBUTE = 76
 
 
-def gpu_info(devices=(), debugger_major=None, error=None, no_device_param=False):
+def gpu_info(
+    devices=(),
+    debugger_major=None,
+    error=None,
+    no_device_param=False,
+    debugger_minor=None,
+):
     """Return the GPU info: a dictionary of what the probe found. The probe,
     lit and the tests all pass this dictionary around.
 
@@ -59,10 +65,13 @@ def gpu_info(devices=(), debugger_major=None, error=None, no_device_param=False)
         was built for.
     error: None, or why the probe could not find out.
     no_device_param: True when --param nvgpu-no-device hid the GPUs.
+    debugger_minor: the minor version of the driver's CUDA debugger API, which
+        is the driver's CUDA minor version. A test can need a minimum one.
     """
     return {
         "devices": [list(cc) for cc in devices],
         "debugger_major": debugger_major,
+        "debugger_minor": debugger_minor,
         "error": error,
         "no_device_param": no_device_param,
     }
@@ -88,17 +97,17 @@ def probe_child(load_library=None):
     result = cuda.cudbgGetAPIVersion(*(ctypes.byref(v) for v in version))
     if result != _CUDBG_SUCCESS:
         return gpu_info(error=f"cudbgGetAPIVersion failed with CUDBGResult {result}")
-    debugger_major = version[0].value
+    driver = {"debugger_major": version[0].value, "debugger_minor": version[1].value}
 
     result = cuda.cuInit(0)
     if result == _CUDA_ERROR_NO_DEVICE:
         # Not a failure: the machine has no GPU that the tests can see.
-        return gpu_info(debugger_major=debugger_major)
+        return gpu_info(**driver)
     if result != _CUDA_SUCCESS:
         return gpu_info(
-            debugger_major=debugger_major,
             error=f"cuInit failed with {_error_name(cuda, result)}; check that "
             "nvidia-smi works (a driver updated without a reboot fails this way)",
+            **driver,
         )
     count = ctypes.c_int()
     result = cuda.cuDeviceGetCount(ctypes.byref(count))
@@ -115,10 +124,10 @@ def probe_child(load_library=None):
         devices.append([major.value, minor.value])
     if result != _CUDA_SUCCESS:
         return gpu_info(
-            debugger_major=debugger_major,
             error=f"listing the GPUs failed with {_error_name(cuda, result)}",
+            **driver,
         )
-    return gpu_info(devices, debugger_major)
+    return gpu_info(devices, **driver)
 
 
 def _error_name(cuda, result):
@@ -266,6 +275,8 @@ def _summary(info, build_major):
     """One line describing the GPUs and driver, for lit's note."""
     devices = ", ".join("sm_{}{}".format(*cc) for cc in info["devices"])
     driver = info["debugger_major"]
+    if driver is not None and info.get("debugger_minor") is not None:
+        driver = f"{driver}.{info['debugger_minor']}"
     return (
         f"GPUs: {devices or 'none'}; driver debugger API: "
         f"{'unknown' if driver is None else driver}; "
