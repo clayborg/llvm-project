@@ -23,6 +23,7 @@ from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu import nvgpu_host
 from lldbsuite.test.tools.gpu.nvgpu_decorators import (
     SM,
+    Driver,
     skipUnlessNVGPU,
     skipUnlessNVGPUDevice,
 )
@@ -40,15 +41,22 @@ class FakeLibcuda:
     is given."""
 
     def __init__(
-        self, debugger_major=13, init_result=0, devices=TWO_GPUS, attribute_result=0
+        self,
+        debugger_major=13,
+        init_result=0,
+        devices=TWO_GPUS,
+        attribute_result=0,
+        debugger_minor=0,
     ):
         self.debugger_major = debugger_major
+        self.debugger_minor = debugger_minor
         self.init_result = init_result
         self.devices = devices
         self.attribute_result = attribute_result
 
     def cudbgGetAPIVersion(self, major, minor, revision):
         major._obj.value = self.debugger_major
+        minor._obj.value = self.debugger_minor
         return 0
 
     def cuInit(self, flags):
@@ -172,6 +180,10 @@ class TestNVGPUGating(TestBase):
             "nvgpu: GPUs: sm_120, sm_86; driver debugger API: 13; "
             "this lldb targets CUDA 13",
         )
+        self.assertIn(
+            "driver debugger API: 13.4;",
+            nvgpu_host.decide(gpu_info(TWO_GPUS, 13, debugger_minor=4), 13, True)[0][1],
+        )
         level, warning = nvgpu_host.decide(gpu_info(TWO_GPUS, 12), 13, True)[1]
         self.assertTrue(
             warning.startswith(
@@ -222,10 +234,17 @@ class TestNVGPUGating(TestBase):
 
     def test_probe_child(self):
         child = nvgpu_host.probe_child
-        self.assertEqual(child(lambda name: FakeLibcuda()), gpu_info(TWO_GPUS, 13))
+        self.assertEqual(
+            child(lambda name: FakeLibcuda()),
+            gpu_info(TWO_GPUS, 13, debugger_minor=0),
+        )
+        self.assertEqual(
+            child(lambda name: FakeLibcuda(debugger_minor=4))["debugger_minor"], 4
+        )
         # A machine with no visible GPU is not an error.
         self.assertEqual(
-            child(lambda name: FakeLibcuda(init_result=100)), gpu_info([], 13)
+            child(lambda name: FakeLibcuda(init_result=100)),
+            gpu_info([], 13, debugger_minor=0),
         )
         self.assertEqual(
             child(lambda name: FakeLibcuda(init_result=999))["error"],
@@ -386,19 +405,43 @@ class TestNVGPUGating(TestBase):
 
     def test_compute_capability(self):
         # Device 0 decides, here sm_120.
-        self.assertIsNone(SM(at_least=120).reason(TWO_GPUS))
-        self.assertIsNone(SM(at_least=90).reason(TWO_GPUS))
+        gpus = gpu_info(TWO_GPUS, 13)
+        self.assertIsNone(SM(at_least=120).reason(gpus))
+        self.assertIsNone(SM(at_least=90).reason(gpus))
         self.assertEqual(
-            SM(at_least=121).reason(TWO_GPUS),
+            SM(at_least=121).reason(gpus),
             "device 0 is sm_120; the test needs sm_121 or newer",
         )
-        self.assertIn("device 0 is sm_86", SM(at_least=90).reason(TWO_GPUS[::-1]))
+        self.assertIn(
+            "device 0 is sm_86",
+            SM(at_least=90).reason(gpu_info(TWO_GPUS[::-1], 13)),
+        )
         # A requirement that every GPU meets, such as 9 meant as sm_90, fails
         # when the test file is loaded, not by never skipping.
         with self.assertRaisesRegex(ValueError, "such as 90 for sm_90"):
             SM(at_least=9)
         with self.assertRaises(TypeError):
             SM(90)
+
+    def test_driver_version(self):
+        def reason(major, minor):
+            info = gpu_info(TWO_GPUS, major, debugger_minor=minor)
+            return Driver(at_least=(13, 2)).reason(info)
+
+        self.assertIsNone(reason(13, 2))
+        self.assertIsNone(reason(13, 4))
+        self.assertIsNone(reason(14, 0))
+        self.assertEqual(
+            reason(13, 1),
+            "the driver is CUDA 13.1; the test needs CUDA 13.2 or newer",
+        )
+        # If the driver's version is unknown, the test runs.
+        self.assertIsNone(reason(13, None))
+        self.assertIsNone(reason(None, None))
+        with self.assertRaises(TypeError):
+            Driver((13, 2))
+        with self.assertRaises(TypeError):
+            Driver(at_least=13.2)
 
     def test_setup_skips_on_unmet_requirements(self):
         # Device 0 is sm_86.
@@ -413,6 +456,10 @@ class TestNVGPUGating(TestBase):
             def test_sm_86(self):
                 pass
 
+            @skipUnlessNVGPU(Driver(at_least=(MAJOR, 2)))
+            def test_new_driver(self):
+                pass
+
         # A requirement implies a GPU, even in a class that needs none.
         self.assertTrue(nvgpu_decorators.needs_gpu(Core("test_clusters")))
         with self.remote_platform(None), mock.patch.object(
@@ -425,6 +472,15 @@ class TestNVGPUGating(TestBase):
                 Core("test_clusters").setUp()
             self.assertFalse(base_setup.called)
             Core("test_sm_86").setUp()
+            nvgpu_decorators._gpu_info = gpu_info(TWO_GPUS, MAJOR, debugger_minor=1)
+            with self.assertRaisesRegex(
+                unittest.SkipTest,
+                f"nvgpu: the driver is CUDA {MAJOR}.1; the test needs CUDA "
+                f"{MAJOR}.2 or newer",
+            ):
+                Core("test_new_driver").setUp()
+            nvgpu_decorators._gpu_info = gpu_info(TWO_GPUS, MAJOR, debugger_minor=2)
+            Core("test_new_driver").setUp()
             # Without a GPU, the test skips for that reason first.
             nvgpu_decorators._gpu_info = gpu_info([], MAJOR)
             with self.assertRaisesRegex(unittest.SkipTest, "no CUDA device"):

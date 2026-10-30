@@ -318,16 +318,18 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         environment, which lldb-server inherits."""
         return os.environ.get("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP") != "1"
 
-    def _pull_cpu_state(self) -> int:
-        """Pull the CPU's queued state-changed events without waiting, and
-        return its latest state. A restarted stop counts as running.
+    def pull_state(self, process: lldb.SBProcess) -> int:
+        """Pull the queued state-changed events of `process` (CPU or GPU)
+        without waiting, and return its latest state. A restarted stop counts
+        as running.
 
         GetState() is only updated as events are pulled, so until then it can
-        be out of date.
+        be out of date. SBProcess.Stop() fails unless the process looks
+        running, so pull the GPU's events before interrupting it.
         """
         listener = self.dbg.GetListener()
-        broadcaster = self.cpu_process.GetBroadcaster()
-        state = self.cpu_process.GetState()
+        broadcaster = process.GetBroadcaster()
+        state = process.GetState()
         event = lldb.SBEvent()
         while listener.GetNextEventForBroadcasterWithType(
             broadcaster, lldb.SBProcess.eBroadcastBitStateChanged, event
@@ -353,7 +355,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         target-sync stop only."""
         return (
             bool(self.cpu_process)
-            and self._pull_cpu_state() == lldb.eStateStopped
+            and self.pull_state(self.cpu_process) == lldb.eStateStopped
             and self._cpu_stopped_only_for_target_sync()
         )
 
@@ -369,7 +371,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         listener = self.dbg.GetListener()
         broadcaster = self.cpu_process.GetBroadcaster()
         deadline = time.monotonic() + timeout_seconds
-        state = self._pull_cpu_state()
+        state = self.pull_state(self.cpu_process)
         while state == lldb.eStateRunning:
             remaining = deadline - time.monotonic()
             event = lldb.SBEvent()
