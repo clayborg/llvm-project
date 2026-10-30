@@ -14,6 +14,7 @@ add_lldb_unittest(TargetTests
   StackFrameRecognizerTest.cpp
   SummaryStatisticsTest.cpp
   TargetGroupTest.cpp
+  ThreadPlanStackTest.cpp
   FindFileTest.cpp
 
   LINK_COMPONENTS
