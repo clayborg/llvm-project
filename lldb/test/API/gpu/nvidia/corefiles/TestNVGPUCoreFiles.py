@@ -14,15 +14,22 @@ class TestNVGPUCoreFiles(NVGPUCoreTestCaseBase):
     SOURCE = "corefiles.cu"
 
     # Maps the exception-type command-line argument to the (stop reason,
-    # description substring) the kernel triggers. See the switch in
+    # description pattern) the kernel triggers. See the switch in
     # crash_kernel_2 in corefiles.cu. An argument that hits no switch case
     # spins without faulting and has no stop reason.
     STOP_REASONS = {
         1: (lldb.eStopReasonSignal, "trap"),
-        2: (lldb.eStopReasonException, "CUDA Exception: Warp MMU Fault"),
+        # Newer drivers report more specific names for these faults.
+        2: (
+            lldb.eStopReasonException,
+            "CUDA Exception: Warp (Illegal Address|MMU Fault)",
+        ),
         3: (lldb.eStopReasonException, "CUDA Exception: Warp Misaligned Address"),
         4: (lldb.eStopReasonException, "CUDA Exception: Warp Out-of-range Address"),
-        5: (lldb.eStopReasonException, "CUDA Exception: Warp Misaligned PC"),
+        5: (
+            lldb.eStopReasonException,
+            "CUDA Exception: Warp (Invalid|Misaligned) PC",
+        ),
         6: (lldb.eStopReasonException, "CUDA Exception: Warp Invalid Address Space"),
     }
 
@@ -112,7 +119,7 @@ class TestNVGPUCoreFiles(NVGPUCoreTestCaseBase):
             self.generate_and_load_core(args=[str(exception_type)])
             thread = self.get_stopped_thread()
             self.assertTrue(thread.IsValid())
-            self.assertIn(expected_desc, thread.GetStopDescription(256))
+            self.assertRegex(thread.GetStopDescription(256), expected_desc)
             self.assertEqual(thread.GetStopReason(), expected_reason)
 
     def _test_backtrace(self, flags):
