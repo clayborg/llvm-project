@@ -2080,6 +2080,26 @@ void ProcessGDBRemote::SetThreadPc(const ThreadSP &thread_sp, uint64_t index) {
   }
 }
 
+std::optional<size_t> ProcessGDBRemote::FindThreadIDIndex(lldb::tid_t tid) {
+  // This runs for every thread at a stop, so searching m_thread_ids would make
+  // the stop quadratic in the number of threads. m_thread_ids is rewritten in
+  // several places that leave m_thread_id_positions alone, so trust a cached
+  // position only if m_thread_ids still has tid there, and rebuild otherwise.
+  std::lock_guard<std::recursive_mutex> guard(m_thread_list_real.GetMutex());
+  auto it = m_thread_id_positions.find(tid);
+  if (it != m_thread_id_positions.end() && it->second < m_thread_ids.size() &&
+      m_thread_ids[it->second] == tid)
+    return it->second;
+
+  m_thread_id_positions.clear();
+  for (auto [i, id] : llvm::enumerate(m_thread_ids))
+    m_thread_id_positions.try_emplace(id, i);
+  it = m_thread_id_positions.find(tid);
+  if (it == m_thread_id_positions.end())
+    return std::nullopt;
+  return it->second;
+}
+
 bool ProcessGDBRemote::GetThreadStopInfoFromJSON(
     ThreadGDBRemote *thread, const StructuredData::ObjectSP &thread_infos_sp) {
   // See if we got thread stop infos for all threads via the "jThreadsInfo"
@@ -2096,7 +2116,8 @@ bool ProcessGDBRemote::GetThreadStopInfoFromJSON(
           if (thread_dict->GetValueForKeyAsInteger<lldb::tid_t>(
                   "tid", tid, LLDB_INVALID_THREAD_ID)) {
             if (tid == thread->GetID())
-              return (bool)SetThreadStopInfo(thread_dict);
+              return (bool)SetThreadStopInfo(thread_dict,
+                                             thread->shared_from_this());
           }
         }
       }
@@ -2155,14 +2176,14 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
     LazyBool associated_with_dispatch_queue, addr_t dispatch_queue_t,
     std::string &queue_name, QueueKind queue_kind, uint64_t queue_serial,
     std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
-    bool active, llvm::StringRef sync_plugin) {
+    bool active, llvm::StringRef sync_plugin, ThreadSP thread_sp) {
 
   if (tid == LLDB_INVALID_THREAD_ID)
     return nullptr;
 
-  ThreadSP thread_sp;
-  // Scope for "locker" below
-  {
+  // Stop info is set for every thread at a stop, so a search of the thread
+  // list for each would take time quadratic in the number of threads.
+  if (!thread_sp || thread_sp->GetProtocolID() != tid) {
     // m_thread_list_real does have its own mutex, but we need to hold onto the
     // mutex between the call to m_thread_list_real.FindThreadByID(...) and the
     // m_thread_list_real.AddThread(...) so it doesn't change on us
@@ -2185,9 +2206,8 @@ ThreadSP ProcessGDBRemote::SetThreadStopInfo(
 
   reg_ctx_sp->InvalidateIfNeeded(true);
 
-  auto iter = llvm::find(m_thread_ids, tid);
-  if (iter != m_thread_ids.end())
-    SetThreadPc(thread_sp, iter - m_thread_ids.begin());
+  if (std::optional<size_t> index = FindThreadIDIndex(tid))
+    SetThreadPc(thread_sp, *index);
 
   ParseExpeditedRegisters(expedited_register_map, thread_sp);
 
@@ -2514,7 +2534,8 @@ ProcessGDBRemote::HandleThreadAsyncInterrupt(uint8_t signo,
 }
 
 lldb::ThreadSP
-ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
+ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict,
+                                    lldb::ThreadSP thread_sp) {
   static constexpr llvm::StringLiteral g_key_tid("tid");
   static constexpr llvm::StringLiteral g_key_name("name");
   static constexpr llvm::StringLiteral g_key_reason("reason");
@@ -2681,7 +2702,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       tid, expedited_register_map, signo, thread_name, reason, description,
       exc_type, exc_data, thread_dispatch_qaddr, queue_vars_valid,
       associated_with_dispatch_queue, dispatch_queue_t, queue_name, queue_kind,
-      queue_serial_number, lane_id, simd_id, active);
+      queue_serial_number, lane_id, simd_id, active, {}, std::move(thread_sp));
 }
 
 StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
@@ -3179,12 +3200,20 @@ void ProcessGDBRemote::WillPublicStop() {
     // and memory that was in the jThreadsInfo response.
     StructuredData::Array *thread_infos = m_jthreadsinfo_sp->GetAsArray();
     if (thread_infos) {
+      std::unordered_map<lldb::tid_t, ThreadSP> threads;
+      for (const ThreadSP &thread_sp : m_thread_list_real.Threads())
+        threads.try_emplace(thread_sp->GetProtocolID(), thread_sp);
       const size_t n = thread_infos->GetSize();
       for (size_t i = 0; i < n; ++i) {
         StructuredData::Dictionary *thread_dict =
             thread_infos->GetItemAtIndex(i)->GetAsDictionary();
-        if (thread_dict)
-          SetThreadStopInfo(thread_dict);
+        if (!thread_dict)
+          continue;
+        lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
+        thread_dict->GetValueForKeyAsInteger("tid", tid);
+        auto thread = threads.find(tid);
+        SetThreadStopInfo(thread_dict,
+                          thread == threads.end() ? nullptr : thread->second);
       }
     }
   }
