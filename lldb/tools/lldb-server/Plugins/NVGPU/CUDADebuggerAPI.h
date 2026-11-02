@@ -62,6 +62,10 @@ public:
 
   CUDBGAPI GetRawAPI() const { return m_api_up.get(); }
 
+  /// Let go of the API without finalizing it, for when the driver would crash
+  /// in finalize.
+  void Abandon() { m_api_up.release(); }
+
   /// The CUDA debugger API version this session operates at: the lesser of
   /// this build's compiled version and the live driver's reported version.
   /// Any driver of the same CUDA major release works -- older OR newer than

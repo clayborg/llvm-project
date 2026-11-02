@@ -17,6 +17,9 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/Error.h"
 
+#include <atomic>
+#include <thread>
+
 namespace lldb_private::lldb_server {
 
 /// LLDB server plugin for NVIDIA GPU debugging support.
@@ -35,6 +38,11 @@ public:
   ///     Reference to the main event loop for handling asynchronous events.
   LLDBServerPluginNVGPU(LLDBServerPlugin::GDBServer &native_process,
                         MainLoop &main_loop);
+
+  /// Stop the GPU MainLoop thread and finalize the debugger API before any
+  /// member is destroyed, since that thread and the driver's event callback
+  /// both use this object.
+  ~LLDBServerPluginNVGPU() override;
 
   /// Get the name identifier for this plugin.
   ///
@@ -79,10 +87,10 @@ private:
   ///
   /// \param[in] before_accept
   ///     Called once the socket is listening and before the thread that
-  ///     accepts the client starts. That thread cannot be stopped, and it
-  ///     ends lldb-server if no client connects, so a step that can fail
-  ///     after the socket exists belongs here. If it returns an error, no
-  ///     thread is started and the socket is closed.
+  ///     accepts the client starts, which waits for a client until the
+  ///     plug-in shuts down. A step that can fail after the socket exists
+  ///     belongs here. If it returns an error, no thread is started and the
+  ///     socket is closed.
   ///
   /// \return
   ///     Expected connection info on success, or error on failure.
@@ -105,6 +113,13 @@ private:
   /// taking appropriate action based on event type.
   void OnDebuggerAPIEvent();
 
+  /// \return
+  ///     The GPU process, or null once the GPU server has forgotten it, which
+  ///     it does on the GPU MainLoop thread when the GPU process exits or lldb
+  ///     detaches from it. Other threads may call this only before that thread
+  ///     starts or after it ends.
+  ProcessNVGPU *GetGPUProcess() const;
+
   /// Stop using the debugger API after it reports an internal error, a call
   /// into it fails, or the device state it reports cannot be decoded, and stop
   /// the GPU process with \a description. lldb also gets \a description as an
@@ -123,8 +138,21 @@ private:
   llvm::Expected<int> DrainSyncEvents();
 
   /// Finalize and drop the debugger API along with everything holding a
-  /// pointer into it, to undo an InitializeAPIAndConnect that failed partway.
+  /// pointer into it, on destruction, and to undo an InitializeAPIAndConnect
+  /// that failed partway.
   void ReleaseDebuggerAPI();
+
+  /// Let go of a debugger API that lldb never connected to serve, without
+  /// finalizing it. The driver keeps the application waiting until the events
+  /// it raised are acknowledged, and a finalize meanwhile can crash it, as can
+  /// one just after an acknowledgment lets the application go on. The
+  /// application goes on by itself once lldb-server exits.
+  void ReleaseUnservedDebuggerAPI();
+
+  /// Take from the GPU process, if the GPU server still has it, everything
+  /// that points into the debugger API or back at this object: the API
+  /// table, the event drain notifier and the fault handler.
+  void UnhookGPUProcess();
 
   /// Bring the debugger API up from a breakpoint hit, which runs on the native
   /// server's thread, the only one that may use \a native_process.
@@ -134,14 +162,28 @@ private:
                           NativeProcessProtocol &native_process);
 
   Status m_main_loop_status;
+
+  /// Runs AcceptAndMainLoopThread. Only used on the native server's thread,
+  /// which creates the connection and destroys this object.
+  std::thread m_gpu_thread;
+
+  /// Set by the destructor so that the GPU thread stops waiting for the client
+  /// to connect.
+  std::atomic<bool> m_shutting_down = false;
+
   std::optional<CUDADebuggerAPI> m_cuda_api;
-  ProcessNVGPU *m_gpu = nullptr;
   /// A utility to send debugger api notifications to the main loop.
   std::unique_ptr<MainLoopEventNotifier> m_main_loop_event_notifier_up;
 
   /// Set once the debugger API is up. Only breakpoint hits use it, and they
   /// arrive on the native server's thread.
   bool m_api_initialized = false;
+
+  /// Set on the native server's thread when the native process exits, before
+  /// the GPU MainLoop thread reports the exit to lldb. From then on, the
+  /// debugger API's events are left alone: acknowledging the events of an
+  /// application that has exited can crash the debugger library.
+  std::atomic<bool> m_native_process_exited = false;
 };
 
 } // namespace lldb_private::lldb_server

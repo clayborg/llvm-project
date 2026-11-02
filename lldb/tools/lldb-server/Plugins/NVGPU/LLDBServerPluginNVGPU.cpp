@@ -20,6 +20,8 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Process.h"
 
+#include <cerrno>
+#include <chrono>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -132,7 +134,6 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
   info.GetEnvironment() = Host::GetEnvironment();
   m_gdb_server->SetLaunchInfo(info);
   Status error = m_gdb_server->LaunchProcess();
-  m_gpu = static_cast<ProcessNVGPU *>(m_gdb_server->GetCurrentProcess());
 
   // The GPU process is fake and shouldn't fail to launch. Let's abort if we see
   // an error.
@@ -140,7 +141,34 @@ LLDBServerPluginNVGPU::LLDBServerPluginNVGPU(
     logAndReportFatalError("Failed to launch the GPU process. {}", error);
 }
 
+LLDBServerPluginNVGPU::~LLDBServerPluginNVGPU() {
+  if (m_gpu_thread.joinable()) {
+    m_shutting_down = true;
+    // The loop outlives this object, and only a callback on the loop's own
+    // thread may terminate it.
+    if (!m_main_loop.AddPendingCallback(
+            [](MainLoopBase &loop) { loop.RequestTermination(); })) {
+      // The callback is queued, but without the wakeup the loop might never
+      // run it, so a thread that runs the loop might never end. It must not
+      // outlive this object, which it uses. A thread that has not started the
+      // loop does not start it, and stops waiting for the client, since
+      // m_shutting_down is set.
+      std::lock_guard<std::mutex> guard(m_connect_mutex);
+      if (m_is_connected)
+        logAndReportFatalError("~LLDBServerPluginNVGPU: could not wake the GPU "
+                               "main loop to stop its thread");
+    }
+    m_gpu_thread.join();
+  }
+  // Only the driver's event callback can still reach this object.
+  ReleaseDebuggerAPI();
+}
+
 llvm::StringRef LLDBServerPluginNVGPU::GetPluginName() { return "nvgpu"; }
+
+ProcessNVGPU *LLDBServerPluginNVGPU::GetGPUProcess() const {
+  return static_cast<ProcessNVGPU *>(m_gdb_server->GetCurrentProcess());
+}
 
 std::optional<GPUActions> LLDBServerPluginNVGPU::NativeProcessIsStopping() {
   return {};
@@ -150,25 +178,41 @@ void LLDBServerPluginNVGPU::AcceptAndMainLoopThread(
     std::unique_ptr<TCPSocket> listen_socket_up) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "LLDBServerPluginNVGPU::AcceptAndMainLoopThread spawned");
+  // Wait for lldb for as long as this object lives, in slices so that the
+  // destructor does not wait long for a client that never connects.
   Socket *socket = nullptr;
-  Status error = listen_socket_up->Accept(std::chrono::seconds(30), socket);
+  Status error;
+  do {
+    error = listen_socket_up->Accept(std::chrono::milliseconds(100), socket);
+  } while (!socket && error.GetError() == ETIMEDOUT && !m_shutting_down);
+  std::unique_ptr<Socket> socket_up(socket);
+  bool connected = false;
   // Scope for lock guard.
   {
     // Protect access to m_is_listening and m_is_connected.
     std::lock_guard<std::mutex> guard(m_connect_mutex);
     m_is_listening = false;
-    if (error.Fail())
-      logAndReportFatalError(
-          "LLDBServerPluginNVGPU::AcceptAndMainLoopThread error "
-          "returned from Accept(): {}",
-          error);
-    m_is_connected = true;
+    connected = socket_up && !m_shutting_down;
+    m_is_connected = connected;
+  }
+  if (!connected) {
+    if (m_shutting_down)
+      LLDB_LOG(log, "LLDBServerPluginNVGPU::AcceptAndMainLoopThread the "
+                    "plugin is shutting down before lldb connected");
+    else
+      LLDB_LOG(log,
+               "LLDBServerPluginNVGPU::AcceptAndMainLoopThread cannot accept "
+               "lldb's connection, so the GPU cannot be debugged in this "
+               "session: {0}",
+               error);
+    ReleaseUnservedDebuggerAPI();
+    return;
   }
 
   LLDB_LOG(log, "LLDBServerPluginNVGPU::AcceptAndMainLoopThread initializing "
                 "connection");
   std::unique_ptr<Connection> connection_up(
-      new ConnectionFileDescriptor(std::unique_ptr<Socket>(socket)));
+      new ConnectionFileDescriptor(std::move(socket_up)));
   m_gdb_server->InitializeConnection(std::move(connection_up));
   LLDB_LOG(log, "LLDBServerPluginNVGPU::AcceptAndMainLoopThread running main "
                 "loop");
@@ -228,14 +272,17 @@ LLDBServerPluginNVGPU::CreateConnection(function_ref<Error()> before_accept) {
         llvm::formatv("connect://{}:{}", remote_host, listen_port);
     LLDB_LOG(log, "LLDBServerPluginNVGPU::CreateConnection listening to {}",
              listen_port);
+    // An earlier connection's thread clears m_is_connected as its last step,
+    // so it has finished or is about to.
+    if (m_gpu_thread.joinable())
+      m_gpu_thread.join();
     if (Error err = before_accept()) {
       // Closing the socket is enough: no thread is waiting on it yet.
       m_is_listening = false;
       return err;
     }
-    std::thread t(&LLDBServerPluginNVGPU::AcceptAndMainLoopThread, this,
-                  std::move(*sock));
-    t.detach();
+    m_gpu_thread = std::thread(&LLDBServerPluginNVGPU::AcceptAndMainLoopThread,
+                               this, std::move(*sock));
     return connection_info;
   }
   m_is_listening = false;
@@ -247,6 +294,11 @@ LLDBServerPluginNVGPU::CreateConnection(function_ref<Error()> before_accept) {
 Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
     const GPUPluginBreakpointHitArgs &args, StringRef libcuda_library_name,
     NativeProcessProtocol &native_process) {
+  ProcessNVGPU *gpu = GetGPUProcess();
+  if (!gpu)
+    return createStringError(
+        "No GPU process to initialize the CUDA Debugger API for");
+
   // We are assuming that no kernels will run until we resume the CPU.
   Expected<CUDADebuggerAPI> api_or =
       CUDADebuggerAPI::Initialize(args, libcuda_library_name, native_process);
@@ -257,7 +309,7 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
   // Undo the partial setup if a step below fails, so that nothing is left
   // pointing into an API the next initialization attempt replaces.
   auto release_api = llvm::make_scope_exit([this] { ReleaseDebuggerAPI(); });
-  if (Error err = m_gpu->SetDebuggerAPI(*m_cuda_api))
+  if (Error err = gpu->SetDebuggerAPI(*m_cuda_api))
     return err;
 
   // We are registering the event notifier in the GPU main loop. We might want
@@ -273,9 +325,9 @@ Expected<GPUActions> LLDBServerPluginNVGPU::InitializeAPIAndConnect(
   // The driver only notifies for newly enqueued events, so the events that
   // waited while the GPU process was stopped would never be drained on their
   // own. Let the GPU process re-run the drain when it resumes.
-  m_gpu->SetSyncEventDrainNotifier(
+  gpu->SetSyncEventDrainNotifier(
       [this]() { m_main_loop_event_notifier_up->FireEvent(); });
-  m_gpu->SetDebuggerAPIFaultHandler([this](std::string description) {
+  gpu->SetDebuggerAPIFaultHandler([this](std::string description) {
     ReportDebuggerAPIFault(std::move(description));
   });
 
@@ -370,13 +422,20 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
 void LLDBServerPluginNVGPU::OnDebuggerAPIEvent() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGV(log, "LLDBServerPluginNVGPU::OnDebuggerAPIEvent");
+  // The application has exited, and acknowledging its events can crash the
+  // debugger library.
+  if (m_native_process_exited)
+    return;
   if (Expected<int> handled = DrainSyncEvents(); !handled)
     ReportDebuggerAPIFault(llvm::toString(handled.takeError()));
 }
 
 Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
-  // A poisoned API must not be touched again.
-  if (m_gpu->HasDebuggerAPIFaulted())
+  // Without a GPU process, which the GPU server forgets when lldb detaches
+  // from it, nothing can handle the events. A poisoned API must not be touched
+  // again.
+  ProcessNVGPU *gpu = GetGPUProcess();
+  if (!gpu || gpu->HasDebuggerAPIFaulted())
     return 0;
 
   Log *log = GetLog(GDBRLog::Plugin);
@@ -385,7 +444,7 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
   int events_handled = 0;
   // Handle events only while the GPU process runs, that is, while the client
   // waits for a stop. The class comment of ProcessNVGPU says why.
-  while (StateIsRunningState(m_gpu->GetState())) {
+  while (StateIsRunningState(gpu->GetState())) {
     CUDBGEvent event;
     CUDBGResult res = cuda_api->getNextEvent(
         CUDBGEventQueueType::CUDBG_EVENT_QUEUE_TYPE_SYNC, &event);
@@ -408,12 +467,12 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
       // unacknowledged until the client resumes, and Resume acknowledges them
       // and drains the rest. This will need to change once we support multiple
       // contexts.
-      if (Error err = m_gpu->OnElfImageLoaded(event.cases.elfImageLoaded))
+      if (Error err = gpu->OnElfImageLoaded(event.cases.elfImageLoaded))
         return std::move(err);
       // A cubin that does not parse is skipped, which leaves nothing to load.
-      if (!m_gpu->HasUnreportedLibraries())
+      if (!gpu->HasUnreportedLibraries())
         break;
-      m_gpu->ReportDyldStop();
+      gpu->ReportDyldStop();
       return events_handled;
     }
     case CUDBG_EVENT_INTERNAL_ERROR: {
@@ -429,7 +488,7 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
                event.cases.allDevicesSuspended.brokenDevicesMask,
                event.cases.allDevicesSuspended.faultedDevicesMask);
       Expected<ProcessNVGPU::SuspendStop> stop =
-          m_gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
+          gpu->OnAllDevicesSuspended(event.cases.allDevicesSuspended);
       if (!stop)
         return stop.takeError();
       // An interrupt can be lldb sending a packet, after which it resumes the
@@ -451,7 +510,7 @@ Expected<int> LLDBServerPluginNVGPU::DrainSyncEvents() {
   // drain consumed the events. Not fatal.
   if (events_handled == 0) {
     LLDB_LOG(log, "no events handled while the GPU process is {0}",
-             StateToString(m_gpu->GetState()));
+             StateToString(gpu->GetState()));
     return events_handled;
   }
 
@@ -467,9 +526,14 @@ void LLDBServerPluginNVGPU::ReportDebuggerAPIFault(std::string description) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "{0}", description);
 
+  // The GPU process has exited, or lldb has detached from it.
+  ProcessNVGPU *gpu = GetGPUProcess();
+  if (!gpu)
+    return;
+
   // Only valid while the GPU is running: the client is then waiting for a stop
   // reply and will not mistake this for a query response.
-  if (m_gpu->GetState() == lldb::eStateRunning) {
+  if (gpu->GetState() == lldb::eStateRunning) {
     m_gdb_server->SendStructuredDataPacket(
         llvm::json::Value(llvm::json::Object{{"type", "nvgpu-monitor"},
                                              {"subtype", "error"},
@@ -478,7 +542,7 @@ void LLDBServerPluginNVGPU::ReportDebuggerAPIFault(std::string description) {
 
   // Stop with an exception-class reason so the client keeps the GPU stopped and
   // shows the error. Refreshing device state would go through the poisoned API.
-  m_gpu->OnDebuggerAPIFault(std::move(description));
+  gpu->OnDebuggerAPIFault(std::move(description));
   if (CPUStopsWithGPU())
     HaltNativeProcessIfNeeded();
 }
@@ -490,9 +554,7 @@ void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
   // driver's event callback uses the notifier, so the notifier outlives the
   // session that finalizing shuts down. It still goes before this returns to
   // the GPU MainLoop, which would otherwise dispatch into the finalized API.
-  m_gpu->SetSyncEventDrainNotifier(nullptr);
-  m_gpu->SetDebuggerAPIFaultHandler(nullptr);
-  m_gpu->ClearDebuggerAPI();
+  UnhookGPUProcess();
   if (m_cuda_api) {
     LLDB_LOG(log, "finalizing the debugger API");
     m_cuda_api.reset();
@@ -500,8 +562,42 @@ void LLDBServerPluginNVGPU::ReleaseDebuggerAPI() {
   m_main_loop_event_notifier_up.reset();
 }
 
+void LLDBServerPluginNVGPU::ReleaseUnservedDebuggerAPI() {
+  if (!m_cuda_api)
+    return;
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "letting the debugger API go without finalizing it");
+  // The driver stays up, and must not reach this object with later events.
+  // It refuses a null data pointer. A callback already under way still uses
+  // the notifier, which is kept until this object is destroyed.
+  static char s_unused;
+  CUDBGResult res =
+      (*m_cuda_api)->setNotifyNewEventCallback31([](void *) {}, &s_unused);
+  if (res != CUDBG_SUCCESS)
+    LLDB_LOG(log, "setNotifyNewEventCallback31 failed: {0}",
+             cudbgGetErrorString(res));
+  UnhookGPUProcess();
+  m_cuda_api->Abandon();
+  m_cuda_api.reset();
+}
+
+void LLDBServerPluginNVGPU::UnhookGPUProcess() {
+  ProcessNVGPU *gpu = GetGPUProcess();
+  if (!gpu)
+    return;
+  gpu->SetSyncEventDrainNotifier(nullptr);
+  gpu->SetDebuggerAPIFaultHandler(nullptr);
+  gpu->ClearDebuggerAPI();
+}
+
 void LLDBServerPluginNVGPU::NativeProcessDidExit(
     const WaitStatus &exit_status) {
-  if (m_gpu)
-    m_gpu->OnNativeProcessExit(exit_status);
+  m_native_process_exited = true;
+  // The GPU process, and the GPU server that reports its exit, belong to the
+  // GPU MainLoop thread. The loop outlives this object, and runs everything
+  // queued before it stops.
+  m_main_loop.AddPendingCallback([this, exit_status](MainLoopBase &) {
+    if (ProcessNVGPU *gpu = GetGPUProcess())
+      gpu->OnNativeProcessExit(exit_status);
+  });
 }
