@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "lldb/Core/LoadedModuleInfoList.h"
@@ -333,6 +334,8 @@ protected:
   tid_collection m_thread_ids; // Thread IDs for all threads. This list gets
                                // updated after stopping
   std::vector<lldb::addr_t> m_thread_pcs;     // PC values for all the threads.
+  /// The position of each ID in m_thread_ids, for FindThreadIDIndex.
+  std::unordered_map<lldb::tid_t, size_t> m_thread_id_positions;
   StructuredData::ObjectSP m_jstopinfo_sp;    // Stop info only for any threads
                                               // that have valid stop infos
   StructuredData::ObjectSP m_jthreadsinfo_sp; // Full stop info, expedited
@@ -425,8 +428,21 @@ protected:
   GetThreadStopInfoFromJSON(ThreadGDBRemote *thread,
                             const StructuredData::ObjectSP &thread_infos_sp);
 
-  lldb::ThreadSP SetThreadStopInfo(StructuredData::Dictionary *thread_dict);
+  /// Set the stop info of the thread that \a thread_dict describes.
+  ///
+  /// \param[in] thread_sp
+  ///     The thread that \a thread_dict describes, if the caller already has
+  ///     it, which saves searching the thread list. A caller that sets stop
+  ///     info for every thread at a stop should pass it. If it is null or a
+  ///     different thread, the thread is found by its ID, or created.
+  lldb::ThreadSP SetThreadStopInfo(StructuredData::Dictionary *thread_dict,
+                                   lldb::ThreadSP thread_sp = nullptr);
 
+  /// Set the stop info of thread \a tid.
+  ///
+  /// \param[in] thread_sp
+  ///     The thread with ID \a tid, if the caller already has it, as in the
+  ///     overload above.
   lldb::ThreadSP SetThreadStopInfo(
       lldb::tid_t tid, ExpeditedRegisterMap &expedited_register_map,
       uint8_t signo, const std::string &thread_name, const std::string &reason,
@@ -437,7 +453,8 @@ protected:
       lldb::addr_t dispatch_queue_t, std::string &queue_name,
       lldb::QueueKind queue_kind, uint64_t queue_serial,
       std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
-      bool active, llvm::StringRef sync_plugin = {});
+      bool active, llvm::StringRef sync_plugin = {},
+      lldb::ThreadSP thread_sp = nullptr);
 
   /// Call Thread::DidImplicitlyResume on each suspended thread in \a tids, the
   /// threads that a stop reply lists as implicitly resumed.
@@ -560,6 +577,9 @@ private:
                              const std::string &description) override;
 
   void SetThreadPc(const lldb::ThreadSP &thread_sp, uint64_t index);
+
+  std::optional<size_t> FindThreadIDIndex(lldb::tid_t tid);
+
   using ModuleCacheKey = std::pair<std::string, std::string>;
   // KeyInfo for the cached module spec DenseMap.
   // The invariant is that all real keys will have the file and architecture
