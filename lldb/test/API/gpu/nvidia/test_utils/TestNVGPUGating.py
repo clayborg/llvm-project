@@ -415,7 +415,8 @@ class TestNVGPUGating(TestBase):
 
         # A requirement implies a GPU, even in a class that needs none.
         self.assertTrue(nvgpu_decorators.needs_gpu(Core("test_clusters")))
-        with self.remote_platform(None), mock.patch.object(
+        nvcc = self.script("nvcc", "echo compute_86; echo compute_120")
+        with self.remote_platform(None), self.dotest_nvcc(nvcc), mock.patch.object(
             TestBase, "setUp"
         ) as base_setup:
             with self.assertRaisesRegex(
