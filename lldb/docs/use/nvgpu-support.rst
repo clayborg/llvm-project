@@ -425,6 +425,13 @@ Then connect remotely to the lldb-server with the following command:
   > file /remote/path/to/a/program
   > run
 
+If lldb cannot reach the GPU server, for example because
+`NVGPU_DEBUGGER_REMOTE_HOST` names an address it cannot connect to, lldb reports
+that it failed to connect and goes on debugging the CPU process alone. The
+application waits in CUDA initialization until the session ends. The CUDA
+driver then usually lets it run on without a debugger, but can crash it
+instead.
+
 Remote platforms - Android
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
