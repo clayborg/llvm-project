@@ -311,6 +311,29 @@ Status LLDBServerPluginAMDGPU::DetachAmdDbgApi() {
   return Status();
 }
 
+void LLDBServerPluginAMDGPU::ReleaseGPU() {
+  if (m_amd_dbg_api_state != AmdDbgApiState::Attached &&
+      m_amd_dbg_api_state != AmdDbgApiState::RuntimeLoaded)
+    return;
+  // Stop watching the notifier first, as detaching invalidates it.
+  m_gpu_event_read_up.reset();
+  m_gpu_internal_bp.reset();
+  m_wait_for_gpu_internal_bp_stop = false;
+  if (Status error = DetachAmdDbgApi(); error.Fail()) {
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s: %s", __FUNCTION__,
+              error.AsCString());
+    SetErrorState();
+  }
+}
+
+void LLDBServerPluginAMDGPU::ClientDidDisconnect() {
+  // The client can go away without detaching, for example when lldb exits, so
+  // make sure that no wave is left stopped.
+  if (ProcessAMDGPU *gpu_process = GetGPUProcess())
+    gpu_process->RemoveAllSoftwareBreakpoints();
+  ReleaseGPU();
+}
+
 void LLDBServerPluginAMDGPU::HandleNotifierDataReady() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "{}: m_notifier_fd data is ready", __FUNCTION__);
@@ -629,6 +652,13 @@ LLDBServerPluginAMDGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
     return response;
   }
 
+  // After ReleaseGPU() the plug-in no longer needs its breakpoints.
+  if (m_amd_dbg_api_state == AmdDbgApiState::Detached) {
+    GPUPluginBreakpointHitResponse response(GetNewGPUAction());
+    response.disable_bp = true;
+    return response;
+  }
+
   std::string json_string;
   const auto bp_identifier = args.breakpoint.identifier;
   llvm::raw_string_ostream os(json_string);
@@ -689,7 +719,10 @@ std::optional<LLDBSettings> LLDBServerPluginAMDGPU::GetLLDBSettings() {
 std::optional<GPUDynamicLoaderResponse>
 LLDBServerPluginAMDGPU::GetGPUDynamicLoaderLibraryInfos(
     const GPUDynamicLoaderArgs &args) {
-  return GetGPUProcess()->GetGPUDynamicLoaderLibraryInfos(args);
+  ProcessAMDGPU *gpu_process = GetGPUProcess();
+  if (!gpu_process)
+    return std::nullopt;
+  return gpu_process->GetGPUDynamicLoaderLibraryInfos(args);
 }
 
 void LLDBServerPluginAMDGPU::NativeProcessDidExit(

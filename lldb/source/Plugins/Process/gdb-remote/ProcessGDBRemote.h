@@ -513,6 +513,9 @@ private:
 
   Status HandleConnectionRequest(const GPUActions &gpu_action);
 
+  /// DoDestroy() for a GPU plugin target's process.
+  Status DestroyGPUProcess();
+
   Status HandleGPUActions(const GPUActions &gpu_action);
 
   /// Look up \a symbol_names in \a modules, and set each entry of

@@ -3058,9 +3058,34 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   return error;
 }
 
+// A GPU process is a view of the native process, which owns the program, so
+// killing it kills the native process, as ROCgdb's kill does. Its GDB server
+// runs inside the native process's lldb-server and is never sent a kill
+// packet. After a detach or an exit, only the connection is left to close:
+// the CPU target's process may then be a later run's.
+Status ProcessGDBRemote::DestroyGPUProcess() {
+  if (IsAlive()) {
+    TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU();
+    ProcessSP cpu_process_sp =
+        cpu_target_sp ? cpu_target_sp->GetProcessSP() : ProcessSP();
+    if (cpu_process_sp && cpu_process_sp->IsAlive()) {
+      Status error = cpu_process_sp->Destroy(/*force_kill=*/true);
+      if (error.Fail())
+        return error;
+    }
+    SetExitStatus(SIGKILL, "killed");
+  }
+  StopAsyncThread();
+  m_gdb_comm.Disconnect();
+  return Status();
+}
+
 Status ProcessGDBRemote::DoDestroy() {
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDestroy()");
+
+  if (GetTarget().IsGPUTarget())
+    return DestroyGPUProcess();
 
   // Interrupt if our inferior is running...
   int exit_status = SIGABRT;
