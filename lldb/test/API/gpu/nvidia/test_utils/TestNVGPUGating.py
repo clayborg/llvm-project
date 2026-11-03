@@ -105,6 +105,11 @@ class TestNVGPUGating(TestBase):
         self.addCleanup(
             setattr, nvgpu_decorators, "_gpu_info", nvgpu_decorators._gpu_info
         )
+        # The devices are mocked; use a controlled compiler for every test too.
+        targets = " ".join(f"compute_{major}{minor}" for major, minor in TWO_GPUS)
+        nvcc_patch = self.dotest_nvcc(self.script("nvcc", f"echo {targets}"))
+        nvcc_patch.start()
+        self.addCleanup(nvcc_patch.stop)
 
     def remote_platform(self, platform):
         """Make the checks see `platform` as the remote platform, or none if
