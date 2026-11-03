@@ -10,6 +10,13 @@ which asks the CUDA driver which GPUs it can see, and then:
   run one, and fails when the nvcc that dotest builds with cannot build for it
   (nvgpu_testcase.py).
 
+lit_local_config() also puts the tests of both directories in one lit
+parallelism group. lit runs them in parallel, except with a driver whose CUDA
+debugger API is older than PARALLEL_DEBUGGER_API: with several tests on the GPU
+at once, such a driver can lose a GPU stop or exception, and the test that
+waits for it times out, so lit runs them one at a time. --param nvgpu-jobs=N
+runs N of them at a time with any driver.
+
 lit loads this file by path, before lldb's Python module can be imported, so it
 imports nothing from lldb or lldbsuite. The probe sees only the machine that
 runs lit, and the tests rely on lit's environment, which does not reach a
@@ -26,6 +33,13 @@ import sys
 
 GPU_INFO_ENV = "NVGPU_TEST_GPU_INFO"
 NO_DEVICE_PARAM = "nvgpu-no-device"
+JOBS_PARAM = "nvgpu-jobs"
+PARALLELISM_GROUP = "nvgpu"
+# lit runs the GPU tests one at a time with a driver whose CUDA debugger API is
+# older than this. R615's 615.71.10 (API 13.4) loses GPU stops when several
+# tests stop their GPUs at once; R620's 620.72 and bugfix_main's 630.09 (API
+# 13.5) do not.
+PARALLEL_DEBUGGER_API = (13, 5)
 NVCC_REMEDY = (
     "set NVGPU_NVCC_PATH to an nvcc that can and reconfigure, or pass "
     f"--param {NO_DEVICE_PARAM} to run only the GPU-free tests"
@@ -284,13 +298,38 @@ def _summary(info, build_major):
     )
 
 
+def jobs_param(lit_config):
+    """Return N from --param nvgpu-jobs=N, or None without it."""
+    value = lit_config.params.get(JOBS_PARAM)
+    if value is not None and (not value.isdigit() or int(value) < 1):
+        lit_config.fatal(
+            f"nvgpu: --param {JOBS_PARAM}=N needs a positive number N, not {value!r}"
+        )
+    return None if value is None else int(value)
+
+
+def parallel_jobs(jobs, info):
+    """Return how many NVIDIA GPU tests lit may run at once, or None for no
+    limit: `jobs`, from --param nvgpu-jobs, if it is not None, and otherwise
+    one with a driver older than PARALLEL_DEBUGGER_API that has GPUs to run
+    the tests on."""
+    if jobs is not None:
+        return jobs
+    version = (info.get("debugger_major"), info.get("debugger_minor"))
+    if info.get("devices") and None not in version and version < PARALLEL_DEBUGGER_API:
+        return 1
+    return None
+
+
 def lit_local_config(config, lit_config):
-    """Set up the GPU checks for the test directory that `config` describes.
+    """Set up the GPU checks for the test directory that `config` describes,
+    and how many of its tests run at once.
 
     The probe runs in `config.environment` as it is when this is called.
     Both NVIDIA directories share `lit_config`, which keeps the GPU info, so
     the probe runs once per lit run.
     """
+    jobs = jobs_param(lit_config)
     no_device = NO_DEVICE_PARAM in lit_config.params
     if no_device:
         # Hide the GPUs from the probe and from every test program.
@@ -305,7 +344,16 @@ def lit_local_config(config, lit_config):
         for level, message in decide(info, major, has_nodes, url):
             getattr(lit_config, level)(message)
         lit_config.nvgpu_test_gpu_info = info
+        limit = parallel_jobs(jobs, info)
+        if jobs is None and limit == 1:
+            lit_config.note(
+                "nvgpu: running the GPU tests one at a time, because this driver can "
+                "lose GPU stops when several of them stop the GPU at once; "
+                f"--param {JOBS_PARAM}=N runs N at a time"
+            )
+        lit_config.parallelism_groups[PARALLELISM_GROUP] = limit
     config.environment[GPU_INFO_ENV] = json.dumps(info)
+    config.parallelism_group = PARALLELISM_GROUP
 
 
 # probe() runs this file as a script in a separate process.
