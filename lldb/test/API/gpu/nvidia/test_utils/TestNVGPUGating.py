@@ -105,6 +105,11 @@ class TestNVGPUGating(TestBase):
         self.addCleanup(
             setattr, nvgpu_decorators, "_gpu_info", nvgpu_decorators._gpu_info
         )
+        # The devices are mocked; use a controlled compiler for every test too.
+        targets = " ".join(f"compute_{major}{minor}" for major, minor in TWO_GPUS)
+        nvcc_patch = self.dotest_nvcc(self.script("nvcc", f"echo {targets}"))
+        nvcc_patch.start()
+        self.addCleanup(nvcc_patch.stop)
 
     def remote_platform(self, platform):
         """Make the checks see `platform` as the remote platform, or none if
@@ -415,8 +420,7 @@ class TestNVGPUGating(TestBase):
 
         # A requirement implies a GPU, even in a class that needs none.
         self.assertTrue(nvgpu_decorators.needs_gpu(Core("test_clusters")))
-        nvcc = self.script("nvcc", "echo compute_86; echo compute_120")
-        with self.remote_platform(None), self.dotest_nvcc(nvcc), mock.patch.object(
+        with self.remote_platform(None), mock.patch.object(
             TestBase, "setUp"
         ) as base_setup:
             with self.assertRaisesRegex(
