@@ -203,6 +203,31 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+    def test_mock_gpu_target_delete_keeps_cpu_process(self):
+        """
+        Test that deleting the GPU target leaves the CPU target running and no
+        longer paired with it.
+        """
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        # Another reference, such as lldb-dap's, can keep a deleted target
+        # alive, so the CPU target has to forget it.
+        held = lldb.SBTarget(self.gpu_target)
+        self.assertTrue(self.dbg.DeleteTarget(self.gpu_target))
+        self.assertFalse(held.IsValid())
+        self.assertEqual(self.dbg.GetNumTargets(), 1)
+        self.select_cpu()
+        self.expect("target switch", error=True, substrs=["No GPU targets found."])
+
+        cpu_process = self.cpu_process
+        self.assertSuccess(cpu_process.Continue())
+        self.assertState(cpu_process.GetState(), lldb.eStateExited)
+        self.assertEqual(cpu_process.GetExitStatus(), 0)
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,

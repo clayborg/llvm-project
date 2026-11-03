@@ -27,14 +27,31 @@ class TestMockGPUDetach(GpuTestCaseBase):
         self.assertTrue(gpu_process.IsValid(), "the plug-in connected its GPU target")
         return process, gpu_process
 
+    def assert_plugin_breakpoints_disabled(self, target):
+        """Check that `breakpoint list --internal` shows each breakpoint that
+        the mock GPU plug-in set in target, all of which are in a.out, as
+        disabled."""
+        self.dbg.SetSelectedTarget(target)
+        self.runCmd("breakpoint list --internal")
+        lines = self.res.GetOutput().splitlines()
+        descriptions = [
+            lines[i + 1]
+            for i, line in enumerate(lines)
+            if line == "Kind: GPU plug-in breakpoint" and "a.out" in lines[i + 1]
+        ]
+        self.assertTrue(descriptions, "the plug-in set no breakpoints")
+        for description in descriptions:
+            self.assertIn("Options: disabled", description)
+
     def test_detach_the_gpu_target(self):
         """Detaching the GPU target leaves lldb-server running for the process,
-        although the plug-in's GDB server shares lldb-server's main loop. The
-        process then hits the plug-in's breakpoint on gpu_shlib_load, whose
-        GPUActions lldb skips, since the GPU process is gone."""
+        although the plug-in's GDB server shares lldb-server's main loop. It
+        disables the plug-in's breakpoints in the process, such as the one on
+        gpu_shlib_load, since the plug-in no longer needs them."""
         process, gpu_process = self.run_to_the_gpu_target()
         self.assertSuccess(gpu_process.Detach())
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+        self.assert_plugin_breakpoints_disabled(process.GetTarget())
         broadcaster = self.dbg.GetBroadcaster()
         listener = lldbutil.start_listening_from(
             broadcaster, lldb.SBDebugger.eBroadcastBitError
@@ -57,6 +74,35 @@ class TestMockGPUDetach(GpuTestCaseBase):
         self.assertSuccess(process.Detach())
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)
         self.assertState(process.GetState(), lldb.eStateDetached)
+
+    def test_kill_detaches_the_gpu_target(self):
+        """Killing the process detaches its GPU target first, since a GPU
+        process cannot be killed."""
+        process, gpu_process = self.run_to_the_gpu_target()
+        self.assertSuccess(process.Kill())
+        self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+        self.assertState(process.GetState(), lldb.eStateExited)
+
+    def test_kill_the_gpu_target(self):
+        """Killing the GPU target fails, since the process owns the program.
+        Deleting the GPU target still detaches it."""
+        process, gpu_process = self.run_to_the_gpu_target()
+        self.assertFailure(
+            gpu_process.Kill(),
+            "cannot kill a GPU process; select the CPU target and kill its "
+            "process instead",
+        )
+        self.assertNotIn(
+            gpu_process.GetState(),
+            [lldb.eStateDetached, lldb.eStateExited],
+            "the GPU target is gone",
+        )
+        self.assertTrue(self.dbg.DeleteTarget(self.gpu_target))
+        self.assert_plugin_breakpoints_disabled(process.GetTarget())
+        threads = lldbutil.continue_to_source_breakpoint(
+            self, process, "// break again", self.source_spec
+        )
+        self.assertTrue(threads, "the process stopped at the breakpoint")
 
     def test_detach_that_cannot_detach_the_gpu_target(self):
         """A detach fails before the process detaches when the GPU target does
