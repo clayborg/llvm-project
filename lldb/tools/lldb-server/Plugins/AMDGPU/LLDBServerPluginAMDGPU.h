@@ -65,6 +65,10 @@ public:
   std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
+  /// Called by the GPU process once it has detached from the AMD debug
+  /// library, which closes the notifier that the plug-in watches.
+  void GpuProcessDidDetach() { m_gpu_event_read_up.reset(); }
+
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
   }
