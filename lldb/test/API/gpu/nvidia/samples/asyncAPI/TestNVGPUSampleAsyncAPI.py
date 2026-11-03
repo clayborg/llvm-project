@@ -79,12 +79,8 @@ class TestNVGPUSampleAsyncAPI(NVGPUTestCaseBase):
         self.assertEqual(block_dim, [512, 1, 1])
         block = self.read_vec3_register(frame, "blockIdx")
         index = self.read_vec3_register(frame, "threadIdx")
-        idx = frame.FindVariable("idx")
-        self.assertSuccess(idx.GetError())
-        self.assertEqual(idx.GetValueAsSigned(), block[0] * block_dim[0] + index[0])
-        inc_value = frame.FindVariable("inc_value")
-        self.assertSuccess(inc_value.GetError())
-        self.assertEqual(inc_value.GetValueAsSigned(), 26)
+        self.assert_int_variable(frame, "idx", block[0] * block_dim[0] + index[0])
+        self.assert_int_variable(frame, "inc_value", 26)
 
         # The host zeroed the array and copied it to the GPU before the launch,
         # and the breakpoint is on the line that stores each thread's element,

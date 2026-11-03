@@ -42,30 +42,23 @@ class TestNVGPUCPUStopsWithGPU(NVGPUTestCaseBase):
             threads[0].GetStopDescription(256), f"target sync with target #{index}"
         )
 
-    def finish(self, breakpoints):
-        """Delete the breakpoints and let the program run to the end, where it
-        checks the kernel's results."""
-        for breakpoint in breakpoints:
-            self.gpu_target.BreakpointDelete(breakpoint.GetID())
-        self.assertSuccess(self.gpu_process.Continue())
-        self.assert_exit_status(0)
-
     def test_cpu_stops_for_target_sync(self):
         """At each GPU stop the CPU stops too, and continue_gpu_until resumes
         it along with the GPU."""
-        first, second = breakpoints = self.run_to_launch()
+        first, second = self.run_to_launch()
         self.continue_cpu_and_wait_for_gpu_to_stop()
         self.assert_gpu_stop_at_breakpoint(first)
 
         self.continue_gpu_until_breakpoint(second)
         self.assert_cpu_stopped_for_target_sync()
-        self.finish(breakpoints)
+        # The program checks the kernel's results and exits 0 if they are right.
+        self.continue_gpu_to_exit()
 
     def test_gpu_stop_queued_with_cpu_stop(self):
         """If both stop events are already queued when the test starts waiting
         for the GPU, the wait returns the GPU's stop and leaves the CPU
         stopped. Resuming the CPU there would run it past the GPU's stop."""
-        first, _ = breakpoints = self.run_to_launch()
+        first, _ = self.run_to_launch()
         cpu_stop_id = self.cpu_process.GetStopID()
         gpu_stop_id = self.gpu_process.GetStopID()
         self.setAsync(True)
@@ -86,4 +79,4 @@ class TestNVGPUCPUStopsWithGPU(NVGPUTestCaseBase):
         self.wait_for_gpu_to_stop(keep_cpu_running=True)
         self.assert_gpu_stop_at_breakpoint(first)
         self.assert_cpu_stopped_for_target_sync()
-        self.finish(breakpoints)
+        self.continue_gpu_to_exit()

@@ -1,8 +1,9 @@
+import json
 import math
 import os
 import shutil
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import lldb
 from lldbsuite.test import configuration, lldbplatformutil, lldbutil
@@ -183,6 +184,13 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         _shared_builds[(cls, exe)] = path
         return path
 
+    def make_shared_target(self, exe: str) -> lldb.SBTarget:
+        """Build the program with build_shared(exe) and return a target for
+        it, for a test that sets breakpoints before the run."""
+        return lldbutil.run_to_breakpoint_make_target(
+            self, self.build_shared(exe), in_cwd=False
+        )
+
     def run_to_cpu_line(
         self,
         source: str,
@@ -223,6 +231,151 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             f"no CPU code at {source}:{line}, the line marked {marker!r}",
         )
         return lldbutil.run_to_breakpoint_do_run(self, target, breakpoint)
+
+    def launch_and_wait_for_gpu_target(
+        self, target: lldb.SBTarget, timeout_seconds: int = 60
+    ) -> lldb.SBProcess:
+        """Launch the program of `target` and wait for lldb to create the GPU
+        target, which it does when the program initializes CUDA. Return the
+        CPU process, which keeps running.
+
+        This is for a program that makes no CUDA call before its first kernel
+        launch: no CPU line before the launch has the GPU target in place, so
+        run_to_cpu_line cannot bring it to a point where GPU breakpoints can be
+        set. Set them on the CPU target before the run instead; lldb copies
+        them into the GPU target when it creates it (see gpu_breakpoint_copy).
+
+        The CPU target announces the GPU target with the event that lldb-dap
+        uses to open a session for it, once the GPU process is connected and
+        the breakpoints are copied.
+        """
+        self.setAsync(True)
+        # A listener of its own, which takes only this event, so that the
+        # state-changed events the other helpers wait for stay queued.
+        listener = lldb.SBListener("nvgpu-test-gpu-target-created")
+        broadcaster = target.GetBroadcaster()
+        created_bit = lldb.SBTarget.eBroadcastBitNewTargetCreated
+        self.assertEqual(
+            listener.StartListeningForEvents(broadcaster, created_bit),
+            created_bit,
+            "listening for the GPU target's creation",
+        )
+        try:
+            process = target.LaunchSimple(
+                None, None, self.get_process_working_directory()
+            )
+            self.assertTrue(process.IsValid(), "the program did not launch")
+            event = lldb.SBEvent()
+            self.assertTrue(
+                listener.WaitForEvent(math.ceil(timeout_seconds), event),
+                f"lldb created no GPU target within {timeout_seconds} s",
+            )
+        finally:
+            listener.StopListeningForEvents(broadcaster, created_bit)
+        created = lldb.SBTarget.GetCreatedTargetFromEvent(event)
+        self.assertTrue(created.IsValid(), "the event names no target")
+        self.assertEqual(created, self.gpu_target, "the created target")
+        self.assertTrue(self.gpu_process.IsValid(), "the GPU target has no process")
+        return process
+
+    @staticmethod
+    def _breakpoint_settings(
+        breakpoint: lldb.SBBreakpoint,
+    ) -> Optional[Dict[str, Any]]:
+        """Return what `breakpoint` stops at and how, as lldb serializes it:
+        its resolver, filter, options and names, but neither its ID nor its
+        locations. Return None if it does not serialize."""
+        stream = lldb.SBStream()
+        if not breakpoint.SerializeToStructuredData().GetAsJSON(stream).Success():
+            return None
+        return json.loads(stream.GetData())
+
+    def gpu_breakpoint_copy(self, breakpoint: lldb.SBBreakpoint) -> lldb.SBBreakpoint:
+        """Return the GPU target's copy of `breakpoint`, a breakpoint set on
+        the CPU target before lldb created the GPU target, which copies every
+        CPU breakpoint into it.
+
+        The copy has the original's settings, names included, but not
+        necessarily its ID: the GPU target numbers its breakpoints in the order
+        it makes them, so once a CPU breakpoint has been deleted, the copy of
+        one breakpoint has the ID of another. The copy is found by its settings
+        instead, and must be the only GPU breakpoint with them;
+        run_to_gpu_breakpoint names its breakpoint to tell it apart from an
+        identical one.
+        """
+        settings = self._breakpoint_settings(breakpoint)
+        self.assertIsNotNone(
+            settings, f"{breakpoint} does not serialize, so its copy cannot be found"
+        )
+        copies = [
+            candidate
+            for candidate in self.gpu_target.breakpoint_iter()
+            if self._breakpoint_settings(candidate) == settings
+        ]
+        self.assertEqual(
+            len(copies),
+            1,
+            f"GPU breakpoints with the settings of {breakpoint}: "
+            f"{[str(copy) for copy in copies]}",
+        )
+        return copies[0]
+
+    def run_to_gpu_breakpoint(
+        self, target: lldb.SBTarget, breakpoint: lldb.SBBreakpoint
+    ) -> lldb.SBBreakpoint:
+        """Launch the program of `target`, on which the test set `breakpoint`
+        before the run, and wait for the GPU's first stop. Return the GPU
+        target's copy of the breakpoint. This is what a user does with
+        `breakpoint set` and `run`; see launch_and_wait_for_gpu_target for when
+        a test needs it instead of run_to_cpu_line."""
+        # The copy keeps the original's names, so a name of its own finds it
+        # even beside an identical breakpoint.
+        self.assertSuccess(
+            breakpoint.AddNameWithErrorHandling(
+                f"test_breakpoint_{breakpoint.GetID()}"
+            ),
+            f"naming {breakpoint}",
+        )
+        self.launch_and_wait_for_gpu_target(target)
+        copy = self.gpu_breakpoint_copy(breakpoint)
+        self.wait_for_gpu_to_stop()
+        return copy
+
+    def run_to_gpu_line(
+        self,
+        source: str,
+        marker: str,
+        exe_name: Optional[str] = None,
+        target: Optional[lldb.SBTarget] = None,
+        condition: Optional[str] = None,
+    ) -> lldb.SBBreakpoint:
+        """Set a breakpoint on the line of `source` that contains `marker`,
+        with `condition` if one is given, before the run, and run the program
+        to the GPU's first stop with run_to_gpu_breakpoint. Return the GPU
+        target's copy of the breakpoint. `exe_name` and `target` are as for
+        run_to_cpu_line.
+
+        Use it for a line the CPU never runs, such as one in a __device__
+        function. lldb also resolves a line of a kernel in the kernel's
+        host-side stub, which stops the CPU before it launches the kernel.
+        """
+        # TODO: lldb should not stop the CPU in a kernel's host-side stub for a
+        # breakpoint on a line of the kernel, as cuda-gdb does not. Once it
+        # does not, a kernel's line works here too: drop the note above and
+        # nvgpu-support.rst's advice to mark a line the CPU never runs.
+        if target is None:
+            exe_name = exe_name or "a.out"
+            target = lldbutil.run_to_breakpoint_make_target(
+                self, exe_name, in_cwd=not os.path.isabs(exe_name)
+            )
+        else:
+            self.assertIsNone(exe_name, "pass exe_name or target, not both")
+        breakpoint = target.BreakpointCreateByLocation(
+            source, line_number(source, marker)
+        )
+        if condition:
+            breakpoint.SetCondition(condition)
+        return self.run_to_gpu_breakpoint(target, breakpoint)
 
     def killCPUOnTeardown(self):
         # TestBase.tearDown deletes all targets (and kills their processes)
@@ -505,6 +658,18 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 f"{what} exit status ({process.GetExitDescription() or 'no description'})",
             )
 
+    def continue_gpu_to_exit(
+        self, status: int = 0, keep_breakpoints: bool = False
+    ) -> None:
+        """Let the program run to its end: delete the GPU target's
+        breakpoints, unless `keep_breakpoints` is set, resume the GPU, and
+        check that both processes exit with `status`. With the breakpoints
+        kept, a stop at one of them fails the test."""
+        if not keep_breakpoints:
+            self.gpu_target.DeleteAllBreakpoints()
+        self.assertSuccess(self.gpu_process.Continue(), "continue GPU process")
+        self.assert_exit_status(status)
+
     def read_stdout(self) -> str:
         """Return what the CPU process wrote to stdout that the test has not
         read yet. lldb collects it on a thread of its own, so output the
@@ -758,6 +923,58 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             description=description,
         )
 
+    def for_each_thread_at_breakpoint(
+        self,
+        breakpoint: lldb.SBBreakpoint,
+        count: int,
+        check: Optional[Callable[[lldb.SBThread], None]] = None,
+    ) -> Set[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
+        """Run `check` on each thread that the current GPU stop has at
+        `breakpoint`, then resume the GPU until `count` threads in all have
+        stopped there, running `check` on each as it stops. Return the
+        threads' thread_coords.
+
+        The threads that reach one breakpoint do not always stop at once: a
+        warp can arrive in a stop of its own. A thread that stops there twice
+        fails the test, since the program then went past where the test
+        expected every thread to stop.
+        """
+        seen = set()
+        stopped = self.assert_gpu_stop_at_breakpoint(breakpoint)
+        while True:
+            for thread in stopped:
+                coords = self.thread_coords(thread)
+                self.assertNotIn(
+                    coords, seen, f"{thread.GetName()} stopped at {breakpoint} twice"
+                )
+                seen.add(coords)
+                if check:
+                    check(thread)
+            if len(seen) >= count:
+                return seen
+            stopped = self.continue_gpu_until_breakpoint(breakpoint)
+
+    def step_over_gpu_thread(
+        self, thread: lldb.SBThread, expected_line: int, timeout_seconds: int = 30
+    ) -> None:
+        """Step `thread` over its source line, as `next` does, and wait for
+        the GPU to stop. The step must complete with `thread` at
+        `expected_line`."""
+        error = lldb.SBError()
+        thread.StepOver(lldb.eOnlyDuringStepping, error)
+        self.assertSuccess(error, f"step over in {thread.GetName()}")
+        self.wait_for_gpu_to_stop(timeout_seconds)
+        self.assertStopReason(
+            thread.GetStopReason(),
+            lldb.eStopReasonPlanComplete,
+            f"stop reason of {thread.GetName()} after stepping over",
+        )
+        self.assertEqual(
+            thread.frame[0].GetLineEntry().GetLine(),
+            expected_line,
+            f"line of {thread.GetName()} after stepping over",
+        )
+
     def assert_frame_at(
         self, frame: lldb.SBFrame, function: str, source: str, marker: str
     ) -> None:
@@ -787,6 +1004,38 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 err.Success(), f"reading {name}[{i}] failed: {err.GetCString()}"
             )
         return vals
+
+    @staticmethod
+    def _describe_frame(frame: lldb.SBFrame) -> str:
+        """Name `frame` for a failure message: its index, its function, and its
+        thread, whose name gives a GPU thread's CUDA coordinates."""
+        thread = frame.GetThread()
+        thread_name = thread.GetName() or f"thread #{thread.GetIndexID()}"
+        return (
+            f"frame #{frame.GetFrameID()} ({frame.GetFunctionName()}) of {thread_name}"
+        )
+
+    def read_int_variable(self, frame: lldb.SBFrame, path: str) -> int:
+        """Read the integer variable, or member or element of one, at `path`
+        in `frame`, as `frame variable` does; fail if lldb cannot read it. To
+        check one value, use assert_int_variable."""
+        value = frame.GetValueForVariablePath(path)
+        self.assertSuccess(
+            value.GetError(), f"reading {path} in {self._describe_frame(frame)}"
+        )
+        return value.GetValueAsSigned()
+
+    def assert_int_variable(
+        self, frame: lldb.SBFrame, path: str, expected: int
+    ) -> None:
+        """The integer variable, or member or element of one, at `path` in
+        `frame` must have the value `expected`. A failure names the variable,
+        the frame and its thread."""
+        self.assertEqual(
+            self.read_int_variable(frame, path),
+            expected,
+            f"{path} in {self._describe_frame(frame)}",
+        )
 
     def thread_coords(
         self, thread: lldb.SBThread
