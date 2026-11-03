@@ -83,17 +83,23 @@ class FakeLibcuda:
 
 
 class FakeLitConfig:
-    """Records what lit_local_config() prints."""
+    """Records what lit_local_config() prints, and exits on a fatal error as
+    lit does."""
 
     def __init__(self, params=None):
         self.params = params or {}
         self.messages = []
+        self.parallelism_groups = {}
 
     def note(self, message):
         self.messages.append(("note", message))
 
     def warning(self, message):
         self.messages.append(("warning", message))
+
+    def fatal(self, message):
+        self.messages.append(("fatal", message))
+        raise SystemExit(2)
 
 
 class FakeConfig:
@@ -332,6 +338,58 @@ class TestNVGPUGating(TestBase):
         level, message = lit_config.messages[-1]
         self.assertEqual(level, "warning")
         self.assertIn(nvgpu_host.REMOTE_REASON, message)
+
+    def test_lit_local_config_parallelism(self):
+        group = nvgpu_host.PARALLELISM_GROUP
+        fixed = gpu_info(TWO_GPUS, 13, debugger_minor=5)
+        losing = gpu_info(TWO_GPUS, 13, debugger_minor=4)
+
+        def configure(params, info):
+            """Return the limit on GPU tests at once, None for no limit, and
+            the notes lit printed."""
+            lit_config = FakeLitConfig(params)
+            configs = [FakeConfig(), FakeConfig()]
+            with mock.patch.object(nvgpu_host, "probe", return_value=info):
+                for config in configs:
+                    nvgpu_host.lit_local_config(config, lit_config)
+            # The tests of both NVIDIA directories share one group.
+            for config in configs:
+                self.assertEqual(config.parallelism_group, group)
+            notes = [
+                message for level, message in lit_config.messages if level == "note"
+            ]
+            return lit_config.parallelism_groups[group], notes
+
+        # The GPU tests run in parallel, except with a driver that can lose
+        # GPU stops, and lit says why that run is one at a time.
+        self.assertIsNone(configure({}, fixed)[0])
+        limit, notes = configure({}, losing)
+        self.assertEqual(limit, 1)
+        self.assertIn("--param nvgpu-jobs=N runs N at a time", notes[-1])
+        # Without the driver's version or a GPU, nothing to protect.
+        self.assertIsNone(configure({}, gpu_info(TWO_GPUS, 13))[0])
+        self.assertIsNone(configure({}, gpu_info([], 13, debugger_minor=4))[0])
+        # --param nvgpu-jobs decides with any driver.
+        self.assertEqual(configure({"nvgpu-jobs": "1"}, fixed)[0], 1)
+        limit, notes = configure({"nvgpu-jobs": "4"}, losing)
+        self.assertEqual(limit, 4)
+        self.assertNotIn("one at a time", notes[-1])
+        # A value that lit cannot use stops the run before the probe.
+        probe = mock.patch.object(nvgpu_host, "probe", return_value=fixed)
+        for value in ["0", "four", ""]:
+            lit_config = FakeLitConfig({"nvgpu-jobs": value})
+            with probe, self.assertRaises(SystemExit):
+                nvgpu_host.lit_local_config(FakeConfig(), lit_config)
+            self.assertEqual(
+                lit_config.messages,
+                [
+                    (
+                        "fatal",
+                        "nvgpu: --param nvgpu-jobs=N needs a positive number N, "
+                        f"not {value!r}",
+                    )
+                ],
+            )
 
     def test_which_tests_need_a_gpu(self):
         # A method's mark decides, then NEEDS_GPU on its class or base class:

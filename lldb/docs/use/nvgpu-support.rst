@@ -257,6 +257,13 @@ runs lit, so they are also UNSUPPORTED on a remote platform
 instead. ``--param nvgpu-no-device`` hides the GPUs, to run on a GPU machine
 what a machine without one would.
 
+lit runs the NVIDIA GPU tests in parallel, except with a driver whose CUDA
+debugger API is older than 13.5, such as R615's. With several tests on the GPU
+at once, such a driver can lose a GPU stop or exception, and the test that
+waits for it times out, so lit runs the GPU tests one at a time and says so in
+a note. ``--param nvgpu-jobs=N`` runs N GPU tests at once with any driver, and
+``--param nvgpu-jobs=1`` one at a time.
+
 Run the GPU tests through lit. ``lldb-dotest`` does not pass them the plugin,
 the nvcc, or the environment that lit does, so a test run with it alone fails
 to build its program.
