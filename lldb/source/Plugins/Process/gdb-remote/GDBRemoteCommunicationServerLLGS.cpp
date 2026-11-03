@@ -1226,7 +1226,7 @@ void GDBRemoteCommunicationServerLLGS::HandleInferiorState_Exited(
     // When running in non-stop mode, wait for the vStopped to clear
     // the notification queue.
     if (m_debugged_processes.empty() && !m_non_stop && !vkilled &&
-        !m_plugin_instance) {
+        OwnsMainLoop()) {
       // Close the pipe to the inferior terminal i/o if we launched it and set
       // one up.
       MaybeCloseInferiorTerminalConnection();
@@ -1332,10 +1332,26 @@ void GDBRemoteCommunicationServerLLGS::DataAvailableCallback() {
                 "GDBRemoteCommunicationServerLLGS::%s processing a packet "
                 "failed: %s",
                 __FUNCTION__, error.AsCString());
+      if (!OwnsMainLoop()) {
+        // Ending the shared loop would end the native process's debug session
+        // too. Close only this connection, after this callback returns, as
+        // closing it unregisters this callback.
+        m_mainloop.AddPendingCallback(
+            [this](MainLoopBase &) { HandlePluginClientDisconnect(); });
+        break;
+      }
       m_mainloop.RequestTermination();
       break;
     }
   }
+}
+
+void GDBRemoteCommunicationServerLLGS::HandlePluginClientDisconnect() {
+  if (!m_network_handle_up)
+    return;
+  m_network_handle_up.reset();
+  Disconnect();
+  m_plugin_instance->ClientDisconnected();
 }
 
 Status GDBRemoteCommunicationServerLLGS::InitializeConnection(

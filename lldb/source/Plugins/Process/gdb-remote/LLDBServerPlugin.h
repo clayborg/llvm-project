@@ -90,6 +90,17 @@ public:
   /// \param[in] exit_status The exit status of the native process.
   virtual void NativeProcessDidExit(const WaitStatus &exit_status) = 0;
 
+  /// Get notified when the LLDB client of this plug-in's GDB server
+  /// disconnects, for example after it detaches from the GPU process.
+  ///
+  /// The native process's debug session continues. The default implementation
+  /// lets the plug-in offer a new connection later.
+  virtual void ClientDisconnected() {
+    std::lock_guard<std::mutex> guard(m_connect_mutex);
+    m_is_connected = false;
+    m_is_listening = false;
+  }
+
   /// Get the GPU plug-in initialization actions.
   ///
   /// Each GPU plugin can return a structure that describes the GPU plug-in and

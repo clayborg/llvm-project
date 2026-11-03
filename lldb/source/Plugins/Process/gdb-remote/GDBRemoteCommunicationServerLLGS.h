@@ -390,6 +390,17 @@ private:
 
   void DataAvailableCallback();
 
+  /// Whether this server owns its main loop, so that it may end the loop when
+  /// its debug session ends. A GPU plug-in's server shares the native process
+  /// server's loop, so it must leave the loop running.
+  bool OwnsMainLoop() const { return !m_plugin_instance; }
+
+  /// Close this plug-in server's connection after its client disconnects.
+  /// lldb-server and the native process's debug session keep running.
+  /// Detaching the native process too is up to the client, over the native
+  /// process's own connection.
+  void HandlePluginClientDisconnect();
+
   void SendProcessOutput();
 
   void StartSTDIOForwarding();

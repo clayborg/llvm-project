@@ -203,6 +203,28 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+    def test_mock_gpu_detach_keeps_cpu_process(self):
+        """
+        Test that detaching from the GPU target ends only the GPU session.
+        The GPU's GDB server runs inside the CPU's lldb-server, so the GPU
+        connection closing must not stop lldb-server.
+        """
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        gpu_process = self.gpu_process
+        self.assertSuccess(gpu_process.Detach())
+        self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+
+        cpu_process = self.cpu_process
+        self.assertState(cpu_process.GetState(), lldb.eStateStopped)
+        self.assertSuccess(cpu_process.Continue())
+        self.assertState(cpu_process.GetState(), lldb.eStateExited)
+        self.assertEqual(cpu_process.GetExitStatus(), 0)
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,
