@@ -306,6 +306,19 @@ directly above a kernel's definition would stop the GPU in that kernel.
 copy never resolves to device code, wherever the kernels are defined. Set GPU
 breakpoints on ``self.gpu_target`` once the program has stopped there.
 
+A program that makes no CUDA call before its first kernel launch has no such
+line: lldb creates the GPU target only when the launch initializes CUDA. Set
+its breakpoints on the CPU target before the run, as a user does with
+``breakpoint set`` and ``run``. ``run_to_gpu_line(source, marker)`` does that
+for a marked line and runs the program to the first GPU stop;
+``run_to_gpu_breakpoint(target, breakpoint)`` does it for a breakpoint the test
+set itself. Both return the GPU target's copy of the breakpoint. lldb copies
+every CPU breakpoint into the GPU target when it creates it; a copy keeps the
+original's settings but is numbered in the order it is made, so it has the
+original's ID only if no CPU breakpoint was deleted first.
+``gpu_breakpoint_copy`` finds the copy by its settings, not its ID. Mark a
+line the CPU never runs, such as one in a ``__device__`` function.
+
 A test program can be a copy of a `cuda-samples
 <https://github.com/NVIDIA/cuda-samples>`_ program. Each copy has a directory
 of its own under ``gpu/nvidia/samples/``, with the Makefile and the test file
