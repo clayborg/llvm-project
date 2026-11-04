@@ -219,6 +219,36 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         # The GPU process exits with the status of the CPU process.
         self.assertEqual(gpu_process.GetExitStatus(), 0)
 
+    def test_mock_gpu_rerun_reuses_gpu_target(self):
+        """
+        Test that running the program again connects the new GPU process to
+        the GPU target of the first run. The target keeps the breakpoints set
+        on it, and doesn't get a second copy of the CPU breakpoints.
+        """
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        gpu_target = self.gpu_target
+        gpu_target.BreakpointCreateByName("gpu_kernel")
+        num_gpu_bkpts = gpu_target.GetNumBreakpoints()
+        first_gpu_process_id = self.gpu_process.GetUniqueID()
+
+        self.assertSuccess(self.cpu_process.Kill())
+        process = self.cpu_target.LaunchSimple(
+            None, None, self.get_process_working_directory()
+        )
+        self.assertState(process.GetState(), lldb.eStateStopped)
+        lldbutil.continue_to_source_breakpoint(
+            self, process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        self.assertEqual(self.dbg.GetNumTargets(), 2)
+        self.assertTrue(self.gpu_target == gpu_target)
+        self.assertEqual(gpu_target.GetNumBreakpoints(), num_gpu_bkpts)
+        self.assertNotEqual(self.gpu_process.GetUniqueID(), first_gpu_process_id)
+
     def test_mock_gpu_target_delete_keeps_cpu_process(self):
         """
         Test that deleting the GPU target leaves the CPU target running and no

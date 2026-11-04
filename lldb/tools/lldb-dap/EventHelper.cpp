@@ -341,9 +341,13 @@ void HandleProcessEvent(const lldb::SBEvent &event, Log *log) {
     auto state = lldb::SBProcess::GetStateFromEvent(event);
     switch (state) {
     case lldb::eStateConnected:
-    case lldb::eStateDetached:
     case lldb::eStateInvalid:
     case lldb::eStateUnloaded:
+      break;
+    case lldb::eStateDetached:
+      // Debugging of this process has ended, as when killing the CPU process
+      // detaches its GPU processes.
+      dap->SendTerminatedEvent();
       break;
     case lldb::eStateAttaching:
     case lldb::eStateCrashed:

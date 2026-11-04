@@ -207,3 +207,40 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         self.assertEqual(self.continue_cpu_to_exit()["body"]["exitCode"], 0)
         self.assertEqual(child.wait_for_exited()["body"]["exitCode"], 0)
         self.dap_server.request_disconnect()
+
+    def test_gpu_restart_reuses_gpu_target(self):
+        """
+        Test that restarting starts a new GPU child session on the same GPU
+        target, where the breakpoint set in the first child session is hit.
+        """
+        source = "hello_world.hip"
+        cpu_breakpoint_ids, gpu_target_id = self.run_to_gpu_child_session(source)
+        gpu_breakpoint_line = line_number(source, "// GPU BREAKPOINT")
+        gpu_breakpoint_ids = self.set_source_breakpoints_on(
+            gpu_target_id, source, [gpu_breakpoint_line], wait_for_resolve=False
+        )
+        first_child = self.dap_server.get_child_sessions()[gpu_target_id]
+
+        self.dap_server.request_restart()
+        self.wait_for_cpu_breakpoint(cpu_breakpoint_ids)
+        reverse_requests = self.dap_server.reverse_requests
+        self.assertEqual(len(reverse_requests), 2)
+        self.assertEqual(
+            reverse_requests[1]["arguments"]["configuration"]["targetId"],
+            gpu_target_id,
+        )
+        new_child = self.dap_server.get_child_sessions()[gpu_target_id]
+        self.assertIsNot(new_child, first_child)
+
+        # Restarting detached the first child session's GPU process, but the
+        # session stays open until the client disconnects it. Events for the
+        # reused target must go to the new session.
+        self.do_continue_on(gpu_target_id)
+        self.do_continue()
+        self.verify_breakpoint_hit_on(gpu_target_id, gpu_breakpoint_ids)
+
+        # Disconnecting the first child session, as the client does after
+        # "terminated", must leave the new session's process alone.
+        self.assertTrue(first_child.request_disconnect()["success"])
+        self.assertTrue(new_child.request_threads()["success"])
+        self.dap_server.request_disconnect(terminateDebuggee=True)
