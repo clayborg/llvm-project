@@ -506,6 +506,12 @@ public:
     } else {
       lldb::addr_t addr_of_valobj =
           valobj_sp->GetAddressOf(/*scalar_is_load_address=*/false).address;
+      // The expression can't dereference an address in another address
+      // space, so copy the value instead.
+      std::optional<uint64_t> address_space_id =
+          valobj_sp->GetValue().GetAddressSpaceId();
+      if (address_space_id && *address_space_id != 0 /*DW_ASPACE_LLVM_none*/)
+        addr_of_valobj = LLDB_INVALID_ADDRESS;
       if (addr_of_valobj != LLDB_INVALID_ADDRESS) {
         Status write_error;
         map.WritePointerToMemory(load_addr, addr_of_valobj, write_error);

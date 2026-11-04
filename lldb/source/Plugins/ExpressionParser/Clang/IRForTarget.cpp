@@ -358,6 +358,9 @@ bool IRForTarget::CreateResultVariable(llvm::Function &llvm_function) {
   LLDB_LOG(log, "Replacing \"{0}\" with \"{1}\"", PrintValue(result_global),
            PrintValue(new_result_global));
 
+  // Dead constant users (e.g. an unused addrspacecast) count as uses.
+  result_global->removeDeadConstantUsers();
+
   if (result_global->use_empty()) {
     // We need to synthesize a store for this variable, because otherwise
     // there's nothing to put into its equivalent persistent variable.
@@ -1355,6 +1358,30 @@ bool IRForTarget::UnfoldConstant(Constant *old_constant,
                               entry_instruction_finder, error_stream))
             return false;
         } break;
+        case Instruction::AddrSpaceCast: {
+          FunctionValueCache addr_space_cast_maker(
+              [&value_maker, &entry_instruction_finder, old_constant,
+               constant_expr](llvm::Function *function) -> llvm::Value * {
+                if (constant_expr->getOperand(0) != old_constant)
+                  return constant_expr;
+
+                llvm::Value *new_value = value_maker.GetValue(function);
+                // The replacement may already have the destination type.
+                if (new_value->getType() == constant_expr->getType())
+                  return new_value;
+
+                return new AddrSpaceCastInst(
+                    new_value, constant_expr->getType(), "",
+                    llvm::cast<Instruction>(
+                        entry_instruction_finder.GetValue(function))
+                        ->getIterator());
+              });
+
+          if (!UnfoldConstant(constant_expr, llvm_function,
+                              addr_space_cast_maker, entry_instruction_finder,
+                              error_stream))
+            return false;
+        } break;
         case Instruction::GetElementPtr: {
           // GetElementPtrConstantExpr
           //   OperandList[0] is base
@@ -1405,8 +1432,18 @@ bool IRForTarget::UnfoldConstant(Constant *old_constant,
                                   "expressions is unsupported.\n");
           return false;
         }
-        inst->replaceUsesOfWith(
-            old_constant, value_maker.GetValue(inst->getParent()->getParent()));
+        llvm::Function *function = inst->getParent()->getParent();
+        llvm::Value *new_value = value_maker.GetValue(function);
+        // Cast back if the global was used in its own address space.
+        if (new_value->getType() != old_constant->getType() &&
+            new_value->getType()->isPointerTy() &&
+            old_constant->getType()->isPointerTy())
+          new_value = new AddrSpaceCastInst(
+              new_value, old_constant->getType(), "",
+              llvm::cast<Instruction>(
+                  entry_instruction_finder.GetValue(function))
+                  ->getIterator());
+        inst->replaceUsesOfWith(old_constant, new_value);
       } else {
         error_stream.Printf(
             "error [IRForTarget internal]: Unhandled non-constant type: \"%s\"",

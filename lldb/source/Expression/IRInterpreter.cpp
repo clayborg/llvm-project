@@ -40,6 +40,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <map>
 
 using namespace llvm;
@@ -124,6 +125,15 @@ public:
 
   ~InterpreterStackFrame() = default;
 
+  /// Size of the interpreter's storage for a value of \p type. Pointers are
+  /// kept at full address width even if their address space is narrower.
+  size_t GetValueByteSize(Type *type) {
+    size_t size = m_target_data.getTypeStoreSize(type);
+    if (type->isPointerTy() && size < m_addr_byte_size)
+      return m_addr_byte_size;
+    return size;
+  }
+
   void Jump(const BasicBlock *bb) {
     m_prev_bb = m_bb;
     m_bb = bb;
@@ -149,7 +159,7 @@ public:
 
   bool AssignToMatchType(lldb_private::Scalar &scalar, llvm::APInt value,
                          Type *type) {
-    size_t type_size = m_target_data.getTypeStoreSize(type);
+    size_t type_size = GetValueByteSize(type);
 
     if (type_size > 8)
       return false;
@@ -187,7 +197,7 @@ public:
     }
 
     lldb::addr_t process_address = ResolveValue(value, module);
-    size_t value_size = m_target_data.getTypeStoreSize(value->getType());
+    size_t value_size = GetValueByteSize(value->getType());
 
     lldb_private::DataExtractor value_extractor;
     lldb_private::Status extract_error;
@@ -235,7 +245,7 @@ public:
         return false;
     }
 
-    size_t value_byte_size = m_target_data.getTypeStoreSize(value->getType());
+    size_t value_byte_size = GetValueByteSize(value->getType());
 
     lldb_private::DataBufferHeap buf(value_byte_size, 0);
 
@@ -291,6 +301,9 @@ public:
         case Instruction::IntToPtr:
         case Instruction::PtrToInt:
         case Instruction::BitCast:
+          return ResolveConstantValue(value, constant_expr->getOperand(0));
+        case Instruction::AddrSpaceCast:
+          // Addresses are flat in the interpreter.
           return ResolveConstantValue(value, constant_expr->getOperand(0));
         case Instruction::GetElementPtr: {
           ConstantExpr::const_op_iterator op_cursor = constant_expr->op_begin();
@@ -373,7 +386,7 @@ public:
     if (!ResolveConstantValue(resolved_value, constant))
       return false;
 
-    size_t constant_size = m_target_data.getTypeStoreSize(constant->getType());
+    size_t constant_size = GetValueByteSize(constant->getType());
     lldb_private::DataBufferHeap buf(constant_size, 0);
 
     lldb_private::Status get_data_error;
@@ -408,8 +421,13 @@ public:
   lldb::addr_t Malloc(llvm::Type *type) {
     lldb_private::Status alloc_error;
 
-    return Malloc(m_target_data.getTypeAllocSize(type),
-                  m_target_data.getPrefTypeAlign(type).value());
+    size_t size = m_target_data.getTypeAllocSize(type);
+    size_t align = m_target_data.getPrefTypeAlign(type).value();
+    if (type->isPointerTy() && size < m_addr_byte_size) {
+      size = m_addr_byte_size;
+      align = std::max(align, m_addr_byte_size);
+    }
+    return Malloc(size, align);
   }
 
   std::string PrintData(lldb::addr_t addr, llvm::Type *type) {
@@ -494,6 +512,7 @@ static bool CanResolveConstant(llvm::Constant *constant) {
       case Instruction::IntToPtr:
       case Instruction::PtrToInt:
       case Instruction::BitCast:
+      case Instruction::AddrSpaceCast:
         return CanResolveConstant(constant_expr->getOperand(0));
       case Instruction::GetElementPtr: {
         // Check that the base can be constant-resolved.
@@ -547,6 +566,7 @@ bool IRInterpreter::CanInterpret(llvm::Module &module, llvm::Function &function,
         return false;
       }
       case Instruction::Add:
+      case Instruction::AddrSpaceCast:
       case Instruction::Alloca:
       case Instruction::BitCast:
       case Instruction::Br:
@@ -939,6 +959,7 @@ bool IRInterpreter::Interpret(llvm::Module &module, llvm::Function &function,
         LLDB_LOGF(log, "  P : 0x%" PRIx64, P);
       }
     } break;
+    case Instruction::AddrSpaceCast:
     case Instruction::BitCast:
     case Instruction::ZExt: {
       const CastInst *cast_inst = cast<CastInst>(inst);
@@ -1294,11 +1315,19 @@ bool IRInterpreter::Interpret(llvm::Module &module, llvm::Function &function,
 
       Type *target_ty = load_inst->getType();
       size_t target_size = data_layout.getTypeStoreSize(target_ty);
-      lldb_private::DataBufferHeap buffer(target_size, 0);
+      // Zero-extend narrow pointers to their full-width slot.
+      size_t slot_size = frame.GetValueByteSize(target_ty);
+      if (slot_size != target_size &&
+          frame.m_byte_order != lldb::eByteOrderLittle) {
+        LLDB_LOGF(log, "Narrow pointer loads need a little-endian target");
+        error =
+            lldb_private::Status::FromErrorString(unsupported_operand_error);
+        return false;
+      }
+      lldb_private::DataBufferHeap buffer(slot_size, 0);
 
       read_error.Clear();
-      execution_unit.ReadMemory(buffer.GetBytes(), R, buffer.GetByteSize(),
-                                read_error);
+      execution_unit.ReadMemory(buffer.GetBytes(), R, target_size, read_error);
       if (!read_error.Success()) {
         LLDB_LOGF(log, "Couldn't read from a region on behalf of a LoadInst");
         error = lldb_private::Status::FromErrorString(memory_read_error);
