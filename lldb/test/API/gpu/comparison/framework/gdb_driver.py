@@ -727,10 +727,21 @@ print("RESULT_JSON:" + json.dumps(result))
         """Get list of loaded modules.
 
         Modules are named like ROCLLDB names them, after the files the core's
-        NT_FILE note says were mapped: symlinked paths (e.g. libz.so.1) are
-        resolved, and memory code objects are named after the file mapped at
-        their address when there is one. Separate debug info objfiles belong
-        to their owner's module and are not listed.
+        NT_FILE note says were mapped. For example, these ROCgdb objfiles are
+        reported as the following module paths:
+
+          /usr/local/fbcode/platform010/lib/libz.so.1
+            -> /usr/local/fbcode/platform010/lib/libz.so.1.2.8
+               (symlink resolved)
+          memory://21268#offset=0x7ed6ec400000&size=14382792
+            -> .../rocm-7.0/lib/hipblaslt/library/Kernels.so-000-gfx942.hsaco
+               (memory code object named after the file mapped at its address)
+          memory://21268#offset=0x7f46fc44e000&size=32648
+            -> unchanged (no file is mapped at its address)
+          /tmp/symbol_storage/8f76.../orjson.cpython-312-x86_64-linux-gnu.debuginfo
+            -> not listed (separate debug info for orjson...so)
+
+        A module's name is the basename of its path, e.g. libz.so.1.2.8.
         """
         script = r"""
 import gdb
@@ -742,6 +753,20 @@ result = {"success": True, "modules": [], "error": ""}
 
 
 def get_core_file_mappings():
+    # Return the core's file mappings as (start, end, path) tuples, parsed
+    # from "info proc mappings". For example, this output:
+    #
+    #   Mapped address spaces:
+    #
+    #   Start Addr         End Addr           Size     Offset File
+    #   0x00007ed6ec400000 0x00007ed6ed1b8000 0xdb8000 0x0    /usr/.../Kernels.so-000-gfx942.hsaco
+    #   0x00007f8995aec000 0x00007f8995aed000 0x1000   0x0    /dev/shm/sem.tIR5xC (deleted)
+    #
+    # returns:
+    #
+    #   [(0x7ed6ec400000, 0x7ed6ed1b8000, "/usr/.../Kernels.so-000-gfx942.hsaco"),
+    #    (0x7f8995aec000, 0x7f8995aed000, "/dev/shm/sem.tIR5xC (deleted)")]
+    #
     # ROCgdb only lists the core's file mappings while a host thread is
     # selected, and the selected thread is usually an AMDGPU wave.
     selected_thread = gdb.selected_thread()
@@ -760,6 +785,7 @@ def get_core_file_mappings():
 
     mappings = []
     for line in output.splitlines():
+        # Start, end, size, offset, optional permissions, then the file.
         match = re.match(
             r"\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+"
             r"(?:[-rwxsp]{4}\s+)?(/.*?)\s*$",
@@ -778,10 +804,13 @@ try:
 
     mappings = None
     for objfile in gdb.objfiles():
+        # Separate debug info, e.g. .../orjson...debuginfo or
+        # ".gnu_debugdata for .../libamdhip64.so".
         if objfile.owner is not None:
             continue
 
         path = objfile.filename or ""
+        # memory://<pid>#offset=<address>&size=<size>
         memory_match = re.match(r"memory://\d+#offset=(0x[0-9a-fA-F]+|\d+)&", path)
         if memory_match:
             if mappings is None:
@@ -792,6 +821,7 @@ try:
                     path = mapped_path
                     break
         elif path.startswith("/"):
+            # e.g. .../lib/libz.so.1 -> .../lib/libz.so.1.2.8
             path = os.path.realpath(path)
 
         module = {
