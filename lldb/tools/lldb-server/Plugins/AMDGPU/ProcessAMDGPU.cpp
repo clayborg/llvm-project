@@ -238,6 +238,21 @@ Status ProcessAMDGPU::Kill() { return Status(); }
 
 Status ProcessAMDGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                                  size_t &bytes_read) {
+  // Prefer dbgapi: unlike the host process, it can access GPU memory while
+  // the host process is running.
+  amd_dbgapi_size_t dbgapi_size = size;
+  llvm::Error err = RunAmdDbgApiCommand([&] {
+    return amd_dbgapi_read_memory(
+        GetDbgApiProcessID(), AMD_DBGAPI_WAVE_NONE, AMD_DBGAPI_LANE_NONE,
+        AMD_DBGAPI_ADDRESS_SPACE_GLOBAL, addr, &dbgapi_size, buf);
+  });
+  if (!err) {
+    bytes_read = dbgapi_size;
+    return Status();
+  }
+  LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                 "dbgapi read at {1:x} failed, using host process: {0}", addr);
+
   NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
   if (!native_process)
     return Status::FromErrorString("native process is unavailable");
@@ -246,6 +261,20 @@ Status ProcessAMDGPU::ReadMemory(lldb::addr_t addr, void *buf, size_t size,
 
 Status ProcessAMDGPU::WriteMemory(lldb::addr_t addr, const void *buf,
                                   size_t size, size_t &bytes_written) {
+  // See ReadMemory.
+  amd_dbgapi_size_t dbgapi_size = size;
+  llvm::Error err = RunAmdDbgApiCommand([&] {
+    return amd_dbgapi_write_memory(
+        GetDbgApiProcessID(), AMD_DBGAPI_WAVE_NONE, AMD_DBGAPI_LANE_NONE,
+        AMD_DBGAPI_ADDRESS_SPACE_GLOBAL, addr, &dbgapi_size, buf);
+  });
+  if (!err) {
+    bytes_written = dbgapi_size;
+    return Status();
+  }
+  LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                 "dbgapi write at {1:x} failed, using host process: {0}", addr);
+
   NativeProcessProtocol *native_process = m_debugger->GetNativeProcess();
   if (!native_process)
     return Status::FromErrorString("native process is unavailable");
