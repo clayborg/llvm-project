@@ -60,7 +60,8 @@ public:
   ~MCDisasmInstance() = default;
 
   bool GetMCInst(const uint8_t *opcode_data, size_t opcode_data_len,
-                 lldb::addr_t pc, llvm::MCInst &mc_inst, uint64_t &size) const;
+                 lldb::addr_t pc, llvm::MCInst &mc_inst, uint64_t &size,
+                 llvm::raw_ostream *comments_stream = nullptr) const;
   void PrintMCInst(llvm::MCInst &mc_inst, lldb::addr_t pc,
                    std::string &inst_string, std::string &comments_string);
   void SetStyle(bool use_hex_immed, HexImmediateStyle hex_style);
@@ -613,8 +614,11 @@ public:
         const size_t opcode_data_len = data.GetByteSize();
         llvm::MCInst inst;
         uint64_t inst_size = 0;
-        bool valid = mc_disasm_ptr->GetMCInst(opcode_data, opcode_data_len, pc,
-                                              inst, inst_size);
+        std::string decode_comment_string;
+        llvm::raw_string_ostream decode_comments_stream(decode_comment_string);
+        bool valid =
+            mc_disasm_ptr->GetMCInst(opcode_data, opcode_data_len, pc, inst,
+                                     inst_size, &decode_comments_stream);
 
         if (valid && inst_size > 0) {
           mc_disasm_ptr->SetStyle(use_hex_immediates, hex_style);
@@ -629,6 +633,23 @@ public:
 
           if (!comment_string.empty()) {
             AppendComment(comment_string);
+          }
+
+          if (!decode_comment_string.empty()) {
+            static std::string g_newlines("\r\n");
+            for (size_t newline_pos = 0;
+                 (newline_pos = decode_comment_string.find_first_of(
+                      g_newlines, newline_pos)) != decode_comment_string.npos;
+                 /**/) {
+              decode_comment_string.replace(
+                  decode_comment_string.begin() + newline_pos,
+                  decode_comment_string.begin() + newline_pos + 1, 1, ' ');
+            }
+            while (!decode_comment_string.empty() &&
+                   decode_comment_string.back() == ' ')
+              decode_comment_string.pop_back();
+            if (!decode_comment_string.empty())
+              AppendComment(decode_comment_string);
           }
         }
 
@@ -1350,15 +1371,16 @@ DisassemblerLLVMC::MCDisasmInstance::MCDisasmInstance(
          m_asm_info_up && m_context_up && m_disasm_up && m_instr_printer_up);
 }
 
-bool DisassemblerLLVMC::MCDisasmInstance::GetMCInst(const uint8_t *opcode_data,
-                                                    size_t opcode_data_len,
-                                                    lldb::addr_t pc,
-                                                    llvm::MCInst &mc_inst,
-                                                    uint64_t &size) const {
+bool DisassemblerLLVMC::MCDisasmInstance::GetMCInst(
+    const uint8_t *opcode_data, size_t opcode_data_len, lldb::addr_t pc,
+    llvm::MCInst &mc_inst, uint64_t &size,
+    llvm::raw_ostream *comments_stream) const {
   llvm::ArrayRef<uint8_t> data(opcode_data, opcode_data_len);
   llvm::MCDisassembler::DecodeStatus status;
 
-  status = m_disasm_up->getInstruction(mc_inst, size, data, pc, llvm::nulls());
+  status = m_disasm_up->getInstruction(mc_inst, size, data, pc,
+                                       comments_stream ? *comments_stream
+                                                       : llvm::nulls());
   if (status == llvm::MCDisassembler::Success)
     return true;
   else
