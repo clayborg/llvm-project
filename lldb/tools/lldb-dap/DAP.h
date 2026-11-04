@@ -45,6 +45,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/Threading.h"
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -121,6 +122,8 @@ struct DAP final : public DAPTransport::MessageHandler {
   lldb::tid_t focus_tid = LLDB_INVALID_THREAD_ID;
 
   llvm::once_flag terminated_event_flag;
+  /// Whether the "terminated" event has been sent.
+  std::atomic<bool> terminated_event_sent = false;
   bool stop_at_entry = false;
   bool is_attach = false;
 

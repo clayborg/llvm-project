@@ -1144,7 +1144,18 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "ProcessGDBRemote::HandleConnectionRequest()");
   auto &debugger = GetTarget().GetDebugger();
-  TargetSP gpu_target_sp;
+  // Reuse the GPU target of an earlier run, so that the breakpoints set on it
+  // apply to this run too, as they do on ROCgdb's single inferior. Connecting
+  // replaces the target's process, so never reuse a target whose process is
+  // alive.
+  TargetSP gpu_target_sp =
+      GetTarget().GetGPUPluginTarget(gpu_action.plugin_name);
+  if (gpu_target_sp) {
+    ProcessSP old_process_sp = gpu_target_sp->GetProcessSP();
+    if (old_process_sp && old_process_sp->IsAlive())
+      gpu_target_sp.reset();
+  }
+  const bool reuse_target = gpu_target_sp != nullptr;
   llvm::StringRef exe_path;
   llvm::StringRef triple;
   OptionGroupPlatform *platform_options = nullptr;
@@ -1154,9 +1165,11 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   if (connection_info.triple)
     triple = *connection_info.triple;
   // Create an empty target for our GPU.
-  Status error(debugger.GetTargetList().CreateTarget(
-      debugger, exe_path, triple, eLoadDependentsNo, platform_options,
-      gpu_target_sp));
+  Status error;
+  if (!reuse_target)
+    error = debugger.GetTargetList().CreateTarget(
+        debugger, exe_path, triple, eLoadDependentsNo, platform_options,
+        gpu_target_sp);
   if (error.Fail())
     return error;
   if (!gpu_target_sp)
@@ -1181,7 +1194,9 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
                    .CreateTargetGroup<TargetGroupCPUAndAccelerators>(
                        "CPU and accelerator targets");
   auto restore_target_group = llvm::make_scope_exit([&] {
-    group_sp->RemoveTarget(gpu_target_sp);
+    // A reused GPU target is already in the group from its earlier run.
+    if (!reuse_target)
+      group_sp->RemoveTarget(gpu_target_sp);
     if (created_group) {
       group_sp->RemoveTarget(native_target_sp);
       debugger.GetTargetGroupList().DeleteTargetGroup(group_sp);
@@ -1194,7 +1209,8 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
           group_sp->AddTarget(gpu_target_sp, TargetGroup::Role::Accelerator))
     return Status::FromError(std::move(err));
 
-  if (connection_info.copy_cpu_breakpoints_during_attaching)
+  // A reused target already has these breakpoints.
+  if (!reuse_target && connection_info.copy_cpu_breakpoints_during_attaching)
     CopyCPUBreakpointsToGPUTarget(gpu_target_sp,
                                   GetTarget().shared_from_this());
 
@@ -1233,6 +1249,8 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
               .GetLLDBSettings())
     process_sp->SetKillShouldDetach(settings->kill_should_detach);
   // Broadcast the target creation event so DAP can create a child session
+  // for the new GPU process, including for a reused target, as lldb-dap ends
+  // the child session once its process exits or is detached.
   auto event_sp = std::make_shared<Event>(
       Target::eBroadcastBitNewTargetCreated,
       new Target::TargetEventData(GetTarget().shared_from_this(),

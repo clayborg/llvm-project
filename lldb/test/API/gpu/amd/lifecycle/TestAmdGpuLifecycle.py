@@ -67,6 +67,30 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)
         self.assertState(cpu_process.GetState(), lldb.eStateExited)
 
+    def test_rerun_hits_gpu_breakpoint_again(self):
+        """Test that running the program again reuses the GPU target, so the
+        breakpoint set on it in the first run is hit again, as in ROCgdb."""
+        self.stop_at_gpu_breakpoint()
+        gpu_target = self.gpu_target
+        gpu_bkpt = gpu_target.GetBreakpointAtIndex(0)
+        self.assertSuccess(self.cpu_process.Kill())
+
+        # As in the first run, the launch stops once the GPU target is
+        # connected.
+        self.setAsync(False)
+        cpu_target = self.cpu_target
+        launch_info = cpu_target.GetLaunchInfo()
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        cpu_target.Launch(launch_info, error)
+        self.assertSuccess(error)
+        self.assertEqual(self.dbg.GetNumTargets(), 2)
+        self.assertTrue(self.gpu_target == gpu_target)
+
+        self.select_gpu()
+        threads = self.continue_to_gpu_breakpoint(gpu_bkpt.GetID())
+        self.assertTrue(threads, "GPU should stop at the breakpoint again")
+
     def test_gpu_target_delete_keeps_cpu_process(self):
         """Test that deleting the GPU target detaches from the GPU only."""
         listener = self.stop_at_gpu_breakpoint()
