@@ -108,6 +108,10 @@ public:
   bool handleDebugEvent(amd_dbgapi_event_id_t eventId,
                         amd_dbgapi_event_kind_t eventKind);
 
+  /// Stop the waves of a program that ran before the debugger attached, as
+  /// ROCgdb does. The process reports its stop once they have all stopped.
+  Status StopWavesAfterAttach();
+
   /// Advance the asynchronous all-stop operation. Each call reconciles the
   /// live wave list, requests any running waves to stop, and checks whether
   /// all requested stop events have been processed. Returns false while the

@@ -91,6 +91,39 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
         threads = self.continue_to_gpu_breakpoint(gpu_bkpt.GetID())
         self.assertTrue(threads, "GPU should stop at the breakpoint again")
 
+    def test_attach_stops_waves_and_detach_resumes_them(self):
+        """Test that attaching to a program whose kernel is running creates
+        the GPU target with the waves stopped, as in ROCgdb. Then release the
+        kernel and detach, which detaches from the GPU first, after which the
+        program finishes on its own."""
+        self.build()
+        exe = self.getBuildArtifact("a.out")
+        ready_file = self.getBuildArtifact("ready.txt")
+        result_file = self.getBuildArtifact("result.txt")
+        popen = self.spawnSubprocess(exe, ["spin", ready_file, result_file])
+        lldbutil.wait_for_file_on_target(self, ready_file)
+
+        target = self.dbg.CreateTarget(exe)
+        error = lldb.SBError()
+        target.AttachToProcessWithID(self.dbg.GetListener(), popen.pid, error)
+        self.assertSuccess(error)
+        self.assertEqual(self.dbg.GetNumTargets(), 2)
+        frame = self.gpu_process.GetThreadAtIndex(0).GetFrameAtIndex(0)
+        self.assertIn("spin_kernel", frame.GetFunctionName())
+
+        # Release the kernel, as ROCgdb's "set var g_release = 1" would.
+        gpu_target = self.gpu_target
+        release = gpu_target.FindSymbols("g_release")[0].GetSymbol()
+        address = release.GetStartAddress().GetLoadAddress(gpu_target)
+        self.gpu_process.WriteMemory(address, (1).to_bytes(4, "little"), error)
+        self.assertSuccess(error)
+
+        # Detaching from the process detaches from the GPU first, which resumes
+        # the waves.
+        self.assertSuccess(self.cpu_process.Detach())
+        result = lldbutil.wait_for_file_on_target(self, result_file)
+        self.assertEqual(result.strip(), "released")
+
     def test_gpu_target_delete_keeps_cpu_process(self):
         """Test that deleting the GPU target detaches from the GPU only."""
         listener = self.stop_at_gpu_breakpoint()

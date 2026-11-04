@@ -112,6 +112,9 @@ private:
   std::optional<GPUPluginConnectionInfo> CreateConnection();
   GPUActions SetGpuLoaderBreakpointByAddress();
   GPUActions SetConnectionInfo();
+  /// Create the GPU connection for a program that ran before the debugger
+  /// attached, with its code objects loaded and its waves stopping.
+  GPUActions ConnectAfterAttach();
   Status HandleAmdDbgApiAttachError(llvm::StringRef error_msg,
                                     amd_dbgapi_status_t status);
 
