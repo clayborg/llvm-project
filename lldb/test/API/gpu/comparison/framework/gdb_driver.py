@@ -724,21 +724,79 @@ print("RESULT_JSON:" + json.dumps(result))
         )
 
     def get_modules(self) -> DebuggerResult:
-        """Get list of loaded modules."""
-        script = """
+        """Get list of loaded modules.
+
+        Modules are named like ROCLLDB names them, after the files the core's
+        NT_FILE note says were mapped: symlinked paths (e.g. libz.so.1) are
+        resolved, and memory code objects are named after the file mapped at
+        their address when there is one. Separate debug info objfiles belong
+        to their owner's module and are not listed.
+        """
+        script = r"""
 import gdb
 import json
+import os
+import re
 
 result = {"success": True, "modules": [], "error": ""}
+
+
+def get_core_file_mappings():
+    # ROCgdb only lists the core's file mappings while a host thread is
+    # selected, and the selected thread is usually an AMDGPU wave.
+    selected_thread = gdb.selected_thread()
+    output = ""
+    for thread in sorted(gdb.selected_inferior().threads(), key=lambda t: t.num):
+        try:
+            thread.switch()
+            if "amdgcn" in gdb.selected_frame().architecture().name():
+                continue
+            output = gdb.execute("info proc mappings", to_string=True)
+            break
+        except gdb.error:
+            continue
+    if selected_thread is not None:
+        selected_thread.switch()
+
+    mappings = []
+    for line in output.splitlines():
+        match = re.match(
+            r"\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+"
+            r"(?:[-rwxsp]{4}\s+)?(/.*?)\s*$",
+            line,
+        )
+        if match:
+            mappings.append(
+                (int(match.group(1), 16), int(match.group(2), 16), match.group(3))
+            )
+    return mappings
+
 
 try:
     output = gdb.execute("info sharedlibrary", to_string=True)
     result["raw_output"] = output
-    
+
+    mappings = None
     for objfile in gdb.objfiles():
+        if objfile.owner is not None:
+            continue
+
+        path = objfile.filename or ""
+        memory_match = re.match(r"memory://\d+#offset=(0x[0-9a-fA-F]+|\d+)&", path)
+        if memory_match:
+            if mappings is None:
+                mappings = get_core_file_mappings()
+            address = int(memory_match.group(1), 0)
+            for start, end, mapped_path in mappings:
+                if start <= address < end:
+                    path = mapped_path
+                    break
+        elif path.startswith("/"):
+            path = os.path.realpath(path)
+
         module = {
-            "name": objfile.filename or "<unknown>",
-            "path": objfile.filename or "",
+            "name": path or "<unknown>",
+            "path": path,
         }
         result["modules"].append(module)
 
