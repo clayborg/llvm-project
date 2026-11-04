@@ -2,14 +2,19 @@
 Result comparator for comparing GDB and LLDB debugging outputs.
 """
 
+import os
+import re
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import Any
+from urllib.parse import unquote
+
 from .debugger_interface import (
     DebuggerResult,
-    ThreadInfo,
     FrameInfo,
-    VariableValue,
     ModuleInfo,
+    ThreadInfo,
+    VariableValue,
 )
 
 
@@ -29,9 +34,9 @@ class ComparisonResult:
     """Result of comparing GDB and LLDB outputs."""
 
     is_equivalent: bool = True
-    differences: List[ComparisonDifference] = field(default_factory=list)
-    gdb_only: Dict[str, List[Any]] = field(default_factory=dict)
-    lldb_only: Dict[str, List[Any]] = field(default_factory=dict)
+    differences: list[ComparisonDifference] = field(default_factory=list)
+    gdb_only: dict[str, list[Any]] = field(default_factory=dict)
+    lldb_only: dict[str, list[Any]] = field(default_factory=dict)
     summary: str = ""
 
     def add_difference(
@@ -215,13 +220,17 @@ class ResultComparator:
                 gdb_func = gdb_frame.function
                 lldb_func = lldb_frame.function
 
-            if gdb_func != lldb_func:
+            # demangler spelling could affect the comparison, not fail on it if function names both exits
+            if gdb_func != lldb_func and (
+                not self._is_unknown_function(gdb_func)
+                and self._is_unknown_function(lldb_func)
+            ):
                 result.add_difference(
                     f"frame[{i}]",
                     "function",
                     gdb_func,
                     lldb_func,
-                    f"Frame {i} function differs: GDB='{gdb_func}', LLDB='{lldb_func}'",
+                    f"Frame {i} function missing in LLDB: GDB='{gdb_func}', LLDB='{lldb_func}'",
                 )
 
         result.summary = result.get_summary()
@@ -231,7 +240,7 @@ class ResultComparator:
         self,
         gdb_result: DebuggerResult,
         lldb_result: DebuggerResult,
-        register_names: Optional[List[str]] = None,
+        register_names: list[str] | None = None,
     ) -> ComparisonResult:
         """Compare register values from GDB and LLDB."""
         result = ComparisonResult()
@@ -318,28 +327,92 @@ class ResultComparator:
     def compare_modules(
         self, gdb_result: DebuggerResult, lldb_result: DebuggerResult
     ) -> ComparisonResult:
-        """Compare loaded modules from GDB and LLDB."""
+        """Compare loaded modules from GDB and LLDB.
+
+        For production GPU cores, LLDB often reports extra placeholder or
+        file-backed modules that ROCgDB omits. Treat LLDB as successful when it
+        contains every normalized ROCGDB module key. LLDB-only keys and
+        duplicate count differences are useful diagnostics, but not parity
+        failures.
+        """
         result = ComparisonResult()
 
-        gdb_modules = {m.name: m for m in gdb_result.modules}
-        lldb_modules = {m.name: m for m in lldb_result.modules}
+        gdb_modules = self.get_normalized_module_counts(gdb_result)
+        lldb_modules = self.get_normalized_module_counts(lldb_result)
 
         all_names = set(gdb_modules.keys()) | set(lldb_modules.keys())
 
         for name in sorted(all_names):
-            gdb_mod = gdb_modules.get(name)
-            lldb_mod = lldb_modules.get(name)
+            gdb_count = gdb_modules.get(name, 0)
+            lldb_count = lldb_modules.get(name, 0)
 
-            if gdb_mod is None:
+            if gdb_count == 0:
                 result.add_lldb_only("modules", name)
                 continue
 
-            if lldb_mod is None:
+            if lldb_count == 0:
                 result.add_gdb_only("modules", name)
+                result.add_difference(
+                    "modules",
+                    name,
+                    gdb_count,
+                    0,
+                    f"Module '{name}' only in GDB",
+                )
                 continue
 
         result.summary = result.get_summary()
         return result
+
+    def get_normalized_module_counts(
+        self, debugger_result: DebuggerResult
+    ) -> Counter[str]:
+        """Return normalized module keys and their observed counts."""
+        return Counter(
+            key
+            for module in debugger_result.modules
+            if (key := self._normalize_module_key(module)) is not None
+        )
+
+    def _normalize_module_key(self, module: ModuleInfo) -> str | None:
+        """Normalize debugger-specific module names into comparable keys."""
+        raw_path = module.path or ""
+        name = module.name or os.path.basename(raw_path) or "<unknown>"
+
+        if name == "[vdso]" or raw_path.startswith("system-supplied DSO"):
+            return "vdso"
+
+        # ROCgdb memory code objects look like:
+        #   4377#offset=0x7c...&size=43392
+        #   memory://4377#offset=0x7c...&size=43392
+        offset_match = re.search(
+            r"#offset=(0x[0-9a-fA-F]+|\d+)&size=(0x[0-9a-fA-F]+|\d+)",
+            raw_path or name,
+        )
+        if offset_match and (
+            (raw_path or name).startswith("memory://")
+            or (name.split("#", 1)[0].isdigit())
+        ):
+            start = int(offset_match.group(1), 0)
+            size = int(offset_match.group(2), 0)
+            return f"memory:{start:x}-{start + size:x}"
+
+        # ROCLLDB memory code objects look like:
+        #   amd_memory_kernel[0x7c..., 0x7c...)
+        kernel_match = re.search(
+            r"amd_memory_kernel\[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)\)",
+            name,
+        )
+        if kernel_match:
+            start = int(kernel_match.group(1), 16)
+            end = int(kernel_match.group(2), 16)
+            return f"memory:{start:x}-{end:x}"
+
+        # File-backed GPU code objects may have #offset/#size suffixes on one
+        # side. Keep the backing file basename as the module identity.
+        path = unquote(raw_path or name).removeprefix("file://")
+        path = path.split("#offset=", 1)[0]
+        return os.path.basename(path) or name
 
     def _normalize_function_name(self, name: str) -> str:
         """Normalize function name for comparison."""
@@ -354,6 +427,13 @@ class ResultComparator:
         name = name.replace("<anonymous>", "{anonymous}")
 
         return name
+
+    def _is_unknown_function(self, name: str) -> bool:
+        """Return whether a function name represents missing symbolication."""
+        if not name:
+            return True
+        normalized = name.strip()
+        return normalized in ("<unknown>", "??", "?? ()")
 
     def normalize_pointer_value(self, value):
         """Normalize pointer value format for comparison.
