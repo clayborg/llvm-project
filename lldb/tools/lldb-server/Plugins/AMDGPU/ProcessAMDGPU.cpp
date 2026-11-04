@@ -817,6 +817,12 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
   return result;
 }
 
+Status ProcessAMDGPU::StopWavesAfterAttach() {
+  // The waves were running, so stop them as an interrupt would.
+  SetState(StateType::eStateRunning, true);
+  return Interrupt();
+}
+
 void ProcessAMDGPU::UpdateThreadListFromWaves() {
   UpdateWaveList();
 
