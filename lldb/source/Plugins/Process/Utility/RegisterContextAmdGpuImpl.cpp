@@ -12,10 +12,12 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 #include <amd-dbgapi/amd-dbgapi.h>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 using namespace lldb;
@@ -227,26 +229,37 @@ bool RegisterContextAmdGpuImpl::InitializeRegisterInfoImpl() {
     reg_info.byte_offset = arch_info.register_buffer_size;
     arch_info.register_buffer_size += reg_info.byte_size;
 
-    // Set encoding and format based on register name
-    std::string reg_name =
-        name_it != register_names.end() ? name_it->second : "";
+    // amd-dbgapi gives each register a type, such as int32_t[64] for a VGPR or
+    // a flags type with named fields for status, mode and trapsts.
+    std::optional<AmdDbgApiRegisterType> type;
+    char *type_str = nullptr;
+    status = amd_dbgapi_register_get_info(reg_id, AMD_DBGAPI_REGISTER_INFO_TYPE,
+                                          sizeof(type_str), &type_str);
+    if (status == AMD_DBGAPI_STATUS_SUCCESS) {
+      std::unique_ptr<char, llvm::FreeDeleter> owner(type_str);
+      llvm::Expected<AmdDbgApiRegisterType> parsed =
+          arch_info.register_types.Parse(type_str, reg_info.byte_size);
+      if (parsed)
+        type = *parsed;
+      else
+        LLDB_LOG_ERROR(GetLog(LLDBLog::Thread), parsed.takeError(),
+                       "Ignoring the type of register {1}: {0}", reg_info.name);
+    } else {
+      LLDB_LOG(GetLog(LLDBLog::Thread),
+               "Failed to get the type of register {0} from amd-dbgapi "
+               "(status {1})",
+               reg_info.name, status);
+    }
 
-    // Check if register name contains indicators of its type
-    // TODO: is this the correct way to do this?
-    if (reg_name.find("float") != std::string::npos ||
-        reg_name.find("fp") != std::string::npos) {
-      reg_info.encoding = eEncodingIEEE754;
-      reg_info.format = eFormatFloat;
-    } else if (reg_name.find("vec") != std::string::npos ||
-               reg_name.find("simd") != std::string::npos) {
-      reg_info.encoding = eEncodingVector;
-      reg_info.format = eFormatVectorOfUInt8;
+    if (type) {
+      reg_info.encoding = type->encoding;
+      reg_info.format = type->format;
+      reg_info.flags_type = type->flags;
     } else if (reg_info.byte_size > 8) {
-      // TODO: check AMD_DBGAPI_REGISTER_INFO_TYPE and assign encoding/format.
+      // No usable type from amd-dbgapi: fall back to a size-based default.
       reg_info.encoding = eEncodingVector;
       reg_info.format = eFormatVectorOfUInt8;
     } else {
-      // Default for other types
       reg_info.encoding = eEncodingUint;
       reg_info.format = eFormatHex;
     }
