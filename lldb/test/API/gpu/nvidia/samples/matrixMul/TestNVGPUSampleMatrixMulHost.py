@@ -45,16 +45,21 @@ class TestNVGPUSampleMatrixMulHost(MatrixMulTestCase):
         self.assertEqual(self.wait_for_exit(self.gpu_process), 0, "GPU exit")
 
     @expectedFailureAll(
-        "a frame read from GPU thread 1 before the GPU process takes its "
-        "first stop stays, with PC 0, after the stop"
+        "a synchronous launch returns at the CPU's target-sync stop, before "
+        "the GPU process takes its stop"
     )
-    def test_frame_read_before_gpu_stop_is_refreshed(self):
-        """In synchronous mode a launch returns at the CPU's target-sync stop,
-        before the GPU process has taken its stop, and the GPU process shows
-        one thread with no PC yet. A frame read from that thread then, as the
-        CLI does to show where it stopped, is gone once the GPU stop is
-        applied: thread 1's frame is where its PC register is, in the
-        kernel."""
+    def test_synchronous_launch_shows_gpu_frame_at_breakpoint(self):
+        """In synchronous mode a launch that stops at a breakpoint in the
+        kernel returns with the GPU process stopped there, and GPU thread 1's
+        frame, read as soon as the launch returns as the CLI does to show the
+        stop, is where its PC register is, at the breakpoint.
+
+        simpleCooperativeGroups checks the GPU's state after a synchronous
+        launch with 64 threads, whose stop lldb has received by the time the
+        CPU's stop returns. lldb takes longer to receive the stop of this
+        launch's 4,096 threads, so a launch that returned without waiting for
+        it would show the GPU process with one placeholder thread at PC 0. A
+        frame read from that thread stays on thread 1 after the stop."""
         if not self.cpu_stops_with_gpu():
             self.skipTest(
                 "the CPU does not stop when the GPU does, so a synchronous launch "
@@ -62,13 +67,20 @@ class TestNVGPUSampleMatrixMulHost(MatrixMulTestCase):
             )
         marker = "// gpu breakpoint at tile load"
         target = self.make_target()
-        target.BreakpointCreateByLocation(SOURCE, line_number(SOURCE, marker))
+        breakpoint = target.BreakpointCreateByLocation(
+            SOURCE, line_number(SOURCE, marker)
+        )
         self.setAsync(False)
         process = target.LaunchSimple(None, None, self.get_process_working_directory())
         self.assertState(process.GetState(), lldb.eStateStopped, "CPU")
         self.gpu_process.GetThreadAtIndex(0).GetFrameAtIndex(0)
+        self.assertState(
+            self.gpu_process.GetState(),
+            lldb.eStateStopped,
+            "GPU, when the launch returns",
+        )
 
-        self.wait_for_gpu_to_stop()
+        self.assert_gpu_stop_at_breakpoint(self.gpu_breakpoint_copy(breakpoint))
         frame = self.gpu_process.GetThreadAtIndex(0).GetFrameAtIndex(0)
         self.assertEqual(
             frame.GetPC(),
