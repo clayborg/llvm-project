@@ -34,13 +34,7 @@ class TestNVGPUSampleAsyncAPI(NVGPUTestCaseBase):
         """Read `count` ints from GPU global memory at `address`. lldb asks
         lldb-server for GPU memory on every read, while it keeps a stopped
         thread's registers for the whole stop."""
-        error = lldb.SBError()
-        space = self.gpu_process.GetAddressSpaceID("global", error)
-        self.assertSuccess(error)
-        data = self.gpu_process.ReadMemory(
-            lldb.SBProcessAddress(address, space), 4 * count, error
-        )
-        self.assertSuccess(error)
+        data = self.read_gpu_memory(address, "global", 4 * count)
         return [
             int.from_bytes(data[i : i + 4], "little", signed=True)
             for i in range(0, len(data), 4)
@@ -53,7 +47,7 @@ class TestNVGPUSampleAsyncAPI(NVGPUTestCaseBase):
         self.setAsync(True)
         self.assertSuccess(self.cpu_process.Continue())
         self.assert_exit_status(0)
-        self.assertIn("CPU executed", self.read_stdout())
+        self.assert_stdout_contains("CPU executed")
 
     def test_cpu_stepi_does_not_move_gpu(self):
         """While the GPU is stopped at a breakpoint, stepping the CPU by

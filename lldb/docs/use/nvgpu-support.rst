@@ -381,11 +381,33 @@ since that commit into the copy, for example with
 and update the URL. Comments that mark breakpoint lines go at the end of the
 sample's own lines, and a change whose reason is not obvious gets a comment.
 
+When a test needs the program to run differently, prefer the sample's own
+options, as the matrixMul tests size its matrices with ``-wA`` and the
+others. Failing that, set a variable from LLDB before the program first
+reads it, as they set ``block_size`` before the launch; the program's code
+must handle the new value. Change the copy only when neither works.
+
 The test methods of a class that all run one program can build it once with
 ``build_shared(exe)``. The program is then in a directory of its own,
 ``<Module>.<Class>.<exe>``, next to the methods' build directories, which stay
 empty. Debug that program to reproduce a failure by hand. It still runs in the
-method's build directory.
+method's build directory. ``make_shared_target(exe, args)`` returns a target
+for it whose launches pass ``args`` to the program, as ``settings set
+target.run-args`` does, for a sample that takes its problem size as arguments.
+
+lit runs the methods of a test file one after another. With the files in
+parallel, as lit runs them with most drivers, the slowest file sets how long
+the GPU tests take, so a sample whose methods would make its test file much
+slower than the others splits them among several files, one for each workflow
+it tests. What they share that depends on the
+program, such as its launch arguments and the values it computes, goes in a
+Python module in the sample's directory, which the test files import.
+
+LLDB prints an error that it reports outside a command, such as a breakpoint
+condition that fails, unless something listens for it, and a condition that
+fails in every thread of a kernel reports an error for each thread at each
+stop. A test of such a condition collects the errors with ``collect_errors()``
+and checks them, so that they do not fill its output.
 
 Running the tests under AddressSanitizer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
