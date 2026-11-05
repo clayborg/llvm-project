@@ -254,10 +254,8 @@ class TestNVGPUSampleSimpleCooperativeGroups(NVGPUTestCaseBase):
         thread's variables."""
         breakpoint = self.run_to_marker("// gpu breakpoint after barrier")
         self.assert_gpu_stop_at_breakpoint(breakpoint)
-        self.dbg.SetSelectedTarget(self.gpu_target)
         for index in (17, 40):
-            self.runCmd(f"thread select --threadidx {index}")
-            thread = self.gpu_process.GetSelectedThread()
+            thread = self.select_gpu_thread(threadidx=(index,))
             self.assertEqual(self.thread_coords(thread)[1], (index, 0, 0))
             frame = thread.GetSelectedFrame()
             self.assert_int_variable(frame, "lane", index)
@@ -296,8 +294,7 @@ class TestNVGPUSampleSimpleCooperativeGroups(NVGPUTestCaseBase):
         frame = self.assert_gpu_stop_at_breakpoint(breakpoint)[0].frame[0]
         # Each thread stored its rank before the first barrier.
         for expression in ("workspace[5]", "x[5]"):
-            value = frame.EvaluateExpression(expression)
-            self.assertSuccess(value.GetError(), expression)
+            value = self.evaluate_expression(frame, expression)
             self.assertEqual(value.GetValueAsSigned(), 5, expression)
         self.finish()
 
@@ -315,15 +312,7 @@ class TestNVGPUSampleSimpleCooperativeGroups(NVGPUTestCaseBase):
         pointer = caller.GetValueForVariablePath("threadBlockGroup.tile_memory")
         self.assertSuccess(pointer.GetError())
 
-        error = lldb.SBError()
-        generic = self.gpu_process.GetAddressSpaceID("generic", error)
-        self.assertSuccess(error)
-        data = self.gpu_process.ReadMemory(
-            lldb.SBProcessAddress(pointer.GetValueAsUnsigned(), generic, thread),
-            4,
-            error,
-        )
-        self.assertSuccess(error, "generic memory at the pointer")
+        data = self.read_gpu_memory(pointer.GetValueAsUnsigned(), "generic", 4, thread)
         barrier = caller.GetValueForVariablePath(
             "threadBlockGroup.tile_memory->barriers[0]"
         )

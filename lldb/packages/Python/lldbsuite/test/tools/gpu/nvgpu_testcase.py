@@ -3,7 +3,7 @@ import math
 import os
 import shutil
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import lldb
 from lldbsuite.test import configuration, lldbplatformutil, lldbutil
@@ -15,6 +15,10 @@ from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
 # wants from that stop (a thread, a list of threads, ...) or None when the stop
 # is not the one expected. Return None, not an empty list, for "no match".
 StopMatcher = Callable[[lldb.SBProcess], Optional[Any]]
+
+# A GPU thread's CUDA coordinates, (blockIdx, threadIdx), each as (x, y, z):
+# what thread_coords returns.
+ThreadCoords = Tuple[Tuple[int, int, int], Tuple[int, int, int]]
 
 # The programs build_shared has built in this run, by test class and EXE.
 _shared_builds: Dict[Tuple[type, str], str] = {}
@@ -184,12 +188,22 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         _shared_builds[(cls, exe)] = path
         return path
 
-    def make_shared_target(self, exe: str) -> lldb.SBTarget:
+    def make_shared_target(
+        self, exe: str, args: Optional[List[str]] = None
+    ) -> lldb.SBTarget:
         """Build the program with build_shared(exe) and return a target for
-        it, for a test that sets breakpoints before the run."""
-        return lldbutil.run_to_breakpoint_make_target(
+        it, for a test that sets breakpoints before the run. Every launch of
+        the target passes `args` to the program, as `settings set
+        target.run-args` does: the launches of the helpers here, and `run` or
+        `process launch` without arguments."""
+        target = lldbutil.run_to_breakpoint_make_target(
             self, self.build_shared(exe), in_cwd=False
         )
+        if args:
+            launch_info = target.GetLaunchInfo()
+            launch_info.SetArguments(args, False)
+            target.SetLaunchInfo(launch_info)
+        return target
 
     def run_to_cpu_line(
         self,
@@ -266,10 +280,21 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             )
             self.assertTrue(process.IsValid(), "the program did not launch")
             event = lldb.SBEvent()
-            self.assertTrue(
-                listener.WaitForEvent(math.ceil(timeout_seconds), event),
-                f"lldb created no GPU target within {timeout_seconds} s",
-            )
+            if not listener.WaitForEvent(math.ceil(timeout_seconds), event):
+                # A program that fails before it initializes CUDA has exited
+                # by now: say so, with what it printed, rather than that lldb
+                # made no target.
+                state = self.pull_state(process)
+                if state == lldb.eStateExited:
+                    self.fail(
+                        f"the program exited (status {process.GetExitStatus()}) "
+                        "without lldb creating a GPU target; its stdout:\n"
+                        f"{self.read_stdout()}\nits stderr:\n{self.read_stderr()}"
+                    )
+                self.fail(
+                    f"lldb created no GPU target within {timeout_seconds} s; the "
+                    f"CPU process is {lldb.SBDebugger.StateAsCString(state)}"
+                )
         finally:
             listener.StopListeningForEvents(broadcaster, created_bit)
         created = lldb.SBTarget.GetCreatedTargetFromEvent(event)
@@ -357,7 +382,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
         Use it for a line the CPU never runs, such as one in a __device__
         function. lldb also resolves a line of a kernel in the kernel's
-        host-side stub, which stops the CPU before it launches the kernel.
+        host-side stub, which stops the CPU after it launches the kernel.
         """
         # TODO: lldb should not stop the CPU in a kernel's host-side stub for a
         # breakpoint on a line of the kernel, as cuda-gdb does not. Once it
@@ -417,6 +442,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 self.fail(
                     f"timed out after {timeout_seconds} s waiting for the {what} "
                     "process to change state"
+                    f"{self._describe_other_process(process)}"
                 )
             state = lldb.SBProcess.GetStateFromEvent(event)
             if state == lldb.eStateStopped and lldb.SBProcess.GetRestartedFromEvent(
@@ -546,6 +572,9 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         wait for a stop that hasn't arrived yet; a later call resumes it."""
         if not self._cpu_held_for_target_sync():
             return
+        # A continue in synchronous mode would wait for the next stop and
+        # take its event, which the wait below expects.
+        self.setAsync(True)
         cpu_process = self.cpu_process
         self.assertSuccess(cpu_process.Continue(), "continue CPU process")
         # Pull the running event now. Otherwise the CPU still looks stopped,
@@ -609,7 +638,46 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                     entered = f"exited (status {status})"
             else:
                 entered = f"entered state {lldb.SBDebugger.StateAsCString(state)}"
+                if state == lldb.eStateStopped:
+                    entered += self._describe_stop(process)
             self.fail(f"{what} process {entered} before {doing}")
+
+    @staticmethod
+    def _describe_stop(process: lldb.SBProcess) -> str:
+        """Say why and where the stopped `process` stopped, for a failure
+        message: the stop description and function of its first thread with
+        a stop reason, or nothing if none has one."""
+        for thread in process.threads:
+            if thread.GetStopReason() in (
+                lldb.eStopReasonNone,
+                lldb.eStopReasonInvalid,
+            ):
+                continue
+            return (
+                f" ({thread.GetStopDescription(256)} "
+                f"in {thread.frame[0].GetFunctionName()})"
+            )
+        return ""
+
+    def _describe_other_process(self, process: lldb.SBProcess) -> str:
+        """Say what the other process, the CPU's for the GPU and the GPU's for
+        the CPU, is doing, for the message of a wait on `process` that timed
+        out: the usual cause is that the other one holds it up, stopped at a
+        breakpoint of its own. This pulls the other process's events, which
+        only a test that is failing anyway may do."""
+        if process.GetTarget() == self.gpu_target:
+            other, what = self.cpu_process, "CPU"
+        else:
+            other, what = self.gpu_process, "GPU"
+        if not other:
+            return ""
+        state = self.pull_state(other)
+        if state == lldb.eStateExited:
+            return f"; the {what} process exited (status {other.GetExitStatus()})"
+        doing = lldb.SBDebugger.StateAsCString(state)
+        if state == lldb.eStateStopped:
+            doing += self._describe_stop(other)
+        return f"; the {what} process is {doing}"
 
     def wait_for_stop(self, process: lldb.SBProcess, timeout_seconds: int = 60) -> None:
         """Wait for `process` (CPU or GPU), which is running, to stop.
@@ -667,17 +735,37 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         kept, a stop at one of them fails the test."""
         if not keep_breakpoints:
             self.gpu_target.DeleteAllBreakpoints()
+        self.setAsync(True)
         self.assertSuccess(self.gpu_process.Continue(), "continue GPU process")
         self.assert_exit_status(status)
+
+    @staticmethod
+    def _drain(read: Callable[[int], str]) -> str:
+        """Return everything that `read`, GetSTDOUT or GetSTDERR of a process,
+        has that the test has not read yet."""
+        chunks = []
+        while chunk := read(4096):
+            chunks.append(chunk)
+        return "".join(chunks)
 
     def read_stdout(self) -> str:
         """Return what the CPU process wrote to stdout that the test has not
         read yet. lldb collects it on a thread of its own, so output the
         program has just written may not be here yet."""
-        chunks = []
-        while chunk := self.cpu_process.GetSTDOUT(4096):
-            chunks.append(chunk)
-        return "".join(chunks)
+        return self._drain(self.cpu_process.GetSTDOUT)
+
+    def read_stderr(self) -> str:
+        """Return what the CPU process wrote to stderr that the test has not
+        read yet, as read_stdout does for stdout."""
+        return self._drain(self.cpu_process.GetSTDERR)
+
+    def assert_stdout_contains(self, *texts: str) -> None:
+        """What the CPU process has written to stdout since the test last read
+        it must contain each of `texts`. A failure shows the whole output,
+        which assertIn on its own cuts to 80 characters."""
+        stdout = self.read_stdout()
+        for text in texts:
+            self.assertIn(text, stdout, f"in the program's output:\n{stdout}")
 
     def wait_for_gpu_to_stop(
         self, timeout_seconds: int = 60, *, keep_cpu_running: bool = False
@@ -928,7 +1016,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         breakpoint: lldb.SBBreakpoint,
         count: int,
         check: Optional[Callable[[lldb.SBThread], None]] = None,
-    ) -> Set[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
+    ) -> Set[ThreadCoords]:
         """Run `check` on each thread that the current GPU stop has at
         `breakpoint`, then resume the GPU until `count` threads in all have
         stopped there, running `check` on each as it stops. Return the
@@ -960,19 +1048,27 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         """Step `thread` over its source line, as `next` does, and wait for
         the GPU to stop. The step must complete with `thread` at
         `expected_line`."""
+        step = f"{thread.GetName()} stepping over line "
+        step += str(thread.frame[0].GetLineEntry().GetLine())
+        # A step in synchronous mode would wait for the stop and take its
+        # event, which the wait below expects.
+        self.setAsync(True)
         error = lldb.SBError()
         thread.StepOver(lldb.eOnlyDuringStepping, error)
-        self.assertSuccess(error, f"step over in {thread.GetName()}")
-        self.wait_for_gpu_to_stop(timeout_seconds)
+        self.assertSuccess(error, step)
+        try:
+            self.wait_for_gpu_to_stop(timeout_seconds)
+        except self.failureException as failure:
+            raise self.failureException(f"{step}: {failure}") from None
         self.assertStopReason(
             thread.GetStopReason(),
             lldb.eStopReasonPlanComplete,
-            f"stop reason of {thread.GetName()} after stepping over",
+            f"stop reason of {step}",
         )
         self.assertEqual(
             thread.frame[0].GetLineEntry().GetLine(),
             expected_line,
-            f"line of {thread.GetName()} after stepping over",
+            f"line of {step}",
         )
 
     def assert_frame_at(
@@ -1037,23 +1133,190 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             f"{path} in {self._describe_frame(frame)}",
         )
 
-    def thread_coords(
-        self, thread: lldb.SBThread
-    ) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+    def value_as_float(self, value: lldb.SBValue, what: str) -> float:
+        """Return the number in `value`, a float or a double, which `what`
+        names in a failure message."""
+        self.assertIn(
+            value.GetType().GetCanonicalType().GetBasicType(),
+            (lldb.eBasicTypeFloat, lldb.eBasicTypeDouble),
+            f"{what} is a float or a double, not {value.GetTypeName()}",
+        )
+        error = lldb.SBError()
+        data = value.GetData()
+        if value.GetByteSize() == 4:
+            number = data.GetFloat(error, 0)
+        else:
+            number = data.GetDouble(error, 0)
+        self.assertSuccess(error, f"reading {what}")
+        return number
+
+    def read_float_variable(self, frame: lldb.SBFrame, path: str) -> float:
+        """Read the floating-point variable, or member or element of one, at
+        `path` in `frame`, as `frame variable` does; fail if lldb cannot read
+        it. To check one value, use assert_float_variable."""
+        what = f"{path} in {self._describe_frame(frame)}"
+        value = frame.GetValueForVariablePath(path)
+        self.assertSuccess(value.GetError(), f"reading {what}")
+        return self.value_as_float(value, what)
+
+    def assert_float_variable(
+        self, frame: lldb.SBFrame, path: str, expected: float, places: int = 6
+    ) -> None:
+        """The floating-point variable, or member or element of one, at `path`
+        in `frame` must be `expected`, to `places` decimal places. A failure
+        names the variable, the frame and its thread."""
+        self.assertAlmostEqual(
+            self.read_float_variable(frame, path),
+            expected,
+            places=places,
+            msg=f"{path} in {self._describe_frame(frame)}",
+        )
+
+    def evaluate_expression(self, frame: lldb.SBFrame, expression: str) -> lldb.SBValue:
+        """Evaluate `expression` in `frame`, as `expr` does, and return its
+        value; fail, naming the expression, the frame and its thread, if lldb
+        cannot evaluate it."""
+        value = frame.EvaluateExpression(expression)
+        self.assertSuccess(
+            value.GetError(),
+            f"evaluating {expression} in {self._describe_frame(frame)}",
+        )
+        return value
+
+    def collect_errors(self) -> Callable[[], List[str]]:
+        """Collect the errors that lldb reports outside a command from now
+        on, such as a breakpoint condition that it cannot evaluate, and return
+        a function that returns them, oldest first. From now on lldb prints
+        none of these errors, so check them: the ones the test never asked
+        for are printed when it ends, so that an unrelated error, such as a
+        lost connection, is not lost with them.
+
+        lldb prints an error that nothing listens for in the test's output. A
+        condition that fails in every thread of a kernel prints an error for
+        each thread at each stop: thousands of lines, which bury the failure
+        when lit shows the output."""
+        broadcaster = self.dbg.GetBroadcaster()
+        listener = lldbutil.start_listening_from(
+            broadcaster, lldb.SBDebugger.eBroadcastBitError
+        )
+        errors: List[str] = []
+        checked = 0
+
+        def collected() -> List[str]:
+            nonlocal checked
+            event = lldb.SBEvent()
+            while listener.GetNextEventForBroadcaster(broadcaster, event):
+                diagnostic = lldb.SBDebugger.GetDiagnosticFromEvent(event)
+                errors.append(diagnostic.GetValueForKey("message").GetStringValue(4096))
+            checked = len(errors)
+            return errors
+
+        def print_unchecked() -> None:
+            first = checked
+            unchecked = collected()[first:]
+            if unchecked:
+                limit = 20
+                print(
+                    f"{len(unchecked)} errors lldb reported that the test did not "
+                    f"check, the first {min(limit, len(unchecked))}:\n"
+                    + "\n".join(unchecked[:limit])
+                )
+
+        self.addTearDownHook(print_unchecked)
+        return collected
+
+    def read_gpu_memory(
+        self,
+        address: int,
+        space: str,
+        size: int,
+        thread: Optional[lldb.SBThread] = None,
+    ) -> bytes:
+        """Read `size` bytes at `address` in the GPU address space named
+        `space`, such as "global", "shared" or "generic", as `memory read -p
+        <space>` does. lldb asks lldb-server for them on every read. A shared,
+        local or generic address means different memory to different blocks
+        or threads: pass the `thread` to read it for."""
+        error = lldb.SBError()
+        space_id = self.gpu_process.GetAddressSpaceID(space, error)
+        self.assertSuccess(error, f"the {space} address space")
+        if thread is None:
+            location = lldb.SBProcessAddress(address, space_id)
+        else:
+            self.assertTrue(thread.IsValid(), f"the thread to read {space} memory for")
+            location = lldb.SBProcessAddress(address, space_id, thread)
+        data = self.gpu_process.ReadMemory(location, size, error)
+        self.assertSuccess(
+            error, f"reading {size} bytes of {space} memory at {address:#x}"
+        )
+        return data
+
+    def select_gpu_thread(
+        self,
+        blockidx: Optional[Sequence[int]] = None,
+        threadidx: Optional[Sequence[int]] = None,
+    ) -> lldb.SBThread:
+        """Select a GPU thread by its CUDA block index and thread index, as
+        `thread select --blockidx --threadidx` does, and return it. Each index
+        is one to three coordinates, x first, and a coordinate left out
+        matches any. Without `blockidx`, the thread is in the block of the
+        selected thread; without `threadidx`, it has the selected thread's
+        thread index. The GPU target becomes the selected target, as after the
+        command."""
+        self.assertTrue(blockidx or threadidx, "select_gpu_thread needs an index")
+        command = "thread select"
+        if blockidx:
+            command += " --blockidx " + ",".join(str(i) for i in blockidx)
+        if threadidx:
+            command += " --threadidx " + ",".join(str(i) for i in threadidx)
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        self.runCmd(command)
+        selected = self.gpu_process.GetSelectedThread()
+        for wanted, actual, what in zip(
+            (blockidx, threadidx), self.thread_coords(selected), ("block", "thread")
+        ):
+            if wanted:
+                self.assertEqual(
+                    actual[: len(wanted)],
+                    tuple(wanted),
+                    f"{what} index of the thread `{command}` selected",
+                )
+        return selected
+
+    def _thread_info_int(self, thread: lldb.SBThread, path: str) -> int:
+        """Return the integer at `path`, such as "cuda.lane", in what
+        lldb-server reports for a GPU thread."""
+        stream = lldb.SBStream()
+        self.assertTrue(
+            thread.GetInfoItemByPathAsString(path, stream),
+            f"{thread.GetName()} has no {path}",
+        )
+        # The SB API writes integers in hex, as "0x1f". Base 0 reads that and a
+        # decimal alike, instead of misreading a decimal as hex.
+        return int(stream.GetData(), 0)
+
+    def thread_coords(self, thread: lldb.SBThread) -> ThreadCoords:
         """Return a GPU thread's (blockIdx, threadIdx), each as (x, y, z), from
         the CUDA coordinates lldb-server reports for it. Tell threads apart by
         these, not by their names, which are for display."""
-
-        def read(path: str) -> int:
-            stream = lldb.SBStream()
-            self.assertTrue(
-                thread.GetInfoItemByPathAsString(path, stream),
-                f"{thread.GetName()} has no {path}",
-            )
-            # The SB API writes integers in hex, as "0x1f". Base 0 reads that
-            # and a decimal alike, instead of misreading a decimal as hex.
-            return int(stream.GetData(), 0)
-
-        block = tuple(read(f"cuda.block_idx.{axis}") for axis in "xyz")
-        index = tuple(read(f"cuda.thread_idx.{axis}") for axis in "xyz")
+        block = tuple(
+            self._thread_info_int(thread, f"cuda.block_idx.{axis}") for axis in "xyz"
+        )
+        index = tuple(
+            self._thread_info_int(thread, f"cuda.thread_idx.{axis}") for axis in "xyz"
+        )
         return block, index
+
+    def thread_physical_coords(
+        self, thread: lldb.SBThread
+    ) -> Tuple[int, int, int, int]:
+        """Return where a GPU thread runs, as lldb-server reports it: its
+        device, its SM, its warp on that SM and its lane in the warp. CUDA
+        fixes a thread's warp and lane in its block by the thread's index, but
+        not which of the SM's warps runs that warp, and a warp can move to
+        another during execution (the PTX ISA says so of %warpid): compare
+        SMs and warps only within one stop."""
+        return tuple(
+            self._thread_info_int(thread, f"cuda.{item}")
+            for item in ("device", "sm", "warp", "lane")
+        )
