@@ -9,7 +9,6 @@ import time
 from typing import Optional
 
 import lldb
-from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -105,22 +104,19 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
         every GPU thread on that line with the sample's launch configuration
         and kernel argument.
 
-        This is the one test that relies on lldb copying the CPU target's
-        breakpoints into the GPU target when it creates it: that copy is how a
-        breakpoint set before the run reaches the kernel. Other tests set GPU
-        breakpoints on the GPU target once the program has stopped.
+        Like test_kernel_line_breakpoint_does_not_stop_cpu and
+        test_kernel_name_breakpoint_before_run, this test relies on lldb
+        copying the CPU target's breakpoints into the GPU target when it
+        creates it: that copy is how a breakpoint set before the run reaches
+        the kernel. The other tests set GPU breakpoints on the GPU target once
+        the program has stopped.
         """
         target = self.make_shared_target(EXE)
         line = line_number(SOURCE, "// gpu breakpoint at printf")
         breakpoint = target.BreakpointCreateByLocation(SOURCE, line)
         self.run_to_launch(target)
 
-        # lldb also resolved the line in the kernel's host-side stub, and would
-        # stop the CPU there after the launch
-        # (test_kernel_line_breakpoint_does_not_stop_cpu), so delete the CPU
-        # target's breakpoint: only the GPU should stop.
         gpu_breakpoint = self.gpu_breakpoint_copy(breakpoint)
-        self.assertTrue(target.BreakpointDelete(breakpoint.GetID()))
 
         # The copy resolves when the kernel's cubin loads, at the launch.
         self.continue_cpu_and_wait_for_gpu_to_stop()
@@ -171,15 +167,11 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
 
         self.continue_gpu_to_exit()
 
-    @expectedFailureAll(
-        "a breakpoint on a kernel line also stops the CPU in the kernel's "
-        "host-side stub"
-    )
     def test_kernel_line_breakpoint_does_not_stop_cpu(self):
         """A breakpoint on a kernel line, set before the program runs, stops
         the GPU but never the CPU. lldb also resolves the line in the kernel's
-        host-side stub and stops the CPU there after the launch; cuda-gdb
-        creates that location disabled and stops only the GPU."""
+        host-side stub, and disables that location once the GPU target exists,
+        as cuda-gdb creates it disabled."""
         target = self.make_shared_target(EXE)
         breakpoint = target.BreakpointCreateByLocation(
             SOURCE, line_number(SOURCE, "// gpu breakpoint at printf")
@@ -203,9 +195,6 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
         breakpoint = target.BreakpointCreateByName("simplePrintfKernel")
         self.run_to_launch(target)
         gpu_breakpoint = self.gpu_breakpoint_copy(breakpoint)
-        # The CPU target resolved the name in the kernel's host-side stub too;
-        # delete its breakpoint so that only the GPU can stop.
-        self.assertTrue(target.BreakpointDelete(breakpoint.GetID()))
 
         self.continue_cpu_and_wait_for_gpu_to_stop()
         self.assert_gpu_stop_at_breakpoint(gpu_breakpoint)

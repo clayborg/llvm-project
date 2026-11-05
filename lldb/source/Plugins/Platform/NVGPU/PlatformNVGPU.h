@@ -92,6 +92,11 @@ public:
   lldb::ThreadSP FindGPUThread(Process &process, const GPUDim3 &block_idx,
                                const GPUDim3 &thread_idx) override;
 
+  /// Disable \a bp_loc if it is in the host code that nvcc generates to
+  /// launch a kernel and the GPU target can resolve its breakpoint in the
+  /// kernel itself, so that the program stops once, in the kernel.
+  void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) override;
+
 private:
   static void DebuggerInitialize(lldb_private::Debugger &debugger);
 

@@ -238,6 +238,48 @@ for that.
 A cubin that is not a valid ELF file becomes no module. lldb-server logs why to
 its ``gdb-remote plugin`` log channel.
 
+Breakpoints in kernels
+^^^^^^^^^^^^^^^^^^^^^^
+
+When the program starts CUDA, LLDB copies each breakpoint of the CPU target
+into the new GPU target, so a breakpoint set before then on a kernel's name or
+on a line of a kernel stops the GPU in the kernel. LLDB does not copy a
+breakpoint set on the CPU target after that: set a breakpoint in device code on
+the GPU target once it exists.
+
+For each kernel, nvcc also compiles host code that launches it: a function with
+the kernel's name and parameters, whose code is attributed to the kernel's
+first and last lines, and a launch stub that the function calls. A breakpoint
+on a kernel's name or on a line of its body therefore also resolves in that
+host code, where the CPU would stop each time it launches the kernel. Once the
+GPU target exists, LLDB disables those locations in the CPU target, both the
+ones that breakpoints already have and the ones they get later, so that the
+program stops only in the kernel. ``breakpoint list`` shows them as disabled.
+
+To stop where the CPU launches a kernel, enable the location again with
+``breakpoint enable``, or set a breakpoint that names the launch code: on an
+address, on the launch stub's name (``__device_stub_`` followed by the kernel's
+mangled name, such as ``__device_stub__Z6kerneli`` for ``void kernel(int)``),
+or on the kernel's name limited to the program's module with ``--shlib``. LLDB
+leaves the locations of those breakpoints enabled.
+
+LLDB finds the launch code from the names nvcc gives it, so it misses some:
+
+- In host code without debug information, the launch code of an ``extern "C"``
+  kernel, and that of a kernel whose launch stub the host compiler inlined, as
+  an optimizing one does with those of static and template kernels.
+- The launch code that runs before LLDB creates the GPU target. When the
+  program's first CUDA call is a kernel launch, CUDA starts in the launch stub,
+  so a location before the call to the stub can stop the CPU that one time.
+  Host code compiled with optimization puts a breakpoint on a kernel's name
+  there.
+
+In host code without debug information, LLDB can also take a host function for
+launch code: one with the name and parameters of a static or template kernel in
+another source file of the same module. A breakpoint on that name then has its
+location in the host function disabled as well; enable it with
+``breakpoint enable``.
+
 Running the tests
 ^^^^^^^^^^^^^^^^^
 
