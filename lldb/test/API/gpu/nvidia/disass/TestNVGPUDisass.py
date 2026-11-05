@@ -53,6 +53,28 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
             ],
         )
 
+    def test_disass_predicates(self):
+        """Predicated instructions retain both positive and negated guards."""
+        for cubin, address, predicate in (
+            ("elfv8.cubin", 0x7FFFCF280440, "@P0"),
+            ("elfv7.cubin", 0x7FFFD7226860, "@!P0"),
+        ):
+            self.runCmd("file " + self.getSourcePath(cubin))
+            self.expect(
+                f"disassemble -s {address:#x} -c 1",
+                patterns=[rf":\s+{re.escape(predicate)}\s+BRA\b"],
+            )
+
+    def test_disass_branch_target(self):
+        """A branch target is an absolute address independent of the range."""
+        self.runCmd("file " + self.getSourcePath("elfv8.cubin"))
+        branch = self.ELFV8_ACOSF + 0x140
+        for start, count in ((branch - 16, 2), (branch, 1)):
+            self.expect(
+                f"disassemble -s {start:#x} -c {count}",
+                patterns=[r"BRA\s+0x7fffcf2804a0\b"],
+            )
+
     def test_disass_count_elf_v8(self):
         """`disassemble -c N` shows exactly N instructions. The odd count
         matters because nvdisasm rejects input that ends partway through an

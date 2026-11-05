@@ -171,9 +171,10 @@ DisassemblerSASS::ExtractSmArchFromModule(const Address &base_addr) {
 }
 
 /// Invoke nvdisasm and return the JSON output.
-static llvm::Expected<std::string>
-InvokeNVDisasm(const DataExtractor &data, const std::string &sm_arch,
-               const FileSpec &nvdisasm_path) {
+static llvm::Expected<std::string> InvokeNVDisasm(const DataExtractor &data,
+                                                  const std::string &sm_arch,
+                                                  const FileSpec &nvdisasm_path,
+                                                  addr_t base_address) {
   Log *log = GetLog(LLDBLog::Disassembler);
 
   // Create a temporary file for the binary data
@@ -199,17 +200,20 @@ InvokeNVDisasm(const DataExtractor &data, const std::string &sm_arch,
   }
 
   std::string nvdisasm_path_str = nvdisasm_path.GetPath();
+  std::string base_address_str = llvm::formatv("{0:x}", base_address).str();
 
   // Prepare arguments for nvdisasm (including program name as argv[0])
   llvm::SmallVector<llvm::StringRef, 8> args;
   args.push_back(nvdisasm_path_str);
   args.push_back("-b");
   args.push_back(sm_arch.c_str()); // Use extracted SM architecture
+  args.push_back("--base-address");
+  args.push_back(base_address_str);
   args.push_back("--emit-json");
   args.push_back(temp_file_path.c_str());
 
-  LLDB_LOG(log, "Running nvdisasm: {0} {1} {2} {3} {4}", args[0], args[1],
-           args[2], args[3], args[4]);
+  LLDB_LOG(log, "Running nvdisasm: {0} {1} {2} {3} {4} {5} {6}", args[0],
+           args[1], args[2], args[3], args[4], args[5], args[6]);
 
   // Create temporary files for stdout and stderr redirection
   llvm::SmallString<128> stdout_path, stderr_path;
@@ -319,7 +323,7 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
 
   std::string json_output;
   if (llvm::Expected<std::string> json_output_or =
-          InvokeNVDisasm(whole_instructions, sm_arch, m_nvdisasm_path)) {
+          InvokeNVDisasm(whole_instructions, sm_arch, m_nvdisasm_path, start)) {
     json_output = std::move(*json_output_or);
   } else {
     return json_output_or.takeError();
