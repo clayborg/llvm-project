@@ -15,7 +15,14 @@
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include <array>
 #include <filesystem>
 
 using namespace lldb_private;
@@ -204,8 +211,65 @@ llvm::Expected<std::string> ModuleSM::FindSM(const Address &base_addr) {
                                  llvm::toString(sm_ver.takeError()).c_str());
 }
 
+static llvm::SmallVector<FileSpec> FindNvdisasmCandidates() {
+  llvm::SmallVector<std::string> directories;
+  if (const char *path = getenv("PATH")) {
+    llvm::SmallVector<llvm::StringRef> paths;
+    llvm::StringRef(path).split(paths, llvm::sys::EnvPathSeparator);
+    for (llvm::StringRef directory : paths)
+      directories.push_back(directory.empty() ? "." : directory.str());
+  }
+  if (const char *cuda_home = getenv("CUDA_HOME"))
+    directories.push_back((std::filesystem::path(cuda_home) / "bin").string());
+  directories.append({"/usr/local/cuda/bin", "/opt/cuda/bin", "/usr/bin"});
+
+  // A default CUDA symlink can point to a toolkit that predates the core's SM.
+  llvm::SmallVector<std::string> versioned_directories;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it("/usr/local", ec), end;
+       !ec && it != end; it.increment(ec)) {
+    if (llvm::StringRef(it->path().filename().string()).starts_with("cuda-"))
+      versioned_directories.push_back((it->path() / "bin").string());
+  }
+  llvm::sort(versioned_directories);
+  directories.append(versioned_directories);
+
+  llvm::SmallVector<FileSpec> candidates;
+  llvm::StringSet<> seen;
+  for (const std::string &directory : directories) {
+    auto path = llvm::sys::findProgramByName("nvdisasm", {directory});
+    if (!path)
+      continue;
+    llvm::SmallString<128> resolved;
+    if (llvm::sys::fs::real_path(*path, resolved))
+      resolved = *path;
+    if (seen.insert(resolved).second)
+      candidates.emplace_back(*path);
+  }
+  return candidates;
+}
+
+static bool SupportsSM(const FileSpec &nvdisasm, llvm::StringRef sm_arch) {
+  llvm::SmallString<128> output_path;
+  if (llvm::sys::fs::createTemporaryFile("nvdisasm_help", "", output_path))
+    return false;
+  llvm::FileRemover remove_output(output_path);
+  std::string program = nvdisasm.GetPath();
+  std::array<llvm::StringRef, 2> args = {program, "--help"};
+  std::array<std::optional<llvm::StringRef>, 3> redirects = {
+      llvm::StringRef(""), llvm::StringRef(output_path), llvm::StringRef("")};
+  if (llvm::sys::ExecuteAndWait(program, args, std::nullopt, redirects,
+                                /*SecondsToWait=*/5) != 0)
+    return false;
+  auto output = llvm::MemoryBuffer::getFile(output_path);
+  if (!output)
+    return false;
+  // Match a whole architecture token, so SM90 does not match SM90a.
+  return (*output)->getBuffer().contains("'" + sm_arch.str() + "'");
+}
+
 llvm::Expected<lldb_private::FileSpec>
-DisassemblerSASSCache::GetNvdisasmPath() {
+DisassemblerSASSCache::GetNvdisasmPath(llvm::StringRef sm_arch) {
   Log *log = GetLog(LLDBLog::Disassembler);
 
   // If the user has set the nvdisasm path in the nvgpu plugin properties, use
@@ -218,68 +282,30 @@ DisassemblerSASSCache::GetNvdisasmPath() {
     return FileSpec(nvdisasm_path);
   }
 
-  // If we already found it successfully, return cached result
-  if (m_cached_nvdisasm_path.has_value())
-    return *m_cached_nvdisasm_path;
+  std::lock_guard<std::mutex> lock(m_nvdisasm_mutex);
+  auto cached = m_nvdisasm_paths.find(sm_arch.str());
+  if (cached != m_nvdisasm_paths.end())
+    return cached->second;
 
-  // Helper lambda to handle successful nvdisasm discovery
-  auto handle_nvdisasm_found = [&](const std::string &path,
-                                   const char *source) -> FileSpec {
-    FileSpec nvdisasm_path(path);
-    LLDB_LOG(log, "Found nvdisasm {0} at: {1}", source, path);
-    // Cache the successful result
-    std::call_once(m_search_once_nvdisasm,
-                   [&]() { m_cached_nvdisasm_path = nvdisasm_path; });
-    return *m_cached_nvdisasm_path;
-  };
-
-  // First check if nvdisasm is available in PATH
-  if (llvm::ErrorOr<std::string> path_result =
-          llvm::sys::findProgramByName("nvdisasm")) {
-    return handle_nvdisasm_found(*path_result, "in PATH");
+  auto candidates = FindNvdisasmCandidates();
+  for (const FileSpec &candidate : candidates) {
+    if (sm_arch.empty() || SupportsSM(candidate, sm_arch)) {
+      LLDB_LOG(log, "Using nvdisasm {0} for architecture '{1}'", candidate,
+               sm_arch);
+      m_nvdisasm_paths.emplace(sm_arch.str(), candidate);
+      return candidate;
+    }
+    LLDB_LOG(log, "nvdisasm {0} does not advertise support for {1}", candidate,
+             sm_arch);
   }
 
-  // Try to find nvdisasm in common locations
-  llvm::SmallVector<llvm::StringRef, 4> search_paths = {
-      "/usr/local/cuda/bin", // Common CUDA installation
-      "/opt/cuda/bin",       // Alternative installation
-      "/usr/bin",            // System installation
-  };
-
-  // Also check CUDA_HOME environment variable
-  std::string
-      cuda_bin_dir_storage; // Storage for the StringRef at the correct scope
-  const char *cuda_home = getenv("CUDA_HOME");
-  if (cuda_home) {
-    std::filesystem::path cuda_bin_dir =
-        std::filesystem::path(cuda_home) / "bin";
-    cuda_bin_dir_storage = cuda_bin_dir.string();
-    search_paths.insert(search_paths.begin(), cuda_bin_dir_storage);
-  }
-
-  // Use findProgramByName with custom search paths
-  if (llvm::ErrorOr<std::string> nvdisasm_result =
-          llvm::sys::findProgramByName("nvdisasm", search_paths)) {
-    return handle_nvdisasm_found(*nvdisasm_result, "in custom paths");
-  }
-
-  // Build error message with searched paths (add nvdisasm to each path for
-  // display)
-  std::string searched_paths;
-  for (size_t i = 0; i < search_paths.size(); ++i) {
-    if (i > 0)
-      searched_paths += ", ";
-    searched_paths += search_paths[i].str() + "/nvdisasm";
-  }
-
-  std::string error_msg =
-      "nvdisasm not found or not executable. Please install CUDA toolkit, "
-      "ensure nvdisasm is in your PATH, or set CUDA_HOME environment "
-      "variable. Searched paths: " +
-      searched_paths;
-
-  LLDB_LOG(log, "nvdisasm not found in any search paths. Searched: {0}",
-           searched_paths);
-
-  return llvm::createStringError(error_msg);
+  if (candidates.empty())
+    return llvm::createStringError(
+        "nvdisasm not found or not executable. Please install CUDA toolkit, "
+        "ensure nvdisasm is in your PATH, or set CUDA_HOME environment "
+        "variable.");
+  return llvm::createStringError(
+      "No installed nvdisasm advertises support for %s. Set "
+      "platform.plugin.nvgpu.nvdisasm-path to a compatible CUDA toolkit.",
+      sm_arch.str().c_str());
 }

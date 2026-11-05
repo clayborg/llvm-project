@@ -11,6 +11,7 @@
 
 #include "lldb/Core/Address.h"
 #include "lldb/Utility/FileSpec.h"
+#include "llvm/ADT/StringRef.h"
 #include <llvm/Support/Error.h>
 #include <map>
 #include <memory>
@@ -49,9 +50,12 @@ public:
     return instance;
   }
 
-  /// Find the nvdisasm executable (cached after first call)
+  /// Find an nvdisasm executable supporting sm_arch. An empty architecture
+  /// selects the first executable without probing its capabilities.
+  /// Explicit user settings take precedence over automatic selection.
   /// \return FileSpec for nvdisasm executable, or error if not found
-  llvm::Expected<lldb_private::FileSpec> GetNvdisasmPath();
+  llvm::Expected<lldb_private::FileSpec>
+  GetNvdisasmPath(llvm::StringRef sm_arch = {});
 
   // Per-module SM architecture caching
   std::shared_ptr<ModuleSM> GetModuleSM(const std::string &cache_key);
@@ -68,9 +72,9 @@ private:
   DisassemblerSASSCache(const DisassemblerSASSCache &) = delete;
   DisassemblerSASSCache &operator=(const DisassemblerSASSCache &) = delete;
 
-  // nvdisasm path caching
-  std::optional<lldb_private::FileSpec> m_cached_nvdisasm_path;
-  std::once_flag m_search_once_nvdisasm;
+  // Different architectures can require different installed CUDA toolkits.
+  std::map<std::string, lldb_private::FileSpec> m_nvdisasm_paths;
+  std::mutex m_nvdisasm_mutex;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_DISASSEMBLER_SASS_DISASSEMBLERSASSCACHE_H

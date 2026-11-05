@@ -321,9 +321,13 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
         "Failed to extract SM architecture from CUDA module");
   }
 
+  auto nvdisasm = DisassemblerSASSCache::getInstance().GetNvdisasmPath(sm_arch);
+  if (!nvdisasm)
+    return nvdisasm.takeError();
+
   std::string json_output;
   if (llvm::Expected<std::string> json_output_or =
-          InvokeNVDisasm(whole_instructions, sm_arch, m_nvdisasm_path, start)) {
+          InvokeNVDisasm(whole_instructions, sm_arch, *nvdisasm, start)) {
     json_output = std::move(*json_output_or);
   } else {
     return json_output_or.takeError();
