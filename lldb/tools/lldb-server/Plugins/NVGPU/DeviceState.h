@@ -439,7 +439,9 @@ public:
   /// Update all device state information from the CUDA debugger API.
   ///
   /// This method performs a batch update of all dynamic state information
-  /// including SM states, warp states, and thread states.
+  /// including SM states, warp states, and thread states. The first update
+  /// reads the whole state, and later ones what changed since the previous
+  /// one.
   ///
   /// \return
   ///     An error if the debugger API cannot report the state, or the state
@@ -544,6 +546,10 @@ private:
   /// Temporary buffer for device information (disposed after each stop).
   /// Objects should not hold references to data in this buffer beyond a stop.
   std::vector<uint8_t> m_device_info_buffer;
+
+  /// Whether BatchUpdate has read the state of this device, so that later
+  /// reads can ask for what changed since.
+  bool m_state_read = false;
   /// @}
 };
 

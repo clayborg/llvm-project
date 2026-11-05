@@ -362,9 +362,15 @@ llvm::Error DeviceState::DecodeDeviceInfoBuffer(uint8_t *buffer, size_t size) {
 }
 
 llvm::Error DeviceState::BatchUpdate() {
+  // An update reports only what changed since the previous read. The API
+  // promises the whole state when it cannot report changes, but a first read
+  // must not depend on that: after a late attach, the device has run kernels
+  // that nothing has read.
+  CUDBGDeviceInfoQueryType_t query_type =
+      m_state_read ? CUDBG_RESPONSE_TYPE_UPDATE : CUDBG_RESPONSE_TYPE_FULL;
   uint32_t data_length = 0;
   CUDBGResult res = m_api->getDeviceInfo(
-      m_device_id, CUDBG_RESPONSE_TYPE_UPDATE, m_device_info_buffer.data(),
+      m_device_id, query_type, m_device_info_buffer.data(),
       m_device_info_sizes.requiredBufferSize, &data_length);
   if (res != CUDBG_SUCCESS)
     return createStringErrorFmt(
@@ -376,5 +382,6 @@ llvm::Error DeviceState::BatchUpdate() {
     return createStringErrorFmt(
         "Failed to decode the state of CUDA device {0}. {1}", m_device_id,
         llvm::toString(std::move(err)));
+  m_state_read = true;
   return llvm::Error::success();
 }
