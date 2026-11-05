@@ -30,8 +30,8 @@ class TestNVGPUThreadActivity(NVGPUTestCaseBase):
         self.assertEqual(activity, {x: x % 2 == 1 for x in range(32)})
 
     def test_module_load(self):
-        """Report every thread as active at a module load, which does not read
-        the GPU's thread state, instead of its activity at the previous stop."""
+        """Module-load stops report all threads active and reject stale
+        register reads."""
         self.run_to_divergent_store()
         self.assertIn(
             False,
@@ -51,3 +51,8 @@ class TestNVGPUThreadActivity(NVGPUTestCaseBase):
         self.assertEqual(
             [thread.IsActive() for thread in self.gpu_process.threads], [True] * 32
         )
+        # The PC remains readable while the GPU is running.
+        frame = self.gpu_process.threads[0].frame[0]
+        self.assertNotEqual(frame.GetPC(), lldb.LLDB_INVALID_ADDRESS)
+        for name in ("R0", "threadIdx"):
+            self.assertFalse(frame.FindRegister(name).GetError().Success(), name)

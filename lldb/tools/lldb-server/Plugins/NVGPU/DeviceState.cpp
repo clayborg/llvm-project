@@ -119,7 +119,7 @@ llvm::Expected<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
 static llvm::Error
 ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                const nvgpu::PhysicalCoords &physical,
-                               WarpSharedRegisterCache &regs) {
+                               llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!HasRequiredWarpCoords(physical))
     return llvm::Error::success();
   llvm::Expected<size_t> num_regs = device_info.GetNumUniformRegisters();
@@ -133,23 +133,24 @@ ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
         "The device reported {0} uniform registers, but only {1} are supported",
         *num_regs, kNumURRegs);
 
+  registers.resize(*num_regs);
   CUDBGResult res = api->readUniformRegisterRange(
       *physical.device, *physical.sm, *physical.warp, 0, *num_regs,
-      regs.val.uniform);
+      registers.data());
 
-  if (res != CUDBG_SUCCESS)
+  if (res != CUDBG_SUCCESS) {
+    registers.clear();
     return createStringErrorFmt("Failed to read the uniform registers. {0}",
                                 cudbgGetErrorString(res));
+  }
 
-  for (size_t i = 0; i < *num_regs; ++i)
-    regs.is_valid.uniform[i] = true;
   return llvm::Error::success();
 }
 
-static llvm::Error
-ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
-                                        const nvgpu::PhysicalCoords &physical,
-                                        WarpSharedRegisterCache &regs) {
+static llvm::Error ReadUniformPredicateRegistersFromDevice(
+    DeviceState &device_info, CUDBGAPI api,
+    const nvgpu::PhysicalCoords &physical,
+    llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!HasRequiredWarpCoords(physical))
     return llvm::Error::success();
   llvm::Expected<size_t> num_regs =
@@ -164,52 +165,53 @@ ReadUniformPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                 "registers, but only {1} are supported",
                                 *num_regs, kNumUPRegs);
 
+  registers.resize(*num_regs);
   CUDBGResult res =
       api->readUniformPredicates(*physical.device, *physical.sm, *physical.warp,
-                                 *num_regs, regs.val.uniform_predicate);
+                                 *num_regs, registers.data());
 
-  if (res != CUDBG_SUCCESS)
+  if (res != CUDBG_SUCCESS) {
+    registers.clear();
     return createStringErrorFmt(
         "Failed to read the uniform predicate registers. {0}",
         cudbgGetErrorString(res));
-
-  for (size_t i = 0; i < *num_regs; ++i) {
-    regs.val.uniform_predicate[i] = regs.val.uniform_predicate[i] & 0x1;
-    regs.is_valid.uniform_predicate[i] = true;
   }
+
+  for (uint32_t &predicate : registers)
+    predicate &= 0x1;
   return llvm::Error::success();
 }
 
-const WarpSharedRegisterCache &WarpState::GetRegisters() {
-  if (m_regs_calculated)
-    return m_shared_registers;
-
-  // Registers that fail to read stay invalid, instead of keeping the values of
-  // an earlier stop.
-  m_shared_registers = {};
-  m_regs_calculated = true;
-
-  const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
-  if (!HasRequiredWarpCoords(physical))
-    return m_shared_registers;
-
+llvm::ArrayRef<uint32_t> WarpState::GetUniformRegisters() {
+  if (m_uniform_registers)
+    return *m_uniform_registers;
+  llvm::SmallVectorImpl<uint32_t> &registers = m_uniform_registers.emplace();
   DeviceState &device_info = GetSMState().GetDeviceState();
-  CUDBGAPI api = device_info.GetAPI();
-  auto log_error = [&physical](llvm::Error error) {
-    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
-                   "WarpState::GetRegisters(). Device {1}, SM {2}, warp {3}: "
-                   "{0}",
-                   *physical.device, *physical.sm, *physical.warp);
-  };
-
+  const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
+  // Missing coordinates skip the read, so the error log can dereference them.
   if (llvm::Error err = ReadUniformRegistersFromDevice(
-          device_info, api, physical, m_shared_registers))
-    log_error(std::move(err));
-  if (llvm::Error err = ReadUniformPredicateRegistersFromDevice(
-          device_info, api, physical, m_shared_registers))
-    log_error(std::move(err));
+          device_info, device_info.GetAPI(), physical, registers))
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                   "WarpState::GetUniformRegisters(). Device {1}, SM {2}, "
+                   "warp {3}: {0}",
+                   *physical.device, *physical.sm, *physical.warp);
+  return registers;
+}
 
-  return m_shared_registers;
+llvm::ArrayRef<uint32_t> WarpState::GetUniformPredicateRegisters() {
+  if (m_uniform_predicate_registers)
+    return *m_uniform_predicate_registers;
+  llvm::SmallVectorImpl<uint32_t> &registers =
+      m_uniform_predicate_registers.emplace();
+  DeviceState &device_info = GetSMState().GetDeviceState();
+  const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
+  if (llvm::Error err = ReadUniformPredicateRegistersFromDevice(
+          device_info, device_info.GetAPI(), physical, registers))
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                   "WarpState::GetUniformPredicateRegisters(). Device {1}, "
+                   "SM {2}, warp {3}: {0}",
+                   *physical.device, *physical.sm, *physical.warp);
+  return registers;
 }
 
 SMState::SMState(ProcessNVGPU &gpu, uint32_t num_warps,

@@ -16,6 +16,7 @@
 #include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "cudadebugger.h"
 
@@ -24,18 +25,15 @@ using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-using sass::kNumUPRegs;
-using sass::kNumURRegs;
 using namespace sass::regnum;
-
-static bool AllComponentsValid(const bool (&valid)[sass::kNumXYZComponents]) {
-  return valid[0] && valid[1] && valid[2];
-}
 
 RegisterContextNVGPU::RegisterContextNVGPU(ThreadNVGPU &thread)
     : NativeRegisterContext(thread) {}
 
-void RegisterContextNVGPU::InvalidateAllRegisters() { m_regs.reset(); }
+void RegisterContextNVGPU::InvalidateAllRegisters() {
+  m_regular_registers.reset();
+  m_predicate_registers.reset();
+}
 
 ThreadNVGPU &RegisterContextNVGPU::GetGPUThread() {
   return static_cast<ThreadNVGPU &>(GetThread());
@@ -48,7 +46,7 @@ CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
 static llvm::Error
 ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
                                const nvgpu::PhysicalCoords &coords,
-                               ThreadRegisterCache &regs) {
+                               llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
     return llvm::Error::success();
 
@@ -67,21 +65,22 @@ ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // needed. CTK 13.2 (CUDBG API revision 168) renamed it to
   // readRegisterRange60 and appended a new 8-arg readRegisterRange we do not
   // use.
+  registers.resize(*num_regs_read);
   CUDBGResult res = api->readRegisterRange60(*coords.device, *coords.sm,
                                              *coords.warp, *coords.lane, 0,
-                                             *num_regs_read, regs.val.regular);
-  if (res != CUDBG_SUCCESS)
+                                             *num_regs_read, registers.data());
+  if (res != CUDBG_SUCCESS) {
+    registers.clear();
     return createStringErrorFmt("Failed to read the regular registers. {0}",
                                 cudbgGetErrorString(res));
-  for (size_t i = 0; i < *num_regs_read; ++i)
-    regs.is_valid.regular[i] = true;
+  }
   return llvm::Error::success();
 }
 
 static llvm::Error
 ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                  const nvgpu::PhysicalCoords &coords,
-                                 ThreadRegisterCache &regs) {
+                                 llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
     return llvm::Error::success();
 
@@ -96,146 +95,79 @@ ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
                                 "but only {1} are supported",
                                 *num_regs, sass::kNumPRegs);
 
+  registers.resize(*num_regs);
   CUDBGResult res =
       api->readPredicates(*coords.device, *coords.sm, *coords.warp,
-                          *coords.lane, *num_regs, regs.val.predicate);
+                          *coords.lane, *num_regs, registers.data());
 
-  if (res != CUDBG_SUCCESS)
+  if (res != CUDBG_SUCCESS) {
+    registers.clear();
     return createStringErrorFmt("Failed to read the predicate registers. {0}",
                                 cudbgGetErrorString(res));
+  }
 
-  for (size_t i = 0; i < *num_regs; ++i)
-    regs.is_valid.predicate[i] = true;
   return llvm::Error::success();
 }
 
-static llvm::Error ReadCUDABuiltinsFromDevice(const WarpState &warp_state,
-                                              const ThreadState &thread_state,
-                                              ThreadRegisterCache &regs) {
-  if (const std::optional<ThreadIdx> &thread_idx =
-          thread_state.GetThreadIdx()) {
-    regs.val.thread_idx[0] = thread_idx->x;
-    regs.val.thread_idx[1] = thread_idx->y;
-    regs.val.thread_idx[2] = thread_idx->z;
-    regs.is_valid.thread_idx[0] = true;
-    regs.is_valid.thread_idx[1] = true;
-    regs.is_valid.thread_idx[2] = true;
-  }
-
-  const nvgpu::LogicalCoords &logical = warp_state.GetLogicalCoords();
-  if (logical.block_idx) {
-    regs.val.block_idx[0] = logical.block_idx->x;
-    regs.val.block_idx[1] = logical.block_idx->y;
-    regs.val.block_idx[2] = logical.block_idx->z;
-    regs.is_valid.block_idx[0] = true;
-    regs.is_valid.block_idx[1] = true;
-    regs.is_valid.block_idx[2] = true;
-  }
-
-  regs.val.warp_size =
-      warp_state.GetSMState().GetDeviceState().GetNumThreadsPerWarp();
-  regs.is_valid.warp_size = true;
-
-  if (!logical.grid_id)
-    return llvm::Error::success();
-
-  llvm::Expected<const CUDBGGridInfo &> grid_info =
-      warp_state.GetSMState().GetDeviceState().GetGridInfo(*logical.grid_id);
-  if (!grid_info)
-    return grid_info.takeError();
-
-  regs.val.block_dim[0] = grid_info->blockDim.x;
-  regs.val.block_dim[1] = grid_info->blockDim.y;
-  regs.val.block_dim[2] = grid_info->blockDim.z;
-  regs.is_valid.block_dim[0] = true;
-  regs.is_valid.block_dim[1] = true;
-  regs.is_valid.block_dim[2] = true;
-
-  regs.val.grid_dim[0] = grid_info->gridDim.x;
-  regs.val.grid_dim[1] = grid_info->gridDim.y;
-  regs.val.grid_dim[2] = grid_info->gridDim.z;
-  regs.is_valid.grid_dim[0] = true;
-  regs.is_valid.grid_dim[1] = true;
-  regs.is_valid.grid_dim[2] = true;
-  return llvm::Error::success();
+static llvm::Error InvalidRegister(const RegisterInfo &reg_info) {
+  return createStringErrorFmt("{0} register is invalid", reg_info.name);
 }
 
-const ThreadRegisterCache &RegisterContextNVGPU::ReadAllRegsFromDevice() {
-  if (m_regs)
-    return *m_regs;
+/// Read little-endian register bytes.
+static llvm::Error SetValue(const RegisterInfo &reg_info, const void *data,
+                            RegisterValue &value) {
+  Status error;
+  value.SetFromMemoryData(reg_info, data, reg_info.byte_size,
+                          lldb::eByteOrderLittle, error);
+  return error.ToError();
+}
 
-  ThreadRegisterCache &regs = m_regs.emplace();
-  ThreadNVGPU &thread = GetGPUThread();
-  const ThreadState *thread_state = thread.GetThreadState();
+static llvm::Error SetDim3Value(const RegisterInfo &reg_info,
+                                const nvgpu::Dim3u &dim, RegisterValue &value) {
+  const uint32_t components[sass::kNumXYZComponents] = {dim.x, dim.y, dim.z};
+  return SetValue(reg_info, components, value);
+}
 
-  if (!thread_state) {
-    // We need to send always a PC to the client upon stop events, otherwise the
-    // client will be in a borked state.
-    regs.val.PC = 0;
-    regs.is_valid.PC = true;
-    return regs;
-  }
+/// Read from 32-bit slots: predicates require one slot, RA requires two.
+static llvm::Error SetValueAt(const RegisterInfo &reg_info,
+                              llvm::ArrayRef<uint32_t> registers,
+                              uint32_t index, RegisterValue &value) {
+  const size_t count = llvm::divideCeil(reg_info.byte_size, sizeof(uint32_t));
+  if (index + count > registers.size())
+    return InvalidRegister(reg_info);
+  return SetValue(reg_info, &registers[index], value);
+}
 
-  CUDBGAPI api = GetDebuggerAPI();
-  const nvgpu::PhysicalCoords &physical = thread_state->GetPhysicalCoords();
-
-  {
-    regs.val.PC = thread_state->GetPC();
-    regs.is_valid.PC = true;
-  }
-
-  {
-    if (const ExceptionInfo *exception = thread_state->GetException();
-        exception && exception->errorPC.has_value()) {
-      regs.val.errorPC = *exception->errorPC;
-      regs.is_valid.errorPC = true;
-    }
-  }
-
-  WarpState &warp_state = thread_state->GetWarpState();
-  DeviceState &device_info = warp_state.GetSMState().GetDeviceState();
-  auto log_error = [&thread](llvm::Error error) {
-    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(error),
-                   "RegisterContextNVGPU::ReadAllRegsFromDevice(). Thread {1}: "
+llvm::ArrayRef<uint32_t>
+RegisterContextNVGPU::GetRegularRegisters(const ThreadState &thread_state) {
+  if (m_regular_registers)
+    return *m_regular_registers;
+  llvm::SmallVectorImpl<uint32_t> &registers = m_regular_registers.emplace();
+  if (llvm::Error err = ReadRegularRegistersFromDevice(
+          GetDebuggerAPI(), thread_state.GetWarpState(),
+          thread_state.GetPhysicalCoords(), registers))
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                   "RegisterContextNVGPU::GetRegularRegisters(). Thread {1}: "
                    "{0}",
-                   thread.GetID());
-  };
+                   GetGPUThread().GetID());
+  return registers;
+}
 
-  if (llvm::Error err =
-          ReadRegularRegistersFromDevice(api, warp_state, physical, regs))
-    log_error(std::move(err));
-  if (llvm::Error err =
-          ReadPredicateRegistersFromDevice(device_info, api, physical, regs))
-    log_error(std::move(err));
-
-  const WarpSharedRegisterCache &warp_regs = warp_state.GetRegisters();
-
-  std::copy(warp_regs.val.uniform, warp_regs.val.uniform + kNumURRegs,
-            regs.val.uniform);
-  std::copy(warp_regs.val.uniform_predicate,
-            warp_regs.val.uniform_predicate + kNumUPRegs,
-            regs.val.uniform_predicate);
-  std::copy(warp_regs.is_valid.uniform, warp_regs.is_valid.uniform + kNumURRegs,
-            regs.is_valid.uniform);
-  std::copy(warp_regs.is_valid.uniform_predicate,
-            warp_regs.is_valid.uniform_predicate + kNumUPRegs,
-            regs.is_valid.uniform_predicate);
-
-  {
-    regs.val.regular_zero = 0;
-    regs.is_valid.regular_zero = true;
-  }
-
-  {
-    regs.val.uniform_zero = 0;
-    regs.is_valid.uniform_zero = true;
-  }
-
-  if (llvm::Error err =
-          ReadCUDABuiltinsFromDevice(warp_state, *thread_state, regs))
-    log_error(std::move(err));
-
-  return regs;
+llvm::ArrayRef<uint32_t>
+RegisterContextNVGPU::GetPredicateRegisters(const ThreadState &thread_state) {
+  if (m_predicate_registers)
+    return *m_predicate_registers;
+  llvm::SmallVectorImpl<uint32_t> &registers = m_predicate_registers.emplace();
+  DeviceState &device_state =
+      thread_state.GetWarpState().GetSMState().GetDeviceState();
+  if (llvm::Error err = ReadPredicateRegistersFromDevice(
+          device_state, GetDebuggerAPI(), thread_state.GetPhysicalCoords(),
+          registers))
+    LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), std::move(err),
+                   "RegisterContextNVGPU::GetPredicateRegisters(). Thread {1}: "
+                   "{0}",
+                   GetGPUThread().GetID());
+  return registers;
 }
 
 uint32_t RegisterContextNVGPU::GetRegisterSetCount() const {
@@ -268,65 +200,105 @@ RegisterContextNVGPU::GetRegisterSet(uint32_t set_index) const {
 
 Status RegisterContextNVGPU::ReadRegister(const RegisterInfo *reg_info,
                                           RegisterValue &reg_value) {
-  const ThreadRegisterCache &regs = ReadAllRegsFromDevice();
-  int reg_num = reg_info->kinds[eRegisterKindLLDB];
+  return Status::FromError(ReadRegisterValue(*reg_info, reg_value));
+}
 
-  if (reg_num == LLDB_SP)
-    reg_num = LLDB_R_BASE + SASS_SP;
-  if (reg_num == LLDB_FP)
-    reg_num = LLDB_R_BASE + SASS_FP;
+llvm::Error
+RegisterContextNVGPU::ReadRegisterValue(const RegisterInfo &reg_info,
+                                        RegisterValue &value) {
+  const uint32_t reg_num = reg_info.kinds[eRegisterKindLLDB];
+  if (reg_num >= LLDB_REG_COUNT)
+    return createStringErrorFmt("unknown register #{0}", reg_num);
 
-  if (reg_num == LLDB_PC) {
-    if (!regs.is_valid.PC)
-      return Status("PC register is invalid");
-  } else if (reg_num == LLDB_ERROR_PC) {
-    if (!regs.is_valid.errorPC)
-      return Status("errorPC register is invalid");
-  } else if (reg_num == LLDB_RA) {
-    if (!regs.is_valid.regular[SASS_RA_LO] ||
-        !regs.is_valid.regular[SASS_RA_HI])
-      return Status("RA register is invalid");
-  } else if (reg_num == LLDB_VREG_THREAD_IDX) {
-    if (!AllComponentsValid(regs.is_valid.thread_idx))
-      return Status("threadIdx register is invalid");
-  } else if (reg_num == LLDB_VREG_BLOCK_IDX) {
-    if (!AllComponentsValid(regs.is_valid.block_idx))
-      return Status("blockIdx register is invalid");
-  } else if (reg_num == LLDB_VREG_BLOCK_DIM) {
-    if (!AllComponentsValid(regs.is_valid.block_dim))
-      return Status("blockDim register is invalid");
-  } else if (reg_num == LLDB_VREG_GRID_DIM) {
-    if (!AllComponentsValid(regs.is_valid.grid_dim))
-      return Status("gridDim register is invalid");
-  } else if (reg_num >= static_cast<int>(LLDB_REG_COUNT)) {
-    return Status::FromErrorStringWithFormatv("unknown register #{}", reg_num);
-  } else if (IsUniformPredicateLLDB(reg_num)) {
-    int up_index = reg_num - LLDB_UP_BASE;
-    if (!regs.is_valid.uniform_predicate[up_index])
-      return Status::FromErrorStringWithFormatv("UP{} register is invalid",
-                                                up_index);
-  } else if (IsPredicateLLDB(reg_num)) {
-    int p_index = reg_num - LLDB_P_BASE;
-    if (!regs.is_valid.predicate[p_index])
-      return Status::FromErrorStringWithFormatv("P{} register is invalid",
-                                                p_index);
-  } else if (IsUniformLLDB(reg_num)) {
-    int ur_index = reg_num - LLDB_UR_BASE;
-    if (!regs.is_valid.uniform[ur_index])
-      return Status::FromErrorStringWithFormatv("UR{} register is invalid",
-                                                ur_index);
-  } else if (IsRegularLLDB(reg_num)) {
-    int r_index = reg_num - LLDB_R_BASE;
-    if (!regs.is_valid.regular[r_index])
-      return Status::FromErrorStringWithFormatv("R{} register is invalid",
-                                                r_index);
+  if (reg_num == LLDB_RZ || reg_num == LLDB_URZ) {
+    const uint32_t zero = 0;
+    return SetValue(reg_info, &zero, value);
   }
 
-  Status error;
-  reg_value.SetFromMemoryData(
-      *reg_info, (const uint8_t *)&regs.val + reg_info->byte_offset,
-      reg_info->byte_size, lldb::eByteOrderLittle, error);
-  return error;
+  const ThreadState *thread_state = GetGPUThread().GetThreadState();
+  if (reg_num == LLDB_PC) {
+    // Every stop needs a PC, even without a current snapshot.
+    const uint64_t pc = thread_state ? thread_state->GetPC() : 0;
+    return SetValue(reg_info, &pc, value);
+  }
+  if (!thread_state)
+    return InvalidRegister(reg_info);
+
+  // Module-load stops leave the GPU running and the snapshot stale.
+  if (!GetGPUThread().GetGPU().IsDeviceStateCurrent())
+    return createStringErrorFmt(
+        "{0} register is unavailable while the GPU is running", reg_info.name);
+
+  // Read snapshot and cached grid values without fetching registers.
+  WarpState &warp_state = thread_state->GetWarpState();
+  DeviceState &device_state = warp_state.GetSMState().GetDeviceState();
+  const nvgpu::LogicalCoords &logical = warp_state.GetLogicalCoords();
+  switch (reg_num) {
+  case LLDB_ERROR_PC: {
+    const ExceptionInfo *exception = thread_state->GetException();
+    if (!exception || !exception->errorPC)
+      return InvalidRegister(reg_info);
+    const uint64_t error_pc = *exception->errorPC;
+    return SetValue(reg_info, &error_pc, value);
+  }
+  case LLDB_VREG_THREAD_IDX: {
+    const std::optional<ThreadIdx> &thread_idx = thread_state->GetThreadIdx();
+    if (!thread_idx)
+      return InvalidRegister(reg_info);
+    return SetDim3Value(reg_info, *thread_idx, value);
+  }
+  case LLDB_VREG_BLOCK_IDX:
+    if (!logical.block_idx)
+      return InvalidRegister(reg_info);
+    return SetDim3Value(reg_info, *logical.block_idx, value);
+  case LLDB_VREG_BLOCK_DIM:
+  case LLDB_VREG_GRID_DIM: {
+    if (!logical.grid_id)
+      return InvalidRegister(reg_info);
+    llvm::Expected<const CUDBGGridInfo &> grid_info =
+        device_state.GetGridInfo(*logical.grid_id);
+    if (!grid_info)
+      return grid_info.takeError();
+    const CuDim3 &dim = reg_num == LLDB_VREG_BLOCK_DIM ? grid_info->blockDim
+                                                       : grid_info->gridDim;
+    return SetDim3Value(reg_info, nvgpu::ToDim3u(dim), value);
+  }
+  case LLDB_VREG_WARP_SIZE: {
+    const int32_t warp_size = device_state.GetNumThreadsPerWarp();
+    return SetValue(reg_info, &warp_size, value);
+  }
+  default:
+    break;
+  }
+
+  if (IsUniformLLDB(reg_num))
+    return SetValueAt(reg_info, warp_state.GetUniformRegisters(),
+                      reg_num - LLDB_UR_BASE, value);
+  if (IsUniformPredicateLLDB(reg_num))
+    return SetValueAt(reg_info, warp_state.GetUniformPredicateRegisters(),
+                      reg_num - LLDB_UP_BASE, value);
+
+  if (IsPredicateLLDB(reg_num))
+    return SetValueAt(reg_info, GetPredicateRegisters(*thread_state),
+                      reg_num - LLDB_P_BASE, value);
+
+  uint32_t index;
+  switch (reg_num) {
+  case LLDB_SP:
+    index = SASS_SP;
+    break;
+  case LLDB_FP:
+    index = SASS_FP;
+    break;
+  case LLDB_RA:
+    index = SASS_RA_LO;
+    break;
+  default:
+    assert(IsRegularLLDB(reg_num) && "every other register is handled above");
+    index = reg_num - LLDB_R_BASE;
+    break;
+  }
+  return SetValueAt(reg_info, GetRegularRegisters(*thread_state), index, value);
 }
 
 Status RegisterContextNVGPU::WriteRegister(const RegisterInfo *reg_info,
@@ -346,22 +318,18 @@ Status RegisterContextNVGPU::WriteAllRegisterValues(
 
 std::vector<uint32_t>
 RegisterContextNVGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
-  static std::vector<uint32_t> g_expedited_regs;
-  if (g_expedited_regs.empty()) {
-    g_expedited_regs.push_back(LLDB_PC);
-    g_expedited_regs.push_back(LLDB_ERROR_PC);
-    g_expedited_regs.push_back(LLDB_SP);
-    g_expedited_regs.push_back(LLDB_FP);
-    g_expedited_regs.push_back(LLDB_RA);
-    for (uint32_t i = 0; i < sass::kNumRRegs; ++i)
-      g_expedited_regs.push_back(LLDB_R_BASE + i);
-  }
-  return g_expedited_regs;
-}
+  // Keep per-thread jThreadsInfo updates free of device register reads.
+  // The reporting thread's full stop reply includes regular registers
+  // for unwinding.
+  if (expType == ExpeditedRegs::Minimal)
+    return {LLDB_PC, LLDB_ERROR_PC, LLDB_VREG_THREAD_IDX, LLDB_VREG_BLOCK_IDX};
 
-std::optional<uint64_t> RegisterContextNVGPU::ReadErrorPC() {
-  const ThreadRegisterCache &regs = ReadAllRegsFromDevice();
-  if (regs.is_valid.errorPC)
-    return regs.val.errorPC;
-  return std::nullopt;
+  static const std::vector<uint32_t> g_full_regs = [] {
+    std::vector<uint32_t> regs = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
+                                  LLDB_RA};
+    for (uint32_t i = 0; i < sass::kNumRRegs; ++i)
+      regs.push_back(GetRegularLLDB(i));
+    return regs;
+  }();
+  return g_full_regs;
 }
