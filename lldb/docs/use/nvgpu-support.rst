@@ -69,8 +69,6 @@ CMake variables
 - `NVGPU_CUDA_LAUNCH_BLOCKING`: when set to "1", forces CUDA kernel launches
   to be synchronous. Can also be set at runtime. See Environment variables
   section for more details.
-- `NVGPU_INITIALIZATION_SYMBOL`: an optional CPU symbol to use to identify
-  that the CUDA runtime is being initialized.
 - `NVGPU_DISASSEMBLER_PATH`: a default path to the nvdisasm disassembler that
   will be hardcoded in LLDB. It bypasses the regular disassembler discovery
   logic.
@@ -141,10 +139,11 @@ against, say, CUDA 13.x supports every 13.x driver/coredump, but not 12.x or
 The GPU target
 ^^^^^^^^^^^^^^
 
-When the program initializes CUDA, LLDB adds a second target, for the GPU, next
-to the CPU target. The GPU target has no executable of its own, so
-``target list`` and stop messages show it by its session name, which is also the
-name lldb-dap gives the GPU session:
+When the program initializes CUDA, or when LLDB attaches to a program that
+already has, LLDB adds a second target, for the GPU, next to the CPU target. The
+GPU target has no executable of its own, so ``target list`` and stop messages
+show it by its session name, which is also the name lldb-dap gives the GPU
+session:
 
 .. code-block:: text
 
@@ -185,6 +184,62 @@ While the GPU process is stopped, lldb-server leaves the CUDA driver's events
 for when it resumes. A CPU thread that the driver holds until the debugger
 handles its event, such as one that creates a CUDA context or loads a module,
 waits until then.
+
+Attaching to a running CUDA application
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+LLDB can attach to a CUDA application that is already running, including one
+whose kernels are running:
+
+.. code-block:: bash
+
+  lldb
+  > process attach -p <pid>
+
+``process attach`` returns with the CPU process stopped, as for any program.
+The GPU comes up once the application runs again: when you continue, the CUDA
+driver attaches to LLDB, and LLDB adds the GPU target. Once the driver has
+reported the CUDA contexts and modules that the application already had, the
+GPU stops, and its ``thread list`` shows the threads of the kernels that were
+running. The selected thread stops with signal ``SIGSTOP``, as a CPU process
+does when LLDB attaches to it, unless a thread hits a breakpoint or raises an
+exception first. The CPU process stops too, unless
+`NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP` is set.
+
+Stopping the GPU when the attach finishes needs a CUDA 13.2 or newer driver, as
+interrupting it does. With an older driver, the GPU target comes up running.
+
+If the application has not initialized CUDA yet when LLDB attaches, the GPU
+target comes up when the application does, as for a program that LLDB
+launched. If it has initialized CUDA but has no CUDA context yet, the driver
+can attach only once the application creates one. ``lldb-server`` asks it to
+attach each time the CPU process stops, so the GPU target comes up once the
+CPU process has stopped after the application created a context, at a
+breakpoint or an interrupt for example, and runs again.
+
+All of the attach happens in ``lldb-server``, so it works the same through a
+platform (see `Remote platforms - Linux`_), and with a debug server that had
+already attached when LLDB connected (``lldb-server gdbserver --attach``).
+
+.. note::
+
+  ``lldb-server`` does not yet request the driver's capabilities for lazy
+  loading, which CUDA applications use by default. Without them, the driver
+  attaches without reporting the application's CUDA contexts and modules, and
+  the GPU stops with an error that says so. To debug the GPU of an application
+  that you attach to, start it with lazy loading turned off:
+
+  .. code-block:: bash
+
+    CUDA_MODULE_LOADING=EAGER CUDA_DISABLE_FUNCTION_LAZY_FINALIZATION=1 ./app
+
+LLDB attaches through the CUDA driver's attach procedure, which needs a driver
+whose ``libcuda`` has ``cudbgInitiateDebuggerAttachProcedureFd``. It does not
+support the older ``cudbgApiAttach`` mechanism, which calls into the
+application wherever it stopped, even in code that is not safe to interrupt.
+With a driver too old to have the attach procedure, LLDB attaches to the CPU
+process only, and ``lldb-server`` logs why to its ``gdb-remote plugin`` log
+channel.
 
 GPU thread coordinates
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -508,6 +563,38 @@ Then connect remotely to the lldb-server with the following command:
   > platform connect connect://10.112.215.212:12346
   > file /remote/path/to/a/program
   > run
+
+To attach to a CUDA application that is already running on the remote machine,
+connect the platform the same way, then attach instead of launching:
+
+.. code-block:: bash
+
+  lldb
+  > platform select remote-linux
+  > platform connect connect://10.112.215.212:12346
+  > process attach -p <pid>
+
+You need ``platform select`` and ``platform connect`` only to attach through a
+platform. Without one, start ``lldb-server`` as a debug server attached to the
+application on the remote machine, with the same environment variables:
+
+.. code-block:: bash
+
+  NVGPU_DEBUGGER_REMOTE_LISTEN_TO_PORT=0 \
+  NVGPU_DEBUGGER_REMOTE_LISTEN_TO_HOST="*" \
+  NVGPU_DEBUGGER_REMOTE_HOST="10.112.215.212" \
+  ./bin/lldb-server gdbserver --attach <pid> "*:12345"
+
+Then connect LLDB to it:
+
+.. code-block:: bash
+
+  lldb
+  > gdb-remote 10.112.215.212:12345
+
+A debug server started without ``--attach <pid>`` attaches when LLDB asks it
+to: connect with ``process connect connect://10.112.215.212:12345``, then run
+``process attach -p <pid>``.
 
 If lldb cannot reach the GPU server, for example because
 `NVGPU_DEBUGGER_REMOTE_HOST` names an address it cannot connect to, lldb reports

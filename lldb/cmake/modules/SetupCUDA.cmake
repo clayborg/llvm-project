@@ -126,10 +126,4 @@ function(lldb_apply_cuda_env_definitions target_name)
     target_compile_definitions(${target_name} PRIVATE
       CMAKE_NVGPU_CUDA_LAUNCH_BLOCKING="${NVGPU_CUDA_LAUNCH_BLOCKING}")
   endif()
-
-  if(NOT NVGPU_INITIALIZATION_SYMBOL)
-    set(NVGPU_INITIALIZATION_SYMBOL "cuInit")
-  endif()
-  target_compile_definitions(${target_name} PRIVATE
-    CMAKE_NVGPU_INITIALIZATION_SYMBOL="${NVGPU_INITIALIZATION_SYMBOL}")
 endfunction()

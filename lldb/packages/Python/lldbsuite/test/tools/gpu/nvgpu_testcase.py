@@ -263,6 +263,54 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         uses to open a session for it, once the GPU process is connected and
         the breakpoints are copied.
         """
+
+        def launch() -> lldb.SBProcess:
+            process = target.LaunchSimple(
+                None, None, self.get_process_working_directory()
+            )
+            self.assertTrue(process.IsValid(), "the program did not launch")
+            return process
+
+        return self._start_and_wait_for_gpu_target(target, launch, timeout_seconds)
+
+    def continue_and_wait_for_gpu_target(
+        self, timeout_seconds: int = 60
+    ) -> lldb.SBProcess:
+        """Resume the CPU process and wait for lldb to create the GPU target,
+        as it does once a program that lldb attached to runs again and its CUDA
+        driver attaches. Return the CPU process, which keeps running."""
+        self.assertIsNone(self.gpu_target, "the GPU target exists already")
+        process = self.cpu_process
+
+        def resume() -> lldb.SBProcess:
+            self.assertSuccess(process.Continue(), "continue CPU process")
+            return process
+
+        return self._start_and_wait_for_gpu_target(
+            self.cpu_target, resume, timeout_seconds
+        )
+
+    @staticmethod
+    def wait_until(predicate: Callable[[], bool], timeout_seconds: float = 60) -> bool:
+        """Poll `predicate` until it returns true or `timeout_seconds` pass, and
+        return whether it did. For what lldb has no event for, such as a file
+        that the program creates."""
+        deadline = time.monotonic() + timeout_seconds
+        while not predicate():
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.1)
+        return True
+
+    def _start_and_wait_for_gpu_target(
+        self,
+        target: lldb.SBTarget,
+        start: Callable[[], lldb.SBProcess],
+        timeout_seconds: int,
+    ) -> lldb.SBProcess:
+        """Call `start`, which launches or resumes the CPU process of `target`
+        and returns it, and wait for lldb to create the GPU target. Return the
+        CPU process."""
         self.setAsync(True)
         # A listener of its own, which takes only this event, so that the
         # state-changed events the other helpers wait for stay queued.
@@ -275,10 +323,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             "listening for the GPU target's creation",
         )
         try:
-            process = target.LaunchSimple(
-                None, None, self.get_process_working_directory()
-            )
-            self.assertTrue(process.IsValid(), "the program did not launch")
+            process = start()
             event = lldb.SBEvent()
             if not listener.WaitForEvent(math.ceil(timeout_seconds), event):
                 # A program that fails before it initializes CUDA has exited

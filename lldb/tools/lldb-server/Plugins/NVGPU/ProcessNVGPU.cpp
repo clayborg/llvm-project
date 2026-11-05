@@ -31,6 +31,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include <optional>
+#include <utility>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -230,6 +231,30 @@ Status ProcessNVGPU::Interrupt() {
                                       cudbgGetErrorString(res))
                             .str());
   return Status();
+}
+
+llvm::Error ProcessNVGPU::StopAfterAttach() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  LLDB_LOG(log, "Stopping the GPU now that the attach has finished");
+
+  llvm::Expected<const CUDBGAPI_st &> api = GetCudaAPI();
+  if (!api)
+    return api.takeError();
+
+  if (!GetAPIVersion().AtLeast(13, 2, 0)) {
+    LLDB_LOG(log, "Suspending the devices without waiting needs a CUDA 13.2 or "
+                  "newer driver, so the GPU goes on running");
+    return llvm::Error::success();
+  }
+
+  CUDBGResult res = api->suspendAllDevices(/*nonBlocking=*/1);
+  // Something suspended the devices first, such as a breakpoint, and the event
+  // for that suspension reports the stop instead.
+  if (res != CUDBG_SUCCESS && res != CUDBG_ERROR_SUSPENDED_DEVICE)
+    return createStringErrorFmt("Failed to suspend the CUDA devices. {0}",
+                                cudbgGetErrorString(res));
+  m_attach_stop_pending = true;
+  return llvm::Error::success();
 }
 
 Status ProcessNVGPU::Kill() { return Status(); }
@@ -637,10 +662,13 @@ llvm::Expected<ProcessNVGPU::SuspendStop> ProcessNVGPU::OnAllDevicesSuspended(
   LLDB_LOG(log, "NVGPU::OnAllDevicesSuspended()");
 
   // The API sends this event for a breakpoint, an exception, or a suspension
-  // that Interrupt requested. Only the last has no broken or faulted device.
+  // that Interrupt or StopAfterAttach requested. Only the last two have no
+  // broken or faulted device.
   bool is_interrupted = !event.brokenDevicesMask && !event.faultedDevicesMask;
-  if (is_interrupted &&
-      m_interrupt_state == InterruptState::StaleSuspension) {
+  // Whatever suspended the devices, this stop ends the attach.
+  bool ends_attach = std::exchange(m_attach_stop_pending, false);
+  if (is_interrupted && m_interrupt_state == InterruptState::StaleSuspension &&
+      !ends_attach) {
     m_interrupt_state = InterruptState::None;
     // Events wait while the GPU process is stopped, so the client has resumed
     // from the dyld stop that answered the interrupt, and a resume from a dyld
@@ -706,16 +734,21 @@ llvm::Expected<ProcessNVGPU::SuspendStop> ProcessNVGPU::OnAllDevicesSuspended(
   SetCurrentThreadID(exception_thread_id.value_or(
       breakpoint_thread_id.value_or(m_threads.front()->GetID())));
   // A thread that hit a breakpoint or raised an exception before the devices
-  // stopped keeps that stop, which answers the interrupt.
+  // stopped keeps that stop, which answers the interrupt or ends the attach.
   SuspendStop stop = SuspendStop::Stopped;
-  if (answers_interrupt && !exception_thread_id && !breakpoint_thread_id) {
+  if ((answers_interrupt || ends_attach) && !exception_thread_id &&
+      !breakpoint_thread_id) {
     // The client reads the signal in the GPU target's table, which
     // UnixSignals::Create picks from the triple, so the host's SIGSTOP would
     // read as another signal.
     int sigstop = UnixSignals::Create(GetArchitecture())
                       ->GetSignalNumberFromName("SIGSTOP");
     static_cast<ThreadNVGPU &>(*m_threads.front()).SetStoppedBySignal(sigstop);
-    stop = SuspendStop::Interrupted;
+    // The CPU stops along with a stop that lldb-server makes to end an
+    // attach, but not with one that answers an interrupt, which lldb can make
+    // just to send a packet.
+    if (!ends_attach)
+      stop = SuspendStop::Interrupted;
   }
   Halt();
   return stop;

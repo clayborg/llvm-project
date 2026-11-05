@@ -68,6 +68,12 @@ namespace lldb_private::lldb_server {
 /// leaves the CPU running, while a breakpoint or an exception stops it too,
 /// unless NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP is set.
 ///
+/// When lldb attaches to a running application, the GPU stops once the driver
+/// has attached: StopAfterAttach suspends the devices as Interrupt does, and
+/// the selected thread stops with SIGSTOP, as a CPU process does when lldb
+/// attaches to it. This stop stops the CPU too. A dyld stop does not answer
+/// it.
+///
 /// Halt reports a stop, as in the other GPU plug-ins, and never suspends the
 /// devices.
 class ProcessNVGPU : public NativeProcessProtocol {
@@ -195,6 +201,17 @@ public:
   ///     the debugger API instead, since the client takes a failed interrupt
   ///     for a lost connection.
   Status Interrupt() override;
+
+  /// Stop the GPU once a late attach has finished, so that lldb shows the
+  /// threads of the kernels that were already running. As Interrupt does,
+  /// this asks the debugger API to suspend every device in the background,
+  /// and OnAllDevicesSuspended reports the stop. Suspending the devices this
+  /// way needs a CUDA 13.2 or newer driver. With an older one, the GPU goes on
+  /// running.
+  ///
+  /// \return
+  ///     An error if the debugger API fails to suspend the devices.
+  llvm::Error StopAfterAttach();
 
   /// Terminate the GPU process.
   ///
@@ -366,7 +383,7 @@ public:
     /// GPU at once. lldb-server cannot tell the two apart.
     Interrupted,
     /// A stop that the GPU made on its own, such as for a breakpoint or an
-    /// exception.
+    /// exception, or that ends a late attach.
     Stopped,
   };
 
@@ -375,8 +392,9 @@ public:
   /// process is running, that is, while the client waits for a stop.
   ///
   /// Reads the state of the devices and reports a stop. While the client
-  /// waits for the stop that answers its interrupt, the selected thread stops
-  /// with SIGSTOP, unless a thread hit a breakpoint or raised an exception.
+  /// waits for the stop that answers its interrupt, or StopAfterAttach waits
+  /// for the stop that ends a late attach, the selected thread stops with
+  /// SIGSTOP, unless a thread hit a breakpoint or raised an exception.
   /// The event for the suspension that Interrupt requested reports no stop
   /// when a dyld stop answered the interrupt first, and resumes the devices
   /// instead, since the client has resumed the GPU from that stop.
@@ -531,6 +549,10 @@ private:
     StaleSuspension,
   };
   InterruptState m_interrupt_state = InterruptState::None;
+
+  /// Set by StopAfterAttach until the next suspension of the devices is
+  /// reported, which ends the attach.
+  bool m_attach_stop_pending = false;
 
   /// See SetSyncEventDrainNotifier.
   std::function<void()> m_sync_event_drain_notifier;
