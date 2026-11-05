@@ -467,6 +467,14 @@ void Thread::ResetStopInfo() {
   }
 }
 
+void Thread::MarkImplicitlyResumed() {
+  if (GetTemporaryResumeState() != eStateSuspended)
+    return;
+  LLDB_LOG(GetLog(LLDBLog::Thread), "tid = {0:x}: implicitly resumed", GetID());
+  SetTemporaryResumeState(eStateRunning);
+  ResetStopInfo();
+}
+
 void Thread::SetStopInfo(const lldb::StopInfoSP &stop_info_sp) {
   m_stop_info_sp = stop_info_sp;
   if (m_stop_info_sp) {

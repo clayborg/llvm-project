@@ -889,6 +889,9 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
     if (!thread.GetIsActive())
       thread_obj.try_emplace("inactive", true);
 
+    if (thread.GetImplicitlyResumed())
+      thread_obj.try_emplace("implicitly_resumed", true);
+
     if (signum != 0)
       thread_obj.try_emplace("signal", signum);
 
@@ -1011,8 +1014,9 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     // actually have stop reasons. We use the new "jstopinfo" key whose values
     // is hex ascii JSON that contains the thread IDs thread stop info only for
     // threads that have stop reasons. Only send this if we have more than one
-    // thread otherwise this packet has all the info it needs.
-    if (thread_num > 1) {
+    // thread otherwise this packet has all the info it needs, unless the
+    // thread was implicitly resumed, which only jstopinfo can say.
+    if (thread_num > 1 || thread.GetImplicitlyResumed()) {
       const bool threads_with_valid_stop_info_only = true;
       llvm::Expected<json::Array> threads_info = GetJSONThreadsInfo(
           *m_current_process, threads_with_valid_stop_info_only);

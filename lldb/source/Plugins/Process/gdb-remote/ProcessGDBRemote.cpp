@@ -75,6 +75,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 #include "GDBRemoteRegisterContext.h"
 #include "GDBRemoteRegisterFallback.h"
@@ -2683,6 +2684,31 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       queue_serial_number, lane_id, simd_id, active);
 }
 
+void ProcessGDBRemote::MarkImplicitlyResumedThreads() {
+  StructuredData::Array *thread_infos =
+      m_jstopinfo_sp ? m_jstopinfo_sp->GetAsArray() : nullptr;
+  if (!thread_infos)
+    return;
+  std::unordered_set<lldb::tid_t> resumed_tids;
+  const size_t n = thread_infos->GetSize();
+  for (size_t i = 0; i < n; ++i) {
+    StructuredData::Dictionary *thread_dict =
+        thread_infos->GetItemAtIndex(i)->GetAsDictionary();
+    bool implicitly_resumed = false;
+    lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
+    if (thread_dict &&
+        thread_dict->GetValueForKeyAsBoolean("implicitly_resumed",
+                                             implicitly_resumed) &&
+        implicitly_resumed && thread_dict->GetValueForKeyAsInteger("tid", tid))
+      resumed_tids.insert(tid);
+  }
+  if (resumed_tids.empty())
+    return;
+  for (const ThreadSP &thread_sp : m_thread_list_real.Threads())
+    if (resumed_tids.count(thread_sp->GetProtocolID()))
+      thread_sp->MarkImplicitlyResumed();
+}
+
 StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
   lldb::pid_t pid = m_gdb_comm.GetCurrentProcessID();
   stop_packet.SetFilePos(0);
@@ -2948,6 +2974,11 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     SetAddressableBitMasks(addressable_bits);
 
     m_last_stop_primary_tid = tid;
+
+    // Mark the implicitly resumed threads first: SetThreadStopInfo keeps the
+    // old stop info of a thread that was suspended, and this thread may be one
+    // of them.
+    MarkImplicitlyResumedThreads();
 
     ThreadSP thread_sp = SetThreadStopInfo(
         tid, expedited_register_map, signo, thread_name, reason, description,
