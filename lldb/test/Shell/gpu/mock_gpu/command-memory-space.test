@@ -28,7 +28,7 @@
 
 # Test invalid memory space name should fail  
 # INVALID-LABEL: memory read --space Invalid 0x1000
-# INVALID: error: invalid address space "Invalid", address space must be one of: "Global", "Thread"
+# INVALID: error: invalid address space "Invalid", expected one of: Global, Thread
 
 # Test CPU process doesn't support memory space operations
 # CPU-LABEL: target select 0

@@ -465,10 +465,10 @@ int main_gdbserver(int argc, char *argv[]) {
 
   NativeProcessManager manager(mainloop);
 #if defined(LLDB_ENABLE_NVGPU_PLUGIN)
-  // [NVIDIA] The NVGPU plugin's event notifiers hold read handles on this loop
-  // and unregister them when the plugin is destroyed, which happens inside
+  // The NVGPU plugin's event notifiers hold read handles on this loop and
+  // unregister them when the plugin is destroyed, which happens inside
   // gdb_server's destructor. Declare the loop first so it is destroyed last.
-  MainLoop gpu_mainloop;
+  MainLoop nvgpu_mainloop;
 #endif
   GDBRemoteCommunicationServerLLGS gdb_server(mainloop, manager, "gdb-server");
 
@@ -489,7 +489,7 @@ int main_gdbserver(int argc, char *argv[]) {
 #if defined(LLDB_ENABLE_NVGPU_PLUGIN)
   gdb_server.InstallPlugin(
       std::make_unique<lldb_private::lldb_server::LLDBServerPluginNVGPU>(
-          gdb_server, gpu_mainloop));
+          gdb_server, nvgpu_mainloop));
 #endif
 
   llvm::StringRef host_and_port;
