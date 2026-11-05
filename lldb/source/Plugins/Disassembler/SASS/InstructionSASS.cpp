@@ -63,13 +63,13 @@ InstructionSASS::InstructionSASS(
   m_is_load = CheckBooleanAttribute(other_attributes, "load");
 
   // Set the protected members from the parent class directly
-  m_opcode_name = opcode;
+  m_opcode_name = predicate.empty() ? opcode : predicate + " " + opcode;
   m_mnemonics = operands;
   m_comment = extra; // Use extra field as comment
 
   // Set markup members with colors
   m_markup_opcode_name =
-      ColorizeString(opcode, llvm::raw_ostream::Colors::GREEN);
+      ColorizeString(m_opcode_name, llvm::raw_ostream::Colors::GREEN);
   m_markup_mnemonics =
       ColorizeString(" " + operands, llvm::raw_ostream::Colors::CYAN);
 
