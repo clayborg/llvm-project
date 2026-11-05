@@ -61,11 +61,10 @@ DisassemblerSASS::DisassemblerSASS(const ArchSpec &arch, const char *flavor,
   // Try to find nvdisasm
   if (llvm::Expected<FileSpec> nvdisasm_or =
           DisassemblerSASSCache::getInstance().GetNvdisasmPath()) {
-    m_nvdisasm_path = *nvdisasm_or;
     m_valid = true;
     LLDB_LOG(log,
              "DisassemblerSASS: Successfully initialized with nvdisasm at: {0}",
-             m_nvdisasm_path.GetPath());
+             nvdisasm_or->GetPath());
   } else {
     m_valid = false;
     Debugger::ReportError(llvm::toString(nvdisasm_or.takeError()));

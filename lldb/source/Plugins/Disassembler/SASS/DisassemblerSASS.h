@@ -96,7 +96,6 @@ private:
   llvm::Expected<std::string>
   ExtractSmArchFromModule(const lldb_private::Address &base_addr);
 
-  lldb_private::FileSpec m_nvdisasm_path;
   bool m_valid;
 };
 

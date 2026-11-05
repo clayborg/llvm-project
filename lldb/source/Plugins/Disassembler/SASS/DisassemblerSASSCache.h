@@ -72,8 +72,12 @@ private:
   DisassemblerSASSCache(const DisassemblerSASSCache &) = delete;
   DisassemblerSASSCache &operator=(const DisassemblerSASSCache &) = delete;
 
-  // Different architectures can require different installed CUDA toolkits.
-  std::map<std::string, lldb_private::FileSpec> m_nvdisasm_paths;
+  struct NvdisasmResult {
+    lldb_private::FileSpec executable;
+    std::string error;
+  };
+  // Cache unsuccessful searches too, since disassembly runs on every stop.
+  std::map<std::string, NvdisasmResult> m_nvdisasm_results;
   std::mutex m_nvdisasm_mutex;
 };
 
