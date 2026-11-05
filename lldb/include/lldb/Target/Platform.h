@@ -1115,6 +1115,21 @@ public:
   ///     Status indicating success or error with description.
   static Status ParseGPUCoordinate(llvm::StringRef input, GPUDim3 &dim);
 
+  /// Let the platform of a GPU plugin target adjust a breakpoint location in
+  /// the native target that the GPU plugin target belongs to.
+  ///
+  /// The native target calls this once for each location of a breakpoint
+  /// that is not internal, on the platform of its first GPU plugin target
+  /// from a plug-in: for the locations it has when it gets that GPU plugin
+  /// target, and then for each new location, even after that GPU plugin
+  /// target is gone. A GPU platform can, for example, disable a location in
+  /// host code that only launches device code, when the GPU target resolves
+  /// the same breakpoint in that device code.
+  ///
+  /// \param[in] bp_loc
+  ///     A location of a breakpoint in the native target.
+  virtual void HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {}
+
 protected:
   /// Create a list of ArchSpecs with the given OS and a architectures. The
   /// vendor field is left as an "unspecified unknown".

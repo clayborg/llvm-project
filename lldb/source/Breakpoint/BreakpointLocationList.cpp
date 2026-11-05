@@ -225,6 +225,9 @@ BreakpointLocationSP BreakpointLocationList::AddLocation(
       if (llvm::Error error = bp_loc_sp->ResolveBreakpointSite())
         LLDB_LOG_ERROR(GetLog(LLDBLog::Breakpoints), std::move(error), "{0}");
 
+      // See Platform::HandleNativeBreakpointLocation.
+      m_owner.GetTarget().NotifyGPUPlatformsOfBreakpointLocation(*bp_loc_sp);
+
       if (new_location)
         *new_location = true;
       if (m_new_location_recorder) {

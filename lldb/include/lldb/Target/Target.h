@@ -1751,12 +1751,18 @@ public:
   }
 
   /// Assign a GPU plugin target to this target.
+  ///
+  /// If this target had no GPU plugin target from \a plugin_name yet, the
+  /// platform of \a gpu_target_sp also gets to handle the locations this
+  /// target's breakpoints already have, and each new location from then on:
+  /// see Platform::HandleNativeBreakpointLocation.
   void SetGPUPluginTarget(llvm::StringRef plugin_name,
-                          lldb::TargetSP gpu_target_sp) {
-    gpu_target_sp->m_native_target_gpu_wp = shared_from_this();
-    gpu_target_sp->m_is_cpu_target = false;
-    m_gpu_plugin_targets[plugin_name] = gpu_target_sp;
-  }
+                          lldb::TargetSP gpu_target_sp);
+
+  /// Pass \a bp_loc, a new location of a breakpoint in this target, to the
+  /// platform of the first GPU plugin target this target had from each
+  /// plug-in: see Platform::HandleNativeBreakpointLocation.
+  void NotifyGPUPlatformsOfBreakpointLocation(BreakpointLocation &bp_loc);
 
   /// \return
   ///   The CPU native target for this target.
@@ -1889,6 +1895,9 @@ protected:
   /// If a process spawns another target for a GPU plug-in, this map tracks the
   /// associated plug-in targets so they can be accessed.
   llvm::StringMap<lldb::TargetWP> m_gpu_plugin_targets;
+  /// The platform of the first GPU plugin target from each plug-in, which
+  /// handles this target's breakpoint locations: see SetGPUPluginTarget.
+  llvm::StringMap<lldb::PlatformSP> m_gpu_plugin_platforms;
   /// If a target has a parent target, this can be used to synchronize the two
   /// targets. For example if a GPU target wants to resume but it requires its
   /// native target to resume as well, we can use this to make this happen.

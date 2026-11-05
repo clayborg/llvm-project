@@ -9,6 +9,7 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Breakpoint/Breakpoint.h"
 #include "lldb/Breakpoint/BreakpointIDList.h"
+#include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Breakpoint/BreakpointPrecondition.h"
 #include "lldb/Breakpoint/BreakpointResolver.h"
 #include "lldb/Breakpoint/BreakpointResolverAddress.h"
@@ -49,6 +50,7 @@
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterTypeBuilder.h"
 #include "lldb/Target/SectionLoadList.h"
@@ -818,6 +820,36 @@ BreakpointSP Target::CopyBreakpoint(const Breakpoint &bp) {
   BreakpointSP copy_sp = Breakpoint::CopyFromBreakpoint(shared_from_this(), bp);
   AddBreakpoint(copy_sp, /*internal=*/false);
   return copy_sp;
+}
+
+void Target::SetGPUPluginTarget(llvm::StringRef plugin_name,
+                                lldb::TargetSP gpu_target_sp) {
+  gpu_target_sp->m_native_target_gpu_wp = shared_from_this();
+  gpu_target_sp->m_is_cpu_target = false;
+  m_gpu_plugin_targets[plugin_name] = gpu_target_sp;
+  // Keep the platform of the first GPU plugin target from each plug-in, and
+  // let it handle every location once: the existing ones now, and each new
+  // one as it is made, even after the user deletes that GPU plugin target.
+  // Handling a location again would undo the user's changes to it.
+  PlatformSP platform_sp = gpu_target_sp->GetPlatform();
+  if (!platform_sp ||
+      !m_gpu_plugin_platforms.try_emplace(plugin_name, platform_sp).second)
+    return;
+  for (const BreakpointSP &bp_sp : m_breakpoint_list.Breakpoints()) {
+    const size_t num_locations = bp_sp->GetNumLocations(/*use_facade=*/false);
+    for (size_t i = 0; i < num_locations; ++i)
+      if (BreakpointLocationSP loc_sp =
+              bp_sp->GetLocationAtIndex(i, /*use_facade=*/false))
+        platform_sp->HandleNativeBreakpointLocation(*loc_sp);
+  }
+}
+
+void Target::NotifyGPUPlatformsOfBreakpointLocation(
+    BreakpointLocation &bp_loc) {
+  if (m_gpu_plugin_platforms.empty() || bp_loc.GetBreakpoint().IsInternal())
+    return;
+  for (const auto &entry : m_gpu_plugin_platforms)
+    entry.second->HandleNativeBreakpointLocation(bp_loc);
 }
 
 void Target::AddBreakpoint(lldb::BreakpointSP bp_sp, bool internal) {
