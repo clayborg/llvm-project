@@ -8,14 +8,22 @@
 
 #include "PlatformNVGPU.h"
 #include "cudadebugger.h"
+#include "lldb/Breakpoint/Breakpoint.h"
+#include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Breakpoint/BreakpointResolver.h"
 #include "lldb/Core/Address.h"
+#include "lldb/Core/Mangled.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/SearchFilter.h"
+#include "lldb/Symbol/Block.h"
+#include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Symtab.h"
 #include "lldb/Target/ABI.h"
+#include "lldb/Target/Language.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StackFrame.h"
@@ -32,6 +40,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/TargetParser/Triple.h"
@@ -281,6 +290,288 @@ PlatformNVGPU::ReadVirtualRegister(RegisterContext *reg_ctx,
 
   value.AppendDataToHostBuffer(hi_half_value);
   return llvm::Error::success();
+}
+
+// nvcc compiles the launch of each kernel into host functions. The first has
+// the kernel's name and parameters, so a breakpoint on the kernel's name
+// resolves in it as well as in the kernel. nvcc attributes its code to the
+// kernel's first and last lines, so a breakpoint on a line of the kernel's
+// body that has no host code moves to the last one. All the function does is
+// call the launch stub, named "__device_stub_" followed by the kernel's
+// mangled name, for example "__device_stub__Z6kerneli(int)" for
+// "void kernel(int)". The stub's name mangles the kernel's name as if the
+// kernel had external C++ linkage, so it can differ from the first function's
+// linkage name: a static kernel's has an "L" (_ZL6kerneli), and an extern "C"
+// kernel's is not mangled (kernel). A template kernel has a second stub,
+// named "__wrapper__device_stub_" followed by the kernel's name, between the
+// two. An optimizing host compiler can inline the stubs and drop their
+// symbols.
+//
+// Finding the stub for a function at a breakpoint location costs a few name
+// lookups, so the locations are checked one at a time as they are made, and
+// no module is searched for every stub up front.
+static constexpr llvm::StringLiteral g_launch_stub_prefix = "__device_stub_";
+
+/// Whether \a name names one of nvcc's launch stubs.
+static bool IsLaunchStub(const Mangled &name) {
+  return name.GetName(Mangled::ePreferMangled)
+      .GetStringRef()
+      .contains(g_launch_stub_prefix);
+}
+
+/// \a name's C++ linkage name, or an empty string if it has none. For a
+/// function whose debug information has no linkage name, lldb keeps the
+/// function's plain name in place of the mangled one.
+static llvm::StringRef GetCxxLinkageName(const Mangled &name) {
+  llvm::StringRef linkage_name = name.GetMangledName().GetStringRef();
+  return linkage_name.starts_with("_Z") ? linkage_name : llvm::StringRef();
+}
+
+/// The mangled kernel name in \a stub_name, the name of a launch stub, or an
+/// empty string if it does not have one. \a stub_name can have the stub's
+/// scope and parameters, as a demangled name does.
+static llvm::StringRef GetStubKernelName(llvm::StringRef stub_name) {
+  stub_name = stub_name.take_until([](char c) { return c == '('; });
+  size_t scope_end = stub_name.rfind("::");
+  if (scope_end != llvm::StringRef::npos)
+    stub_name = stub_name.drop_front(scope_end + 2);
+  if (!stub_name.consume_front(g_launch_stub_prefix) ||
+      !stub_name.starts_with("_Z"))
+    return {};
+  return stub_name;
+}
+
+/// \a name's function name without its scope or parameters.
+static llvm::StringRef GetUnqualifiedName(const Mangled &name) {
+  // A name that is not mangled keeps its parameters, as in "::kernel(int)",
+  // which lldb makes up for a function whose debug information has no
+  // linkage name.
+  llvm::StringRef unqualified =
+      name.GetName(Mangled::ePreferDemangledWithoutArguments).GetStringRef();
+  if (unqualified.ends_with(")")) {
+    int depth = 0;
+    for (size_t i = unqualified.size(); i > 0; --i) {
+      if (unqualified[i - 1] == ')') {
+        ++depth;
+      } else if (unqualified[i - 1] == '(' && --depth == 0) {
+        unqualified = unqualified.take_front(i - 1);
+        break;
+      }
+    }
+  }
+  size_t scope_end = unqualified.rfind("::");
+  if (scope_end != llvm::StringRef::npos)
+    unqualified = unqualified.drop_front(scope_end + 2);
+  return unqualified;
+}
+
+/// Whether \a kernel_name, the mangled kernel name in a launch stub's name, is
+/// the kernel of \a function, a host function.
+static bool IsKernelOf(llvm::StringRef kernel_name, const Mangled &function) {
+  Mangled kernel(kernel_name);
+  llvm::StringRef linkage_name = GetCxxLinkageName(function);
+  if (!linkage_name.empty()) {
+    // Demangling drops the difference a static kernel makes.
+    return linkage_name == kernel_name ||
+           kernel.GetDemangledName() == function.GetDemangledName();
+  }
+  // Without a linkage name, compare the names alone, as for the function of
+  // an extern "C" kernel, whose name C linkage keeps from being overloaded.
+  return GetUnqualifiedName(kernel) == GetUnqualifiedName(function);
+}
+
+/// A name without parameters that the launch stub of a kernel would have.
+struct LaunchStubName {
+  std::string name;
+  /// Whether the name of the kernel's host function marks it as having
+  /// internal linkage, which the stub's name drops.
+  bool internal;
+};
+
+/// The names that the launch stub of a kernel would have, if \a linkage_name
+/// is the linkage name of the kernel's host function.
+static llvm::SmallVector<LaunchStubName, 2>
+GetLaunchStubNames(llvm::StringRef linkage_name) {
+  llvm::SmallVector<LaunchStubName, 2> names;
+  if (!linkage_name.starts_with("_Z"))
+    return names;
+  names.push_back({(g_launch_stub_prefix + linkage_name).str(), false});
+  // A static kernel's name has an "L" before an unqualified name for its
+  // internal linkage, which the stub's name drops.
+  for (size_t i = 2; i + 1 < linkage_name.size(); ++i)
+    if (linkage_name[i] == 'L' && llvm::isDigit(linkage_name[i + 1]))
+      names.push_back({(g_launch_stub_prefix + linkage_name.take_front(i) +
+                        linkage_name.drop_front(i + 1))
+                           .str(),
+                       true});
+  return names;
+}
+
+/// Whether \a block, or a block inlined in it, is an inlined launch stub of
+/// the kernel of \a function.
+static bool HasInlinedLaunchStub(const Block &block, const Mangled &function) {
+  for (Block *child = block.GetFirstChild(); child;
+       child = child->GetSibling()) {
+    if (const InlineFunctionInfo *info = child->GetInlinedFunctionInfo()) {
+      llvm::StringRef kernel_name =
+          GetStubKernelName(info->GetName().GetStringRef());
+      if (!kernel_name.empty() && IsKernelOf(kernel_name, function))
+        return true;
+    }
+    if (HasInlinedLaunchStub(*child, function))
+      return true;
+  }
+  return false;
+}
+
+/// Whether \a stub, a launch stub's symbol found under \a name, is the stub
+/// that \a sc's function calls. Another compile unit can have a stub with the
+/// name: that of a kernel with the function's name and parameters, if one of
+/// the two has internal linkage.
+static bool IsStubOf(const Symbol &stub, const LaunchStubName &name,
+                     const SymbolContext &sc) {
+  // The stub of a kernel whose host function's name marks internal linkage
+  // has internal linkage too, which an external kernel's stub does not. A
+  // stub with internal linkage can belong to a host function whose name does
+  // not show it: nvcc gives the stubs of all template kernels internal
+  // linkage.
+  llvm::StringRef stub_linkage_name =
+      stub.GetMangled().GetMangledName().GetStringRef();
+  if (name.internal && stub_linkage_name.starts_with("_Z") &&
+      !stub_linkage_name.starts_with("_ZL"))
+    return false;
+  // The function's compile unit has the stubs of all the kernels it defines.
+  // Without debug information, nothing tells which compile unit a symbol is
+  // in.
+  if (!sc.comp_unit)
+    return true;
+  return stub.ValueIsAddress() &&
+         stub.GetAddressRef().CalculateSymbolContextCompileUnit() ==
+             sc.comp_unit;
+}
+
+/// If \a addr is in a host function that nvcc generated to launch a kernel,
+/// rather than in a launch stub, return that function's name.
+static std::optional<Mangled> FindKernelLaunchFunction(const Address &addr) {
+  SymbolContext sc;
+  addr.CalculateSymbolContext(&sc,
+                              eSymbolContextModule | eSymbolContextCompUnit |
+                                  eSymbolContextFunction | eSymbolContextBlock |
+                                  eSymbolContextSymbol);
+  if (!sc.module_sp)
+    return std::nullopt;
+
+  // The functions at the address, innermost first. With optimization, the
+  // launch stubs are inlined in the function that launches the kernel, which
+  // can be inlined in turn, and the stubs inline code of their own.
+  struct Frame {
+    Mangled name;
+    const Block *block;
+  };
+  llvm::SmallVector<Frame, 4> frames;
+  for (Block *block = sc.block ? sc.block->GetContainingInlinedBlock()
+                               : nullptr;
+       block; block = block->GetInlinedParent()) {
+    const InlineFunctionInfo *info = block->GetInlinedFunctionInfo();
+    frames.push_back(
+        {info->GetMangled() ? info->GetMangled() : Mangled(info->GetName()),
+         block});
+  }
+  if (sc.function) {
+    // The debug information can leave out the linkage name that the symbol
+    // has, as GCC's does for a function with internal linkage.
+    Mangled name = sc.function->GetMangled();
+    if (GetCxxLinkageName(name).empty() && sc.symbol &&
+        !GetCxxLinkageName(sc.symbol->GetMangled()).empty())
+      name = sc.symbol->GetMangled();
+    frames.push_back({name, &sc.function->GetBlock(true)});
+  } else if (sc.symbol) {
+    frames.push_back({sc.symbol->GetMangled(), nullptr});
+  }
+
+  // The function that launches a kernel is the one that encloses its
+  // outermost launch stub. A location in a stub itself, such as one of a
+  // breakpoint on a stub's name, is not one of a breakpoint in a kernel.
+  size_t index = 0;
+  for (size_t i = frames.size(); i > 0; --i) {
+    if (IsLaunchStub(frames[i - 1].name)) {
+      index = i;
+      break;
+    }
+  }
+  if (index == frames.size())
+    return std::nullopt;
+  const Frame &frame = frames[index];
+
+  llvm::StringRef linkage_name = GetCxxLinkageName(frame.name);
+  for (const LaunchStubName &stub_name : GetLaunchStubNames(linkage_name)) {
+    SymbolContextList stubs;
+    sc.module_sp->FindFunctionSymbols(ConstString(stub_name.name),
+                                      eFunctionNameTypeBase, stubs);
+    for (const SymbolContext &stub_sc : stubs)
+      if (stub_sc.symbol && IsStubOf(*stub_sc.symbol, stub_name, sc))
+        return frame.name;
+  }
+
+  if (frame.block && HasInlinedLaunchStub(*frame.block, frame.name))
+    return frame.name;
+
+  // The stub of an extern "C" kernel has a name that the function's name
+  // cannot spell, so look for it among the functions of the function's
+  // compile unit, which has the stubs of all the kernels it defines.
+  if (linkage_name.empty() && sc.comp_unit &&
+      Language::LanguageIsCPlusPlus(sc.comp_unit->GetLanguage()) &&
+      sc.comp_unit->FindFunction([&](const FunctionSP &function_sp) {
+        llvm::StringRef kernel_name = GetStubKernelName(
+            function_sp->GetMangled().GetName(Mangled::ePreferDemangled));
+        return !kernel_name.empty() && IsKernelOf(kernel_name, frame.name);
+      }))
+    return frame.name;
+
+  return std::nullopt;
+}
+
+/// Whether the GPU target can resolve \a bp, a breakpoint of the native
+/// target, the way the native target does: by a function name, a source line
+/// or a source pattern, in any module. A breakpoint on an address, or limited
+/// to some modules, is in the host code the user chose.
+static bool CanResolveInKernels(Breakpoint &bp) {
+  BreakpointResolverSP resolver_sp = bp.GetResolver();
+  if (!resolver_sp)
+    return false;
+  const BreakpointResolver::ResolverTy resolver_type =
+      resolver_sp->GetResolverTy();
+  if (resolver_type != BreakpointResolver::FileLineResolver &&
+      resolver_type != BreakpointResolver::NameResolver &&
+      resolver_type != BreakpointResolver::FileRegexResolver)
+    return false;
+  SearchFilterSP filter_sp = bp.GetSearchFilter();
+  if (!filter_sp)
+    return true;
+  const SearchFilter::FilterTy filter_type = filter_sp->GetFilterTy();
+  return filter_type != SearchFilter::ByModule &&
+         filter_type != SearchFilter::ByModules;
+}
+
+void PlatformNVGPU::HandleNativeBreakpointLocation(BreakpointLocation &bp_loc) {
+  Breakpoint &bp = bp_loc.GetBreakpoint();
+  if (!CanResolveInKernels(bp))
+    return;
+  std::optional<Mangled> function =
+      FindKernelLaunchFunction(bp_loc.GetAddress());
+  if (!function)
+    return;
+
+  // Disable the location rather than remove it, so that the user can enable
+  // it to stop where the CPU launches the kernel.
+  Log *log = GetLog(LLDBLog::Breakpoints);
+  LLDB_LOG(log,
+           "disabling breakpoint location {0}.{1} in {2}, which only launches "
+           "a kernel",
+           bp.GetID(), bp_loc.GetID(), function->GetName());
+  if (llvm::Error error = bp_loc.SetEnabled(false))
+    LLDB_LOG_ERROR(log, std::move(error),
+                   "while disabling the breakpoint location: {0}");
 }
 
 ///   The PTX to SASS register map table is made of a series of entries,
