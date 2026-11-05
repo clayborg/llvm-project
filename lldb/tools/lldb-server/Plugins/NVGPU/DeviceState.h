@@ -14,6 +14,8 @@
 #include "cudadebugger.h"
 #include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/Stream.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include <functional>
 #include <optional>
@@ -176,6 +178,11 @@ public:
   WarpState(ProcessNVGPU &gpu, uint32_t num_threads, uint32_t device_id,
             uint32_t sm_id, uint32_t warp_id, SMState &sm_state);
 
+  /// Non-copyable.
+  WarpState(const WarpState &) = delete;
+  WarpState &operator=(const WarpState &) = delete;
+  WarpState(WarpState &&) = default;
+
   /// Decode warp information from a buffer received from CUDA debugger API.
   ///
   /// \param[in] buffer
@@ -233,12 +240,13 @@ public:
   ///     error if the debugger API cannot read it.
   llvm::Expected<uint32_t> GetCurrentNumRegularRegisters();
 
-  /// Get the registers for this warp. The result is cached until the warp state
-  /// changes. A read that fails is logged and leaves its registers invalid.
-  ///
   /// \return
-  ///     A reference to the registers for this warp.
-  const WarpSharedRegisterCache &GetRegisters();
+  ///     Cached UR0-based values; empty on failure.
+  llvm::ArrayRef<uint32_t> GetUniformRegisters();
+
+  /// \return
+  ///     Cached UP0-based values; empty on failure.
+  llvm::ArrayRef<uint32_t> GetUniformPredicateRegisters();
 
   const std::optional<BlockIdx> &GetBlockIdx() const {
     return m_logical_coords.block_idx;
@@ -283,11 +291,10 @@ private:
   /// this warp.
   std::optional<uint32_t> m_current_num_regular_registers;
 
-  /// The registers shared by all threads in this warp.
-  WarpSharedRegisterCache m_shared_registers{};
-
-  /// Whether the registers for this warp have been calculated.
-  bool m_regs_calculated = false;
+  /// Unset until read; empty after failure or unavailability.
+  /// Clear these caches when processing updated warp state.
+  std::optional<llvm::SmallVector<uint32_t, 0>> m_uniform_registers;
+  std::optional<llvm::SmallVector<uint32_t, 0>> m_uniform_predicate_registers;
 
   /// Logical coordinates shared by threads in this warp. The thread index is
   /// always disengaged.

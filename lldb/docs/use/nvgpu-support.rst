@@ -255,6 +255,8 @@ Simulated module-load stops have no current GPU coordinate snapshot. Threads
 retained from an earlier real GPU stop are labeled ``CUDA thread coordinates
 unavailable`` until the next real GPU stop. These simulated stops are visible
 to the user when ``target.process.stop-on-sharedlibrary-events`` is ``true``.
+Only ``RZ``, ``URZ``, and PC remain readable. PC retains its previous
+value, or zero if no previous value is available.
 
 ``thread select --blockidx`` and ``thread select --threadidx`` match that same
 metadata. A supplied coordinate axis matches only when the candidate thread

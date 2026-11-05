@@ -41,37 +41,6 @@ struct ThreadRegisters {
   int32_t warp_size;                      ///< CUDA warpSize
 };
 
-// TODO: make this a bitfield
-/// Store the validity of a ThreadRegisters.
-struct ThreadRegistersValidity {
-  bool PC = false;
-  bool errorPC = false;
-  bool regular[kNumRRegs] = {};
-  bool regular_zero = false;
-  bool predicate[kNumPRegs] = {};
-  bool uniform[kNumURRegs] = {};
-  bool uniform_zero = false;
-  bool uniform_predicate[kNumUPRegs] = {};
-  bool thread_idx[kNumXYZComponents] = {};
-  bool block_idx[kNumXYZComponents] = {};
-  bool block_dim[kNumXYZComponents] = {};
-  bool grid_dim[kNumXYZComponents] = {};
-  bool warp_size = false;
-};
-
-/// Store the values of the shared registers for a single warp.
-/// Will be used to populate `ThreadRegisters::uniform` and
-/// `ThreadRegisters::uniform_predicate`.
-struct WarpSharedRegisters {
-  uint32_t uniform[kNumURRegs];
-  uint32_t uniform_predicate[kNumUPRegs];
-};
-
-struct WarpSharedRegistersValidity {
-  bool uniform[kNumURRegs] = {};
-  bool uniform_predicate[kNumUPRegs] = {};
-};
-
 /// Get the canonical register info table for SASS architecture.
 ///
 /// The returned array contains all SASS registers (PC, errorPC, SP, FP, RA,

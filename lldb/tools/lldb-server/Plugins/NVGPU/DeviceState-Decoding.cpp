@@ -116,7 +116,8 @@ llvm::Expected<size_t> WarpState::DecodeWarpInfoBuffer(
       std::numeric_limits<uint32_t>::max());
   bool thread_attributes_present = false;
 
-  m_regs_calculated = false;
+  m_uniform_registers.reset();
+  m_uniform_predicate_registers.reset();
   m_current_num_regular_registers = std::nullopt;
   m_exception = std::nullopt;
   std::optional<uint64_t> errorPC;

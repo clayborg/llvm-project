@@ -82,3 +82,27 @@ class TestNVGPURegisters(NVGPUTestCaseBase):
 
         builtins_regset = frame.GetRegisters().GetFirstValueByName("CUDA Builtins")
         self.assertTrue(builtins_regset.IsValid())
+
+        # Read each register class in the reporting warp and another warp.
+        for name in ("R0", "SP", "P0", "UR0", "UP0"):
+            self.assertSuccess(frame.FindRegister(name).GetError(), name)
+
+        def warp(thread):
+            block_idx, thread_idx = self.thread_coords(thread)
+            return block_idx, thread_idx[0] // 32
+
+        stopped_warp = warp(some_thread_with_exception)
+        other_thread = self.find_some_thread(
+            lambda thread: warp(thread) != stopped_warp,
+            description="in another warp",
+        )
+        other_frame = other_thread.frame[0]
+        for name in ("R0", "SP", "P0", "UR0", "UP0"):
+            self.assertSuccess(other_frame.FindRegister(name).GetError(), name)
+        block_idx, thread_idx = self.thread_coords(other_thread)
+        self.assertEqual(
+            self.read_vec3_register(other_frame, "threadIdx"), list(thread_idx)
+        )
+        self.assertEqual(
+            self.read_vec3_register(other_frame, "blockIdx"), list(block_idx)
+        )

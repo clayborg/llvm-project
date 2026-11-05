@@ -11,24 +11,15 @@
 
 #include "cudadebugger.h"
 #include "lldb/Host/common/NativeRegisterContext.h"
-#include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/lldb-forward.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 namespace lldb_private::lldb_server {
 
 class ThreadNVGPU;
-
-/// Store the values and validity of the thread registers.
-struct ThreadRegisterCache {
-  sass::ThreadRegisters val;
-  sass::ThreadRegistersValidity is_valid;
-};
-
-/// Store the values and validity of warp-wide registers.
-struct WarpSharedRegisterCache {
-  sass::WarpSharedRegisters val;
-  sass::WarpSharedRegistersValidity is_valid;
-};
+class ThreadState;
 
 class RegisterContextNVGPU : public NativeRegisterContext {
 public:
@@ -57,23 +48,31 @@ public:
   std::vector<uint32_t>
   GetExpeditedRegisters(ExpeditedRegs expType) const override;
 
-  std::optional<uint64_t> ReadErrorPC();
-
-  /// Invalidate all registers. Future accessess will cause reads from the
-  /// device.
+  /// Invalidate this lane's cached regular and predicate registers.
   void InvalidateAllRegisters();
 
 private:
-  /// Read the registers from the device. The results are cached. A read that
-  /// fails is logged, and leaves invalid only the registers that it reads, so
-  /// that the PC is always available.
-  const ThreadRegisterCache &ReadAllRegsFromDevice();
+  llvm::Error ReadRegisterValue(const RegisterInfo &reg_info,
+                                RegisterValue &value);
+
+  /// \return
+  ///     Cached R0-based values; empty on failure.
+  llvm::ArrayRef<uint32_t> GetRegularRegisters(const ThreadState &thread_state);
+
+  /// \return
+  ///     Cached P0-based values; empty on failure.
+  llvm::ArrayRef<uint32_t>
+  GetPredicateRegisters(const ThreadState &thread_state);
 
   CUDBGAPI GetDebuggerAPI();
 
   ThreadNVGPU &GetGPUThread();
 
-  std::optional<ThreadRegisterCache> m_regs;
+  /// Unset until read; empty after failure or unavailability.
+  /// Reset on lane decode, allowing failed reads to be retried.
+  /// Allocate on demand: unused lane slots also have register contexts.
+  std::optional<llvm::SmallVector<uint32_t, 0>> m_regular_registers;
+  std::optional<llvm::SmallVector<uint32_t, 0>> m_predicate_registers;
 };
 
 } // namespace lldb_private::lldb_server
