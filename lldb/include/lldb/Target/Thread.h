@@ -1266,6 +1266,14 @@ public:
 
   void ResetStopInfo();
 
+  /// Record that the last resume ran this thread although the thread was
+  /// suspended for it, as a GPU lane runs when another lane of its SIMD group
+  /// runs. The thread's stop info is then computed afresh, and unless the
+  /// user suspended the thread, it takes part in deciding whether the process
+  /// stops, as if it had been resumed. Does nothing if the thread was not
+  /// suspended for the last resume.
+  void MarkImplicitlyResumed();
+
   void SetShouldReportStop(Vote vote);
   
   void SetShouldRunBeforePublicStop(bool newval) { 

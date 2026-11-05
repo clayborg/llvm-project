@@ -2273,6 +2273,29 @@ following keys and values:
   ```
   thread-pcs:dec14,2cf872b0,2cf8681c,2d02d68c,2cf716a8;
   ```
+* `jstopinfo` - `ascii-hex` -
+  An ASCII hex encoded JSON array of dictionaries that describe the stop info
+  of threads, with the keys of the `jThreadsInfo` dictionaries except
+  `registers` and `memory`. A server can include only the threads that have a
+  stop reason, as debugserver does, or every thread, as lldb-server does;
+  lldb takes a thread without a dictionary to have no stop reason. Like
+  `thread-pcs`, this is only emitted when the `threads` key is included.
+
+  A dictionary can have the key `implicitly_resumed` with the value `true`,
+  which means that the last resume ran the thread although the resume packet
+  left it suspended, as a GPU lane runs when another lane of its SIMD group
+  runs. lldb then reads the thread's stop info afresh and, unless the user
+  suspended the thread, lets it take part in deciding whether the process
+  stops, as for a thread that lldb resumed. A server must send `jstopinfo`
+  when it implicitly resumed a thread, even if the process has only one
+  thread, and must include each such thread even if it has no stop reason.
+  lldb-server reports `implicitly_resumed` in `jThreadsInfo` too, but lldb
+  only reads it here, because it needs it before it decides whether to stop.
+
+  Example, before hex encoding:
+  ```
+  [{"tid":1,"reason":"breakpoint"},{"tid":2,"implicitly_resumed":true}]
+  ```
 * `addressing_bits` - `unsigned` (optional) -
   Specifies how many bits in addresses are significant for addressing, base
   10.  If bits 38..0 in a 64-bit pointer are significant for addressing, then the
