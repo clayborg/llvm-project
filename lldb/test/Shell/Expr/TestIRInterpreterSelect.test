@@ -1,0 +1,30 @@
+# The IR interpreter can evaluate select instructions, which clang emits for
+# simple conditional expressions. Evaluate them against a target with no
+# process so that the interpreter is used.
+
+# REQUIRES: x86
+
+# RUN: yaml2obj %s -o %t.obj
+# RUN: %lldb -b %t.obj \
+# RUN:   -o 'expr int x = 6; x > 5 ? 10 : 20' \
+# RUN:   -o 'expr int x = 2; x > 5 ? 10 : 20' \
+# RUN:   -o 'expr int x = 6; x > 5 ? 1.5 : 2.5' \
+# RUN:   -o 'expr int x = 2; x > 5 ? 1.5f : 2.5f' \
+# RUN:   | FileCheck %s
+
+# CHECK: (lldb) expr int x = 6; x > 5 ? 10 : 20
+# CHECK-NEXT: (int) $0 = 10
+# CHECK: (lldb) expr int x = 2; x > 5 ? 10 : 20
+# CHECK-NEXT: (int) $1 = 20
+# CHECK: (lldb) expr int x = 6; x > 5 ? 1.5 : 2.5
+# CHECK-NEXT: (double) $2 = 1.5
+# CHECK: (lldb) expr int x = 2; x > 5 ? 1.5f : 2.5f
+# CHECK-NEXT: (float) $3 = 2.5
+
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_EXEC
+  Machine:         EM_X86_64
+...
