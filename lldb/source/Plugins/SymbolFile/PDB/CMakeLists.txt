@@ -16,6 +16,8 @@ add_lldb_library(lldbPluginSymbolFilePDB PLUGIN
     Support
   LINK_LIBS
     lldbCore
+    lldbPluginObjectFilePDB
+    lldbPluginObjectFilePECOFF
     lldbPluginSymbolFileNativePDB
     lldbSymbol
     lldbUtility
