@@ -194,6 +194,11 @@ public:
 
   bool DeallocateMemory(lldb::addr_t addr);
 
+  /// \return
+  ///     Whether the server can detach and leave the process stopped, as it
+  ///     says in reply to qSupportsDetachAndStayStopped, which is sent once.
+  bool GetSupportsDetachAndStayStopped();
+
   Status Detach(bool keep_stopped, lldb::pid_t pid = LLDB_INVALID_PROCESS_ID);
 
   Status GetMemoryRegionInfo(lldb::addr_t addr, MemoryRegionInfo &range_info);

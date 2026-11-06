@@ -324,6 +324,25 @@ TEST_F(GDBRemoteCommunicationClientTest, SendSignalsToIgnore) {
   EXPECT_TRUE(result.get().Success());
 }
 
+TEST_F(GDBRemoteCommunicationClientTest, GetSupportsDetachAndStayStopped) {
+  std::future<bool> result = std::async(std::launch::async, [&] {
+    return client.GetSupportsDetachAndStayStopped();
+  });
+  HandlePacket(server, "qSupportsDetachAndStayStopped:", "OK");
+  EXPECT_TRUE(result.get());
+  // The reply is remembered, so this sends nothing.
+  EXPECT_TRUE(client.GetSupportsDetachAndStayStopped());
+}
+
+TEST_F(GDBRemoteCommunicationClientTest, DetachAndStayStoppedNotSupported) {
+  std::future<Status> result = std::async(
+      std::launch::async, [&] { return client.Detach(/*keep_stopped=*/true); });
+  HandlePacket(server, "qSupportsDetachAndStayStopped:", "");
+  // Refused before any detach packet is sent.
+  EXPECT_TRUE(result.get().Fail());
+  EXPECT_FALSE(client.GetSupportsDetachAndStayStopped());
+}
+
 TEST_F(GDBRemoteCommunicationClientTest, GetMemoryRegionInfo) {
   const lldb::addr_t addr = 0xa000;
   lldb_private::MemoryRegionInfo region_info;
