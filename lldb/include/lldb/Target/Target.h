@@ -1739,6 +1739,16 @@ public:
     return it->second.lock();
   }
 
+  /// \return
+  ///   The GPU plugin targets associated with this target that still exist.
+  std::vector<lldb::TargetSP> GetGPUPluginTargets() const {
+    std::vector<lldb::TargetSP> targets;
+    for (const auto &entry : m_gpu_plugin_targets)
+      if (lldb::TargetSP target_sp = entry.second.lock())
+        targets.push_back(target_sp);
+    return targets;
+  }
+
   /// Assign a GPU plugin target to this target.
   void SetGPUPluginTarget(llvm::StringRef plugin_name,
                           lldb::TargetSP gpu_target_sp) {

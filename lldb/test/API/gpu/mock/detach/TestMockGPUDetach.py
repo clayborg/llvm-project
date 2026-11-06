@@ -47,3 +47,20 @@ class TestMockGPUDetach(GpuTestCaseBase):
             diagnostic = lldb.SBDebugger.GetDiagnosticFromEvent(event)
             errors.append(diagnostic.GetValueForKey("message").GetStringValue(4096))
         self.assertEqual(errors, [], "lldb reported errors")
+
+    def test_detach_detaches_the_gpu_target(self):
+        """Detaching the process detaches its GPU target first, which lldb
+        would otherwise leave stopped once the process has gone."""
+        process, gpu_process = self.run_to_the_gpu_target()
+        self.assertSuccess(process.Detach())
+        self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+        self.assertState(process.GetState(), lldb.eStateDetached)
+
+    def test_detach_that_cannot_keep_the_process_stopped(self):
+        """A detach that keeps the process stopped fails before it changes
+        anything when lldb-server cannot do that, so the GPU target stays
+        attached too."""
+        process, gpu_process = self.run_to_the_gpu_target()
+        self.assertFalse(process.Detach(True).Success(), "lldb-server kept it")
+        self.assertSuccess(gpu_process.Detach(), "the GPU target was attached")
+        self.assertSuccess(process.Detach())
