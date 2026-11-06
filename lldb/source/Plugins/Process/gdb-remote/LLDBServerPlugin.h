@@ -90,6 +90,13 @@ public:
   /// \param[in] exit_status The exit status of the native process.
   virtual void NativeProcessDidExit(const WaitStatus &exit_status) = 0;
 
+  /// Get the GPU plug-in notified when lldb disconnects from its GDB server.
+  ///
+  /// This function will get called on the GDB server's main loop, which keeps
+  /// running, because it can be the main loop of the native process's GDB
+  /// server. A plug-in that runs a main loop of its own can end it here.
+  virtual void ClientDidDisconnect() {}
+
   /// Get the GPU plug-in initialization actions.
   ///
   /// Each GPU plugin can return a structure that describes the GPU plug-in and

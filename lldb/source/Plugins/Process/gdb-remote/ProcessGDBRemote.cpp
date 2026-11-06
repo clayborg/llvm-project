@@ -1054,7 +1054,9 @@ Status ProcessGDBRemote::HandleGPUActions(const GPUActions &gpu_action) {
   if (!gpu_target_sp)
     return error;
   lldb::ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
-  if (!gpu_process_sp)
+  // A GPU process that lldb detached from, or that has exited, has no GDB
+  // server to act on.
+  if (!gpu_process_sp || !gpu_process_sp->IsAlive())
     return error;
   ProcessGDBRemote *gpu_process = (ProcessGDBRemote *)gpu_process_sp.get();
 
