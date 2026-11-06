@@ -53,6 +53,13 @@ class TestNVGPUCoreFiles(NVGPUCoreTestCaseBase):
         self._test_read_pc()
         self._test_register_sanity()
 
+    def test_detach(self):
+        """Detaching from a loaded core succeeds: a DAP client's disconnect
+        detaches unless asked to terminate, and it must not end in an error."""
+        _, gpu_process = self.generate_and_load_core()
+        self.assertSuccess(gpu_process.Detach())
+        self.assertEqual(gpu_process.GetState(), lldb.eStateDetached)
+
     def test_invalid_pc_backtrace(self):
         """An invalid call target must not hide the saved caller frames."""
         _, gpu_process = self.generate_and_load_core(args=["5"])
