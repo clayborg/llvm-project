@@ -57,6 +57,18 @@ public:
 
   lldb_private::Status DoDestroy() override { return lldb_private::Status(); }
 
+  /// A core file has nothing to detach from. Without this, Process::Detach
+  /// fails with "nvgpu-core does not support detaching from processes", which
+  /// is what a DAP client's disconnect (VS Code's Stop on an attached session,
+  /// `terminateDebuggee` unset) runs into: lldb-dap detaches rather than
+  /// kills, and the session ends with an error instead of quietly. Like the
+  /// live-process plugins, report the detached state ourselves; nothing else
+  /// will.
+  lldb_private::Status DoDetach(bool keep_stopped) override {
+    SetPrivateState(lldb::eStateDetached);
+    return lldb_private::Status();
+  }
+
   void RefreshStateAfterStop() override {
     // Building the thread list is what classifies each thread's stop reason
     // (`DoUpdateThreadList`), so force it before consulting the candidates
