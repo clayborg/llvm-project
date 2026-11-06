@@ -19,9 +19,11 @@
 
 #include "LLDBServerUtilities.h"
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
+#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Host/ConnectionFileDescriptor.h"
+#include "lldb/Host/File.h"
 #include "lldb/Host/FileSystem.h"
 #include "lldb/Host/Pipe.h"
 #include "lldb/Host/common/NativeProcessProtocol.h"
@@ -36,7 +38,6 @@
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
-#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 
 #if defined(__linux__)
 #include "Plugins/Process/Linux/NativeProcessLinux.h"
@@ -114,6 +115,50 @@ static void sighup_handler(MainLoopBase &mainloop) {
 
   if (g_sighup_received_count >= 2)
     mainloop.RequestTermination();
+}
+
+// lldb sends SIGINT to an lldb-server that it launched once it is done with
+// it, which is often right after it detached from or killed the process,
+// while lldb-server may still be cleaning up after it, for example while a
+// GPU plugin finishes detaching. So rather than die, lldb-server shuts down
+// as it does when lldb disconnects, but within a time limit, so that one that
+// hangs does not outlive lldb for long.
+static constexpr unsigned g_sigint_time_limit_secs = 10;
+
+// The SIGINT handler writes to this pipe to end the main loop.
+static int g_sigint_pipe_write_fd = -1;
+
+static void sigint_handler(int) {
+  int saved_errno = errno;
+  alarm(g_sigint_time_limit_secs);
+  char c = 0;
+  [[maybe_unused]] ssize_t written = write(g_sigint_pipe_write_fd, &c, 1);
+  errno = saved_errno;
+}
+
+static MainLoop::ReadHandleUP install_sigint_handler(MainLoop &mainloop,
+                                                     Status &error) {
+  Pipe pipe;
+  error = pipe.CreateNew();
+  if (error.Fail())
+    return nullptr;
+  // The handler can run until lldb-server exits, so the pipe stays open.
+  g_sigint_pipe_write_fd = pipe.ReleaseWriteFileDescriptor();
+  MainLoop::ReadHandleUP handle = mainloop.RegisterReadObject(
+      std::make_shared<NativeFile>(pipe.ReleaseReadFileDescriptor(),
+                                   File::eOpenOptionReadOnly,
+                                   /*transfer_ownership=*/false),
+      [](MainLoopBase &loop) { loop.RequestTermination(); }, error);
+  if (!handle)
+    return nullptr;
+
+  struct sigaction action = {};
+  action.sa_handler = sigint_handler;
+  // A second SIGINT ends lldb-server at once.
+  action.sa_flags = SA_RESETHAND;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGINT, &action, nullptr);
+  return handle;
 }
 #endif // #ifndef _WIN32
 
@@ -356,6 +401,8 @@ int main_gdbserver(int argc, char *argv[]) {
   signal(SIGPIPE, SIG_IGN);
   MainLoop::SignalHandleUP sighup_handle =
       mainloop.RegisterSignal(SIGHUP, sighup_handler, error);
+  MainLoop::ReadHandleUP sigint_handle =
+      install_sigint_handler(mainloop, error);
 #endif
 
   const char *progname = argv[0];
