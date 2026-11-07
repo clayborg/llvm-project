@@ -11,6 +11,7 @@
 
 #include "lldb/Core/Address.h"
 #include "lldb/Utility/FileSpec.h"
+#include "llvm/ADT/StringRef.h"
 #include <llvm/Support/Error.h>
 #include <map>
 #include <memory>
@@ -49,9 +50,17 @@ public:
     return instance;
   }
 
-  /// Find the nvdisasm executable (cached after first call)
-  /// \return FileSpec for nvdisasm executable, or error if not found
-  llvm::Expected<lldb_private::FileSpec> GetNvdisasmPath();
+  /// Find an nvdisasm executable supporting sm_arch. Explicit user settings
+  /// take precedence over automatic selection.
+  ///
+  /// \param[in] sm_arch
+  ///     The architecture to decode, such as "SM90". An empty architecture
+  ///     selects the first executable without probing its capabilities.
+  ///
+  /// \return
+  ///     The nvdisasm executable, or an error if none was found.
+  llvm::Expected<lldb_private::FileSpec>
+  GetNvdisasmPath(llvm::StringRef sm_arch = {});
 
   // Per-module SM architecture caching
   std::shared_ptr<ModuleSM> GetModuleSM(const std::string &cache_key);
@@ -68,9 +77,13 @@ private:
   DisassemblerSASSCache(const DisassemblerSASSCache &) = delete;
   DisassemblerSASSCache &operator=(const DisassemblerSASSCache &) = delete;
 
-  // nvdisasm path caching
-  std::optional<lldb_private::FileSpec> m_cached_nvdisasm_path;
-  std::once_flag m_search_once_nvdisasm;
+  struct NvdisasmResult {
+    lldb_private::FileSpec executable;
+    std::string error;
+  };
+  // Cache unsuccessful searches too, since disassembly runs on every stop.
+  std::map<std::string, NvdisasmResult> m_nvdisasm_results;
+  std::mutex m_nvdisasm_mutex;
 };
 
 #endif // LLDB_SOURCE_PLUGINS_DISASSEMBLER_SASS_DISASSEMBLERSASSCACHE_H
