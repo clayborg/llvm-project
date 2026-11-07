@@ -13,11 +13,11 @@ from pathlib import Path
 
 from lldbsuite.test import lldbtest_config
 from lldbsuite.test.decorators import skipIfWindows
-from lldbsuite.test.lldbtest import TestBase
+from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
-class TestNVDisasmDiscovery(TestBase):
-    NO_DEBUG_INFO_TESTCASE = True
+class TestNVDisasmDiscovery(NVGPUTestCaseBase):
+    NEEDS_GPU = False
 
     def setUp(self):
         super().setUp()
@@ -52,7 +52,7 @@ class TestNVDisasmDiscovery(TestBase):
         env.pop("CUDA_HOME", None)
         env["LLDB_NVDISASM_SEARCH_ROOT"] = str(self.tmp)
         args = [lldbtest_config.lldbExec, "--no-lldbinit", "-b"]
-        args += ["-o", "settings clear platform.plugin.nvgpu.nvdisasm-path"]
+        args += ["-o", 'settings set platform.plugin.nvgpu.nvdisasm-path ""']
         if override:
             args += [
                 "-o",
@@ -75,6 +75,9 @@ class TestNVDisasmDiscovery(TestBase):
                 "-o",
                 command,
             ]
+        # Start a fresh LLDB process for each check: the SASS disassembler cache
+        # is process-wide, and dotest runs all methods in this file in one
+        # Python process.
         result = subprocess.run(
             args, env=env, cwd=self.tmp, capture_output=True, text=True, timeout=30
         )

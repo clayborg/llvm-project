@@ -320,7 +320,8 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
         "Failed to extract SM architecture from CUDA module");
   }
 
-  auto nvdisasm = DisassemblerSASSCache::getInstance().GetNvdisasmPath(sm_arch);
+  llvm::Expected<FileSpec> nvdisasm =
+      DisassemblerSASSCache::getInstance().GetNvdisasmPath(sm_arch);
   if (!nvdisasm)
     return nvdisasm.takeError();
 

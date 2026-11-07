@@ -31,6 +31,17 @@
 using namespace lldb_private;
 using namespace lldb;
 
+namespace {
+
+struct NvdisasmSearch {
+  llvm::SmallVector<std::string> directories;
+  llvm::SmallVector<FileSpec> candidates;
+};
+
+enum class SMSupport { Supported, Unsupported, Unknown };
+
+} // namespace
+
 std::shared_ptr<ModuleSM>
 DisassemblerSASSCache::GetModuleSM(const std::string &cache_key) {
   std::lock_guard<std::mutex> lock(m_module_map_mutex);
@@ -214,14 +225,9 @@ llvm::Expected<std::string> ModuleSM::FindSM(const Address &base_addr) {
                                  llvm::toString(sm_ver.takeError()).c_str());
 }
 
-struct NvdisasmSearch {
-  llvm::SmallVector<std::string> directories;
-  llvm::SmallVector<FileSpec> candidates;
-};
-
 static NvdisasmSearch FindNvdisasmCandidates() {
   NvdisasmSearch search;
-  auto &directories = search.directories;
+  llvm::SmallVector<std::string> &directories = search.directories;
   if (const char *path = getenv("PATH")) {
     llvm::SmallVector<llvm::StringRef> paths;
     llvm::StringRef(path).split(paths, llvm::sys::EnvPathSeparator);
@@ -270,7 +276,8 @@ static NvdisasmSearch FindNvdisasmCandidates() {
 
   llvm::StringSet<> seen;
   for (const std::string &directory : directories) {
-    auto path = llvm::sys::findProgramByName("nvdisasm", {directory});
+    llvm::ErrorOr<std::string> path =
+        llvm::sys::findProgramByName("nvdisasm", {directory});
     if (!path)
       continue;
     llvm::SmallString<128> resolved;
@@ -281,8 +288,6 @@ static NvdisasmSearch FindNvdisasmCandidates() {
   }
   return search;
 }
-
-enum class SMSupport { Supported, Unsupported, Unknown };
 
 static SMSupport SupportsSM(const FileSpec &nvdisasm, llvm::StringRef sm_arch) {
   llvm::SmallString<128> output_path;
@@ -296,7 +301,8 @@ static SMSupport SupportsSM(const FileSpec &nvdisasm, llvm::StringRef sm_arch) {
   if (llvm::sys::ExecuteAndWait(program, args, std::nullopt, redirects,
                                 /*SecondsToWait=*/5) != 0)
     return SMSupport::Unknown;
-  auto output = llvm::MemoryBuffer::getFile(output_path);
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> output =
+      llvm::MemoryBuffer::getFile(output_path);
   if (!output)
     return SMSupport::Unknown;
   llvm::StringRef help = (*output)->getBuffer();
@@ -323,14 +329,15 @@ DisassemblerSASSCache::GetNvdisasmPath(llvm::StringRef sm_arch) {
   }
 
   std::lock_guard<std::mutex> lock(m_nvdisasm_mutex);
-  auto cached = m_nvdisasm_results.find(sm_arch.str());
+  std::map<std::string, NvdisasmResult>::iterator cached =
+      m_nvdisasm_results.find(sm_arch.str());
   if (cached != m_nvdisasm_results.end()) {
     if (!cached->second.error.empty())
       return llvm::createStringError(cached->second.error);
     return cached->second.executable;
   }
 
-  auto search = FindNvdisasmCandidates();
+  NvdisasmSearch search = FindNvdisasmCandidates();
   FileSpec unknown;
   for (const FileSpec &candidate : search.candidates) {
     SMSupport support =
@@ -362,15 +369,19 @@ DisassemblerSASSCache::GetNvdisasmPath(llvm::StringRef sm_arch) {
   std::string error;
   if (search.candidates.empty()) {
     error = "nvdisasm not found or not executable. Searched directories: " +
-            llvm::join(search.directories, ", ");
+            llvm::join(search.directories, ", ") +
+            ". Please install the CUDA toolkit, ensure nvdisasm is in your "
+            "PATH, set CUDA_HOME, or set "
+            "platform.plugin.nvgpu.nvdisasm-path to an nvdisasm binary.";
   } else {
     llvm::SmallVector<std::string> checked;
     for (const FileSpec &candidate : search.candidates)
       checked.push_back(candidate.GetPath());
     error = "No installed nvdisasm advertises support for " + sm_arch.str() +
             ". Checked: " + llvm::join(checked, ", ") +
-            ". Set platform.plugin.nvgpu.nvdisasm-path to a compatible CUDA "
-            "toolkit.";
+            ". Set platform.plugin.nvgpu.nvdisasm-path to an nvdisasm that "
+            "supports " +
+            sm_arch.str() + ".";
   }
   m_nvdisasm_results.emplace(sm_arch.str(), NvdisasmResult{{}, error});
   return llvm::createStringError(error);

@@ -50,10 +50,15 @@ public:
     return instance;
   }
 
-  /// Find an nvdisasm executable supporting sm_arch. An empty architecture
-  /// selects the first executable without probing its capabilities.
-  /// Explicit user settings take precedence over automatic selection.
-  /// \return FileSpec for nvdisasm executable, or error if not found
+  /// Find an nvdisasm executable supporting sm_arch. Explicit user settings
+  /// take precedence over automatic selection.
+  ///
+  /// \param[in] sm_arch
+  ///     The architecture to decode, such as "SM90". An empty architecture
+  ///     selects the first executable without probing its capabilities.
+  ///
+  /// \return
+  ///     The nvdisasm executable, or an error if none was found.
   llvm::Expected<lldb_private::FileSpec>
   GetNvdisasmPath(llvm::StringRef sm_arch = {});
 
