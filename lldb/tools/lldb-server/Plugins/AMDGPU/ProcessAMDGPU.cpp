@@ -196,8 +196,24 @@ Status ProcessAMDGPU::Halt() {
 }
 
 Status ProcessAMDGPU::Detach() {
+  // Detaching from the GPU leaves the native process under the debugger. Stop
+  // debugging the GPU, which resumes every stopped wave.
+  RemoveAllSoftwareBreakpoints();
+  m_debugger->ReleaseGPU();
   SetState(StateType::eStateDetached, true);
   return Status();
+}
+
+void ProcessAMDGPU::RemoveAllSoftwareBreakpoints() {
+  Log *log = GetLog(GDBRLog::Plugin);
+  // Each call drops one reference, and the last one removes the trap and the
+  // entry, so this loop ends.
+  while (!m_software_breakpoints.empty()) {
+    lldb::addr_t addr = m_software_breakpoints.begin()->first;
+    if (Status error = RemoveSoftwareBreakpoint(addr); error.Fail())
+      LLDB_LOG(log, "failed to remove the breakpoint at {0:x}: {1}", addr,
+               error);
+  }
 }
 
 /// Sends a process a UNIX signal \a signal.

@@ -1332,10 +1332,27 @@ void GDBRemoteCommunicationServerLLGS::DataAvailableCallback() {
                 "GDBRemoteCommunicationServerLLGS::%s processing a packet "
                 "failed: %s",
                 __FUNCTION__, error.AsCString());
-      m_mainloop.RequestTermination();
+      // A GPU plug-in's server can share its main loop with the native
+      // process's server, which has to keep running, so it only closes the
+      // connection and leaves the loop to the plug-in. Closing unregisters
+      // this callback, so it waits until the callback has returned.
+      if (m_plugin_instance) {
+        m_mainloop.AddPendingCallback(
+            [this](MainLoopBase &) { HandlePluginClientDisconnect(); });
+      } else {
+        m_mainloop.RequestTermination();
+      }
       break;
     }
   }
+}
+
+void GDBRemoteCommunicationServerLLGS::HandlePluginClientDisconnect() {
+  if (!m_network_handle_up)
+    return;
+  m_network_handle_up.reset();
+  Disconnect();
+  m_plugin_instance->ClientDidDisconnect();
 }
 
 Status GDBRemoteCommunicationServerLLGS::InitializeConnection(

@@ -1724,9 +1724,10 @@ public:
   ///   Any GPU plugin target associated with this target, or null if there are
   ///   no GPU plugin targets.
   lldb::TargetSP GetAnyGPUPluginTarget() {
-    if (m_gpu_plugin_targets.empty())
-      return lldb::TargetSP();
-    return m_gpu_plugin_targets.begin()->second.lock();
+    for (const auto &entry : m_gpu_plugin_targets)
+      if (lldb::TargetSP target_sp = GetGPUPluginTarget(entry.first()))
+        return target_sp;
+    return lldb::TargetSP();
   }
 
   /// \return
@@ -1736,7 +1737,12 @@ public:
     auto it = m_gpu_plugin_targets.find(plugin_name);
     if (it == m_gpu_plugin_targets.end())
       return lldb::TargetSP();
-    return it->second.lock();
+    // A GPU plugin target stays here after it is deleted, and still exists
+    // while something else, such as lldb-dap, refers to it.
+    lldb::TargetSP target_sp = it->second.lock();
+    if (!target_sp || !target_sp->IsValid())
+      return lldb::TargetSP();
+    return target_sp;
   }
 
   /// Assign a GPU plugin target to this target.

@@ -103,6 +103,11 @@ public:
   /// Called when the native process exits to exit the GPU process
   void HandleNativeProcessExit(const WaitStatus &exit_status);
 
+  /// Remove every breakpoint trap from GPU code, however many references it
+  /// has. This must happen before detaching from the AMD debug library: a wave
+  /// that executes a leftover trap afterwards aborts its queue.
+  void RemoveAllSoftwareBreakpoints();
+
   bool handleWaveStop(amd_dbgapi_event_id_t eventId);
 
   bool handleDebugEvent(amd_dbgapi_event_id_t eventId,

@@ -64,6 +64,14 @@ public:
   std::optional<LLDBSettings> GetLLDBSettings() override;
   std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
+  void ClientDidDisconnect() override;
+
+  /// Stop debugging the GPU while the native process stays under the debugger,
+  /// like ROCgdb's detach_amd_dbgapi: stop handling AMD debug library events
+  /// and detach from the library, which resumes every stopped wave. After this
+  /// the plug-in ignores the GPU. Remove all GPU breakpoints before calling
+  /// this. Calling it again does nothing.
+  void ReleaseGPU();
 
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
