@@ -390,6 +390,10 @@ private:
 
   void DataAvailableCallback();
 
+  /// Close the connection of a GPU plug-in's server once its client has gone,
+  /// and tell the plug-in, which decides whether its main loop ends.
+  void HandlePluginClientDisconnect();
+
   void SendProcessOutput();
 
   void StartSTDIOForwarding();
