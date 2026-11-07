@@ -438,6 +438,8 @@ protected:
       std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
       bool inactive, llvm::StringRef sync_plugin = {});
 
+  void MarkImplicitlyResumedThreads();
+
   void ClearThreadIDList();
 
   bool UpdateThreadIDList();
