@@ -991,3 +991,7 @@ void LLDBServerPluginNVGPU::NativeProcessDidExit(
       gpu->OnNativeProcessExit(exit_status);
   });
 }
+
+void LLDBServerPluginNVGPU::ClientDidDisconnect() {
+  m_main_loop.RequestTermination();
+}
