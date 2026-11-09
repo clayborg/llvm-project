@@ -534,11 +534,15 @@ private:
   /// while lldb-server still traces this process, and lldb does not hear when
   /// a stopped GPU process ends once this one has gone.
   ///
+  /// \param[in] keep_stopped
+  ///     Whether the GPU processes stay stopped, like this process. A GPU
+  ///     process whose GDB server cannot keep it stopped does not detach.
+  ///
   /// \return
   ///     An error if a GPU process did not detach, in which case this process
   ///     must not detach either, or it would leave that GPU process stopped
   ///     without a debugger.
-  llvm::Error DetachGPUPluginTargets();
+  llvm::Error DetachGPUPluginTargets(bool keep_stopped);
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
