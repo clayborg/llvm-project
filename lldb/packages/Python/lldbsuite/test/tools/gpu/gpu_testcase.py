@@ -68,3 +68,20 @@ class GpuTestCaseBase(TestBase):
     def select_gpu(self):
         """Select the GPU target."""
         self.dbg.SetSelectedTarget(self.gpu_target)
+
+    def wait_for_exit(self, process, timeout=30):
+        """Wait for the process's exit event on the debugger's listener,
+        skipping any earlier state changes still queued there. A GPU process
+        exits when the CPU process does, and its state shows that only once
+        its exit event is taken off the queue."""
+        listener = self.dbg.GetListener()
+        event = lldb.SBEvent()
+        while listener.WaitForEventForBroadcasterWithType(
+            timeout,
+            process.GetBroadcaster(),
+            lldb.SBProcess.eBroadcastBitStateChanged,
+            event,
+        ):
+            if lldb.SBProcess.GetStateFromEvent(event) == lldb.eStateExited:
+                return
+        self.fail("Timed out while waiting for the process to exit")
