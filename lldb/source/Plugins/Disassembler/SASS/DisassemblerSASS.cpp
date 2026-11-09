@@ -61,11 +61,10 @@ DisassemblerSASS::DisassemblerSASS(const ArchSpec &arch, const char *flavor,
   // Try to find nvdisasm
   if (llvm::Expected<FileSpec> nvdisasm_or =
           DisassemblerSASSCache::getInstance().GetNvdisasmPath()) {
-    m_nvdisasm_path = *nvdisasm_or;
     m_valid = true;
     LLDB_LOG(log,
              "DisassemblerSASS: Successfully initialized with nvdisasm at: {0}",
-             m_nvdisasm_path.GetPath());
+             nvdisasm_or->GetPath());
   } else {
     m_valid = false;
     Debugger::ReportError(llvm::toString(nvdisasm_or.takeError()));
@@ -321,9 +320,14 @@ DisassemblerSASS::DisassembleWithNvdisasm(const DataExtractor &data,
         "Failed to extract SM architecture from CUDA module");
   }
 
+  llvm::Expected<FileSpec> nvdisasm =
+      DisassemblerSASSCache::getInstance().GetNvdisasmPath(sm_arch);
+  if (!nvdisasm)
+    return nvdisasm.takeError();
+
   std::string json_output;
   if (llvm::Expected<std::string> json_output_or =
-          InvokeNVDisasm(whole_instructions, sm_arch, m_nvdisasm_path, start)) {
+          InvokeNVDisasm(whole_instructions, sm_arch, *nvdisasm, start)) {
     json_output = std::move(*json_output_or);
   } else {
     return json_output_or.takeError();
