@@ -121,6 +121,9 @@ public:
 
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
 
+  /// End the GPU MainLoop thread's loop.
+  void ClientDidDisconnect() override;
+
   /// Ask the CUDA driver to attach once libcuda's symbols resolve, if it can,
   /// as it can once the application has a CUDA context. Otherwise the
   /// initialization breakpoints bring the GPU up, as on launch, or
