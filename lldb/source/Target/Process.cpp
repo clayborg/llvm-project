@@ -3615,18 +3615,18 @@ Status Process::Detach(bool keep_stopped) {
         BreakpointSiteSP bp_site_sp = m_breakpoint_site_list.FindByID(site_id);
         if (!bp_site_sp || bp_site_sp->IsEnabled())
           continue;
-        if (Status enable_error = EnableBreakpointSite(bp_site_sp.get());
-            enable_error.Fail()) {
-          StreamString locations;
-          bp_site_sp->GetDescription(&locations, eDescriptionLevelBrief);
-          Debugger::ReportWarning(
-              llvm::formatv("failed to set breakpoint {0} at {1:x} again "
-                            "after the detach failed: {2}",
-                            locations.GetString(), bp_site_sp->GetLoadAddress(),
-                            enable_error)
-                  .str(),
-              GetTarget().GetDebugger().GetID());
-        }
+        Status enable_error = EnableBreakpointSite(bp_site_sp.get());
+        if (enable_error.Success())
+          continue;
+        StreamString locations;
+        bp_site_sp->GetDescription(&locations, eDescriptionLevelBrief);
+        Debugger::ReportWarning(
+            llvm::formatv("failed to set breakpoint {0} at {1:x} again after "
+                          "the detach failed: {2}",
+                          locations.GetString(), bp_site_sp->GetLoadAddress(),
+                          enable_error)
+                .str(),
+            GetTarget().GetDebugger().GetID());
       }
       m_destroy_in_process = false;
       return error;

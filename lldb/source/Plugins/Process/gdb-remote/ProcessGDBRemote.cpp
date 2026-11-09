@@ -3071,7 +3071,8 @@ llvm::Error ProcessGDBRemote::DetachGPUPluginTargets(bool keep_stopped) {
     ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
     if (!gpu_process_sp || !gpu_process_sp->IsAlive())
       continue;
-    if (Status error = gpu_process_sp->Detach(keep_stopped); error.Fail())
+    Status error = gpu_process_sp->Detach(keep_stopped);
+    if (error.Fail())
       return llvm::createStringError(
           llvm::formatv("could not detach from GPU process {0}: {1}",
                         gpu_process_sp->GetID(), error)
