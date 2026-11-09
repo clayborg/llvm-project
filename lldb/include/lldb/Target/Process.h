@@ -62,6 +62,7 @@
 
 #include "llvm/ADT/AddressRanges.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/VersionTuple.h"
@@ -2381,11 +2382,14 @@ public:
   const StopPointSiteList<lldb_private::BreakpointSite> &
   GetBreakpointSiteList() const;
 
-  void DisableAllBreakpointSites();
-
-  /// Enable the breakpoint sites again after DisableAllBreakpointSites, such
-  /// as when a detach fails and the process stays attached.
-  void EnableAllBreakpointSites();
+  /// Disable all the breakpoint sites, such as before a detach.
+  ///
+  /// \param[out] disabled_site_ids
+  ///     If not null, receives the IDs of the sites that this disabled, not
+  ///     those that were disabled already, so that a caller can enable just
+  ///     these again, such as when a detach fails.
+  void DisableAllBreakpointSites(
+      llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids = nullptr);
 
   Status ClearBreakpointSiteByID(lldb::user_id_t break_id);
 

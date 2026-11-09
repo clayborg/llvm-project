@@ -1566,16 +1566,14 @@ Process::GetBreakpointSiteList() const {
   return m_breakpoint_site_list;
 }
 
-void Process::DisableAllBreakpointSites() {
-  m_breakpoint_site_list.ForEach([this](BreakpointSite *bp_site) -> void {
+void Process::DisableAllBreakpointSites(
+    llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids) {
+  m_breakpoint_site_list.ForEach([&](BreakpointSite *bp_site) -> void {
     //        bp_site->SetEnabled(true);
+    const bool was_enabled = bp_site->IsEnabled();
     DisableBreakpointSite(bp_site);
-  });
-}
-
-void Process::EnableAllBreakpointSites() {
-  m_breakpoint_site_list.ForEach([this](BreakpointSite *bp_site) -> void {
-    EnableBreakpointSite(bp_site);
+    if (disabled_site_ids && was_enabled && !bp_site->IsEnabled())
+      disabled_site_ids->push_back(bp_site->GetID());
   });
 }
 
@@ -3602,15 +3600,22 @@ Status Process::Detach(bool keep_stopped) {
     }
 
     m_thread_list.DiscardThreadPlans();
-    DisableAllBreakpointSites();
+    llvm::SmallVector<lldb::break_id_t> disabled_site_ids;
+    DisableAllBreakpointSites(&disabled_site_ids);
 
     error = DoDetach(keep_stopped);
     if (error.Success()) {
       DidDetach();
       StopPrivateStateThread();
     } else {
-      // The process stays attached, so it needs its breakpoints back.
-      EnableAllBreakpointSites();
+      // The process stays attached, so it needs its breakpoints back. A site
+      // can go away while the process detaches, so each is found by its ID.
+      for (lldb::break_id_t site_id : disabled_site_ids)
+        if (Status enable_error = EnableBreakpointSiteByID(site_id);
+            enable_error.Fail())
+          LLDB_LOG(GetLog(LLDBLog::Breakpoints),
+                   "could not enable breakpoint site {0} again: {1}", site_id,
+                   enable_error);
       m_destroy_in_process = false;
       return error;
     }
