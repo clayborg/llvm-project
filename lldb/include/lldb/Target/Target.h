@@ -1730,6 +1730,16 @@ public:
   }
 
   /// \return
+  ///   The GPU plugin targets associated with this target.
+  std::vector<lldb::TargetSP> GetGPUPluginTargets() {
+    std::vector<lldb::TargetSP> targets;
+    for (const auto &entry : m_gpu_plugin_targets)
+      if (lldb::TargetSP target_sp = GetGPUPluginTarget(entry.first()))
+        targets.push_back(target_sp);
+    return targets;
+  }
+
+  /// \return
   ///   The GPU plugin target associated with the given plugin name, or null if
   ///   no such target exists.
   lldb::TargetSP GetGPUPluginTarget(llvm::StringRef plugin_name) {
@@ -1737,16 +1747,6 @@ public:
     if (it == m_gpu_plugin_targets.end())
       return lldb::TargetSP();
     return it->second.lock();
-  }
-
-  /// \return
-  ///   The GPU plugin targets associated with this target that still exist.
-  std::vector<lldb::TargetSP> GetGPUPluginTargets() const {
-    std::vector<lldb::TargetSP> targets;
-    for (const auto &entry : m_gpu_plugin_targets)
-      if (lldb::TargetSP target_sp = entry.second.lock())
-        targets.push_back(target_sp);
-    return targets;
   }
 
   /// Assign a GPU plugin target to this target.
