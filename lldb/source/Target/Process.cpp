@@ -12,6 +12,7 @@
 #include <optional>
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/Threading.h"
 
@@ -3610,12 +3611,23 @@ Status Process::Detach(bool keep_stopped) {
     } else {
       // The process stays attached, so it needs its breakpoints back. A site
       // can go away while the process detaches, so each is found by its ID.
-      for (lldb::break_id_t site_id : disabled_site_ids)
-        if (Status enable_error = EnableBreakpointSiteByID(site_id);
-            enable_error.Fail())
-          LLDB_LOG(GetLog(LLDBLog::Breakpoints),
-                   "could not enable breakpoint site {0} again: {1}", site_id,
-                   enable_error);
+      for (lldb::break_id_t site_id : disabled_site_ids) {
+        BreakpointSiteSP bp_site_sp = m_breakpoint_site_list.FindByID(site_id);
+        if (!bp_site_sp || bp_site_sp->IsEnabled())
+          continue;
+        if (Status enable_error = EnableBreakpointSite(bp_site_sp.get());
+            enable_error.Fail()) {
+          StreamString locations;
+          bp_site_sp->GetDescription(&locations, eDescriptionLevelBrief);
+          Debugger::ReportWarning(
+              llvm::formatv("failed to set breakpoint {0} at {1:x} again "
+                            "after the detach failed: {2}",
+                            locations.GetString(), bp_site_sp->GetLoadAddress(),
+                            enable_error)
+                  .str(),
+              GetTarget().GetDebugger().GetID());
+        }
+      }
       m_destroy_in_process = false;
       return error;
     }
