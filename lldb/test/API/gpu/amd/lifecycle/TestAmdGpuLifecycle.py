@@ -32,6 +32,18 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
         )
         self.assertEqual(cpu_process.GetExitStatus(), 0)
 
+    def launch(self, args) -> lldb.SBProcess:
+        """Launch the program with args, which returns at its first stop."""
+        self.build()
+        target = self.dbg.CreateTarget(self.getBuildArtifact("a.out"))
+        launch_info = target.GetLaunchInfo()
+        launch_info.SetArguments(args, True)
+        launch_info.SetWorkingDirectory(self.get_process_working_directory())
+        error = lldb.SBError()
+        process = target.Launch(launch_info, error)
+        self.assertSuccess(error)
+        return process
+
     def test_gpu_detach_resumes_waves(self):
         """Test that detaching from the GPU resumes the stopped waves and
         leaves the CPU process under the debugger."""
@@ -123,6 +135,55 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
         self.assertSuccess(self.cpu_process.Detach())
         result = lldbutil.wait_for_file_on_target(self, result_file)
         self.assertEqual(result.strip(), "released")
+
+    def test_exec_debugs_new_image(self):
+        """Test that after an exec, a new GPU process of the same GPU target
+        debugs the new program image, where the breakpoint set before the exec
+        is hit, as in ROCgdb."""
+        self.launch(["exec"])
+        # The launch stops once the GPU target is connected.
+        self.assertEqual(self.dbg.GetNumTargets(), 2)
+        first_gpu_process = self.gpu_process
+        gpu_bkpt_id = self.set_gpu_source_breakpoint(SOURCE, GPU_BREAKPOINT)
+
+        # The first image execs before it runs a kernel, and its GPU process
+        # exits.
+        self.setAsync(True)
+        listener = self.dbg.GetListener()
+        self.select_cpu()
+        self.runCmd("c")
+        lldbutil.expect_state_changes(
+            self, listener, self.cpu_process, [lldb.eStateRunning, lldb.eStateStopped]
+        )
+        self.assertStopReason(
+            self.cpu_process.GetSelectedThread().GetStopReason(), lldb.eStopReasonExec
+        )
+        self.wait_for_exit(first_gpu_process)
+
+        # The new image gets a new GPU process in the same GPU target.
+        self.continue_to_gpu_target_creation()
+        self.assertNotEqual(
+            self.gpu_process.GetUniqueID(), first_gpu_process.GetUniqueID()
+        )
+        self.select_gpu()
+        threads = self.continue_to_gpu_breakpoint(gpu_bkpt_id)
+        self.assertTrue(threads, "GPU should stop at the breakpoint after the exec")
+
+    def test_exec_from_launcher_debugs_gpu(self):
+        """Test that a program that execs before it uses the GPU, as a launcher
+        does, gets a GPU target for the new program image."""
+        process = self.launch(["launcher"])
+        # The launch returns at the exec, before any GPU code is loaded.
+        self.assertStopReason(
+            process.GetSelectedThread().GetStopReason(), lldb.eStopReasonExec
+        )
+        self.assertEqual(self.dbg.GetNumTargets(), 1)
+
+        self.continue_to_gpu_target_creation()
+        gpu_bkpt_id = self.set_gpu_source_breakpoint(SOURCE, GPU_BREAKPOINT)
+        self.select_gpu()
+        threads = self.continue_to_gpu_breakpoint(gpu_bkpt_id)
+        self.assertTrue(threads, "GPU should stop at the breakpoint after the exec")
 
     def test_gpu_target_delete_keeps_cpu_process(self):
         """Test that deleting the GPU target detaches from the GPU only."""
