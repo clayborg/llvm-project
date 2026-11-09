@@ -2382,12 +2382,12 @@ public:
   const StopPointSiteList<lldb_private::BreakpointSite> &
   GetBreakpointSiteList() const;
 
-  /// Disable all the breakpoint sites, such as before a detach.
+  /// Disable all the breakpoint sites.
   ///
   /// \param[out] disabled_site_ids
   ///     If not null, receives the IDs of the sites that this disabled, not
   ///     those that were disabled already, so that a caller can enable just
-  ///     these again, such as when a detach fails.
+  ///     these again.
   void DisableAllBreakpointSites(
       llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids = nullptr);
 
