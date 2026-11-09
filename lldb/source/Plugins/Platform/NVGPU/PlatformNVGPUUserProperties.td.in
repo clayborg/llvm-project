@@ -5,5 +5,7 @@ let Definition = "platformnvgpuuser" in {
     Global,
     DefaultStringValue<"@NVGPU_DISASSEMBLER_PATH@">,
     Desc<"Custom path to the nvdisasm binary. When not specified, LLDB will "
-    "search for nvdisasm in the system in some predefined paths.">;
+    "search PATH, CUDA_HOME/bin, common CUDA toolkit locations, and "
+    "versioned /usr/local/cuda-* directories for an nvdisasm supporting the "
+    "target SM architecture.">;
 }

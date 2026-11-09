@@ -107,6 +107,23 @@ behavior when lldb-server starts:
 These environment variables can be set in the shell environment before
 starting lldb-server.
 
+SASS disassembly
+^^^^^^^^^^^^^^^^
+
+LLDB uses NVIDIA's ``nvdisasm`` tool to disassemble SASS instructions. A build
+can provide a default tool with the ``NVGPU_DISASSEMBLER_PATH`` CMake variable;
+users can override it at runtime with:
+
+.. code-block:: text
+
+  (lldb) settings set platform.plugin.nvgpu.nvdisasm-path /path/to/nvdisasm
+
+If no explicit path is configured, LLDB searches ``PATH``, ``CUDA_HOME/bin``,
+``/usr/local/cuda/bin``, ``/opt/cuda/bin``, ``/usr/bin``, and versioned
+``/usr/local/cuda-*`` toolkits. Versioned CUDA toolkits are tried newest first.
+When the cubin's SM architecture is known, LLDB prefers an ``nvdisasm`` whose
+``--help`` output advertises support for that SM.
+
 Driver compatibility
 ^^^^^^^^^^^^^^^^^^^^
 
