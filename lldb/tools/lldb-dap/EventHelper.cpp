@@ -324,8 +324,7 @@ void SendMemoryEvent(DAP &dap, lldb::SBValue variable) {
 // the original DAP::Handle*Event pattern while supporting multi-session
 // debugging.
 
-void HandleProcessEvent(const lldb::SBEvent &event, bool &process_exited,
-                        Log *log) {
+void HandleProcessEvent(const lldb::SBEvent &event, Log *log) {
   lldb::SBProcess process = lldb::SBProcess::GetProcessFromEvent(event);
 
   // Find the DAP instance that owns this process's target.
@@ -383,7 +382,6 @@ void HandleProcessEvent(const lldb::SBEvent &event, bool &process_exited,
         dap->RunExitCommands();
         SendProcessExitedEvent(*dap, process);
         dap->SendTerminatedEvent();
-        process_exited = true;
       }
       break;
     }
@@ -608,7 +606,10 @@ void EventThread(lldb::SBDebugger debugger, lldb::SBBroadcaster broadcaster,
 
     const uint32_t event_mask = event.GetType();
     if (lldb::SBProcess::EventIsProcessEvent(event)) {
-      HandleProcessEvent(event, /*&process_exited=*/done, log);
+      // Sessions share this thread, so it keeps running when the process of
+      // one of them exits, such as a GPU child session's. It stops once no
+      // session uses it.
+      HandleProcessEvent(event, log);
     } else if (lldb::SBTarget::EventIsTargetEvent(event)) {
       HandleTargetEvent(event, log);
     } else if (lldb::SBBreakpoint::EventIsBreakpointEvent(event)) {

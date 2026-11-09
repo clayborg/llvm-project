@@ -42,6 +42,22 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         ]
         return cpu_breakpoint_ids, configuration["targetId"]
 
+    def continue_cpu_to_exit(self):
+        """Continue the CPU session until the program exits, and return the
+        exited event. On the way, the CPU can stop at the internal GPU loader
+        breakpoint, as the program unloads its GPU code."""
+        while True:
+            self.do_continue()
+            events = self.dap_server.wait_for_stopped()
+            self.assertTrue(events, "The CPU session should stop or exit")
+            if events[-1]["event"] == "exited":
+                return events[-1]
+            hit_bp_ids = events[-1]["body"].get("hitBreakpointIds", [])
+            self.assertTrue(
+                hit_bp_ids and all(bp_id < 0 for bp_id in hit_bp_ids),
+                f"Unexpected stop: {events[-1]}",
+            )
+
     def test_automatic_reverse_request_detection(self):
         """
         Test that we can detect when LLDB automatically sends reverse requests
@@ -179,4 +195,15 @@ class TestDAPAMDReverseRequest(lldbdap_testcase.DAPTestCaseBase):
         child = self.dap_server.get_child_sessions()[gpu_target_id]
         self.assertTrue(child.request_disconnect()["success"])
         self.continue_to_exit()
+        self.dap_server.request_disconnect()
+
+    def test_program_exit_ends_gpu_child_session(self):
+        """
+        Test that when the program exits, the GPU child session reports it
+        too, since the GPU process exits with the CPU process.
+        """
+        _, gpu_target_id = self.run_to_gpu_child_session("hello_world.hip")
+        child = self.dap_server.get_child_sessions()[gpu_target_id]
+        self.assertEqual(self.continue_cpu_to_exit()["body"]["exitCode"], 0)
+        self.assertEqual(child.wait_for_exited()["body"]["exitCode"], 0)
         self.dap_server.request_disconnect()

@@ -1629,6 +1629,19 @@ void ProcessGDBRemote::DidExit() {
   m_gdb_comm.Disconnect();
 }
 
+bool ProcessGDBRemote::SetExitStatus(int exit_status,
+                                     llvm::StringRef exit_string) {
+  if (!Process::SetExitStatus(exit_status, exit_string))
+    return false;
+  // GPU processes can't outlive this process.
+  if (TargetSP target_sp = CalculateTarget())
+    for (TargetSP gpu_target_sp : target_sp->GetGPUPluginTargets())
+      if (ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
+          gpu_process_sp && gpu_process_sp->IsAlive())
+        gpu_process_sp->SetExitStatus(exit_status, exit_string);
+  return true;
+}
+
 void ProcessGDBRemote::DidAttach(ArchSpec &process_arch) {
   // If you can figure out what the architecture is, fill it in here.
   process_arch.Clear();

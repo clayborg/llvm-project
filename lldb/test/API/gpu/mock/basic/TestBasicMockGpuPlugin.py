@@ -204,6 +204,21 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
 
+    def test_mock_gpu_program_exit_exits_gpu(self):
+        """Test that the GPU process exits when the CPU process does."""
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        gpu_process = self.gpu_process
+        cpu_process = self.cpu_process
+        self.assertSuccess(cpu_process.Continue())
+        self.assertState(cpu_process.GetState(), lldb.eStateExited)
+        self.wait_for_exit(gpu_process)
+        # The GPU process exits with the status of the CPU process.
+        self.assertEqual(gpu_process.GetExitStatus(), 0)
+
     def test_mock_gpu_target_delete_keeps_cpu_process(self):
         """
         Test that deleting the GPU target leaves the CPU target running and no

@@ -244,6 +244,8 @@ public:
   // Override DidExit so we can disconnect from the remote GDB server
   void DidExit() override;
 
+  bool SetExitStatus(int exit_status, llvm::StringRef exit_string) override;
+
   void SetUserSpecifiedMaxMemoryTransferSize(uint64_t user_specified_max);
 
   bool GetModuleSpec(const FileSpec &module_file_spec, const ArchSpec &arch,
