@@ -2383,6 +2383,10 @@ public:
 
   void DisableAllBreakpointSites();
 
+  /// Enable the breakpoint sites again after DisableAllBreakpointSites, such
+  /// as when a detach fails and the process stays attached.
+  void EnableAllBreakpointSites();
+
   Status ClearBreakpointSiteByID(lldb::user_id_t break_id);
 
   lldb::break_id_t CreateBreakpointSite(const lldb::BreakpointLocationSP &owner,

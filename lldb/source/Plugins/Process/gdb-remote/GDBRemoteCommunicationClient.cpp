@@ -1784,6 +1784,8 @@ Status GDBRemoteCommunicationClient::Detach(bool keep_stopped,
       SendPacketAndWaitForResponse(packet.GetString(), response);
   if (packet_result != PacketResult::Success)
     error = Status::FromErrorString("Sending disconnect packet failed.");
+  else if (response.IsErrorResponse())
+    error = response.GetStatus();
   return error;
 }
 

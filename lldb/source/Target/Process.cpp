@@ -1573,6 +1573,12 @@ void Process::DisableAllBreakpointSites() {
   });
 }
 
+void Process::EnableAllBreakpointSites() {
+  m_breakpoint_site_list.ForEach([this](BreakpointSite *bp_site) -> void {
+    EnableBreakpointSite(bp_site);
+  });
+}
+
 Status Process::ClearBreakpointSiteByID(lldb::user_id_t break_id) {
   Status error(DisableBreakpointSiteByID(break_id));
 
@@ -3603,6 +3609,9 @@ Status Process::Detach(bool keep_stopped) {
       DidDetach();
       StopPrivateStateThread();
     } else {
+      // The process stays attached, so it needs its breakpoints back.
+      EnableAllBreakpointSites();
+      m_destroy_in_process = false;
       return error;
     }
   }

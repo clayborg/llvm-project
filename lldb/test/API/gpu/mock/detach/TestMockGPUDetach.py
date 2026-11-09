@@ -2,6 +2,8 @@
 Test detaching from GPU targets.
 """
 
+import os
+
 import lldb
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
@@ -52,6 +54,32 @@ class TestMockGPUDetach(GpuTestCaseBase):
         """Detaching the process detaches its GPU target first, which lldb
         would otherwise leave stopped once the process has gone."""
         process, gpu_process = self.run_to_the_gpu_target()
+        self.assertSuccess(process.Detach())
+        self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+        self.assertState(process.GetState(), lldb.eStateDetached)
+
+    def test_detach_that_cannot_detach_the_gpu_target(self):
+        """A detach fails before the process detaches when the GPU target does
+        not detach, since the GPU target would be left stopped without a
+        debugger. lldb still debugs both, the process keeps its breakpoints,
+        and the detach can be tried again."""
+        # lldb-server inherits this, and the mock GPU plug-in then refuses to
+        # detach the first time.
+        os.environ["LLDB_MOCK_GPU_FAIL_DETACH"] = "1"
+        self.addTearDownHook(lambda: os.environ.pop("LLDB_MOCK_GPU_FAIL_DETACH"))
+        process, gpu_process = self.run_to_the_gpu_target()
+        breakpoint = process.GetTarget().BreakpointCreateBySourceRegex(
+            "// break again", self.source_spec
+        )
+        error = process.Detach()
+        self.assertTrue(error.Fail(), "the process detached")
+        self.assertIn("could not detach from GPU process", error.GetCString())
+        self.assertNotEqual(
+            gpu_process.GetState(), lldb.eStateDetached, "the GPU target detached"
+        )
+        self.assertState(process.GetState(), lldb.eStateStopped)
+        threads = lldbutil.continue_to_breakpoint(process, breakpoint)
+        self.assertTrue(threads, "the process lost its breakpoint")
         self.assertSuccess(process.Detach())
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)
         self.assertState(process.GetState(), lldb.eStateDetached)

@@ -533,7 +533,12 @@ private:
   /// this process detaches: a GPU plug-in may have to undo what it set up
   /// while lldb-server still traces this process, and lldb does not hear when
   /// a stopped GPU process ends once this one has gone.
-  void DetachGPUPluginTargets();
+  ///
+  /// \return
+  ///     An error if a GPU process did not detach, in which case this process
+  ///     must not detach either, or it would leave that GPU process stopped
+  ///     without a debugger.
+  llvm::Error DetachGPUPluginTargets();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
