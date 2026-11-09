@@ -14,9 +14,9 @@
 /// LLDB's NVGPU plugins are built against a single CUDA debugger-API header
 /// but must work against any CUDA driver -- or read any coredump -- within
 /// that same CUDA *major* release. There is no cross-major-release
-/// compatibility, and no compile-time gating within a major: the header is
-/// vendored, so every build has the same one. What varies at run time is the
-/// driver, which `CudbgApiVersion` below is for.
+/// compatibility. The vendored header is the default; compile-time revision
+/// checks allow building against older headers within that major. The driver
+/// varies at run time, which `CudbgApiVersion` below is for.
 ///
 /// Which major that is, and the check that enforces it, live in
 /// `CUDADebuggerAPIVersion.cpp`.
@@ -34,6 +34,12 @@
 
 #include <cstdint>
 #include <tuple>
+
+/// True if the compiled CUDA debugger API revision is at least `revision`.
+/// CUDADebuggerAPIVersion.cpp rejects cross-major builds, and the revision
+/// increases monotonically within that major.
+#define LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(revision)                              \
+  (CUDBG_API_VERSION_REVISION >= (revision))
 
 namespace lldb_private::nvgpu {
 

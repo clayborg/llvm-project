@@ -96,7 +96,11 @@ llvm::Expected<GridEntry> GridEntry::Decode(const DataExtractor &data,
   out.functionEntry = data.GetU64(offset_ptr);
   out.moduleHandle = data.GetU64(offset_ptr);
   // Deprecated since CUDA 13.4 (formerly parentGridId64); kept for ABI.
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(193)
   out.reserved0 = data.GetU64(offset_ptr);
+#else
+  out.parentGridId64 = data.GetU64(offset_ptr);
+#endif
   out.paramsOffset = data.GetU64(offset_ptr);
   out.kernelType = data.GetU32(offset_ptr);
   out.origin = data.GetU32(offset_ptr);

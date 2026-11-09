@@ -157,6 +157,13 @@ struct GridLookupResult {
 
 /// One row of a nvgpu-warp-table.
 struct WarpEntry : CudbgWarpTableEntry {
+#if !LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(167)
+  // Keep decoding newer rows when the SDK struct lacks these trailing fields.
+  uint32_t barrierScope = 0;
+  uint32_t padding3 = 0;
+  uint64_t additionalBarrierInfo = 0;
+#endif
+
   static llvm::Expected<WarpEntry> Decode(const DataExtractor &data,
                                           lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);
@@ -190,6 +197,12 @@ struct WarpEntry : CudbgWarpTableEntry {
 
 /// One row of a nvgpu-lane (thread) table.
 struct LaneEntry : CudbgThreadTableEntry {
+#if !LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(192)
+  // Keep decoding newer rows when the SDK struct lacks these trailing fields.
+  uint32_t rpcLo = 0;
+  uint32_t rpcHi = 0;
+#endif
+
   static llvm::Expected<LaneEntry> Decode(const DataExtractor &data,
                                           lldb::offset_t *offset_ptr,
                                           uint64_t entry_size);

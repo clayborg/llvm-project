@@ -12,6 +12,7 @@
 #include "DeviceState.h"
 #include "ProcessNVGPU.h"
 #include "ThreadNVGPU.h"
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/Utility/RegisterValue.h"
@@ -66,9 +67,14 @@ ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
   // readRegisterRange60 and appended a new 8-arg readRegisterRange we do not
   // use.
   registers.resize(*num_regs_read);
-  CUDBGResult res = api->readRegisterRange60(*coords.device, *coords.sm,
-                                             *coords.warp, *coords.lane, 0,
-                                             *num_regs_read, registers.data());
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(168)
+  auto read_register_range = api->readRegisterRange60;
+#else
+  auto read_register_range = api->readRegisterRange;
+#endif
+  CUDBGResult res =
+      read_register_range(*coords.device, *coords.sm, *coords.warp,
+                          *coords.lane, 0, *num_regs_read, registers.data());
   if (res != CUDBG_SUCCESS) {
     registers.clear();
     return createStringErrorFmt("Failed to read the regular registers. {0}",

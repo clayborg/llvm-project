@@ -17,6 +17,7 @@
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 #include "lldb/Utility/State.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -67,8 +68,10 @@ static StringRef EventKindName(CUDBGEventKind kind) {
     CUDBG_EVENT_CASE(CUDBG_EVENT_ALL_DEVICES_SUSPENDED)
     CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_AVAILABLE)
     CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_THRESHOLD_REACHED)
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(193)
     CUDBG_EVENT_CASE(CUDBG_EVENT_SINGLE_STEP_COMPLETE)
     CUDBG_EVENT_CASE(CUDBG_EVENT_CUDA_LOGS_RULESET_CHANGED)
+#endif
   }
 #undef CUDBG_EVENT_CASE
   return "unknown CUDBGEventKind";

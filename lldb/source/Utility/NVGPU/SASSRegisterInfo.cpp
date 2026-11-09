@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
 #include "lldb/lldb-defines.h"
@@ -15,8 +16,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-
-#include "cudadebugger.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -42,7 +41,9 @@ ASSERT_REG_CLASS_MATCHES(REG_CLASS_LMEM_REG_OFFSET);
 ASSERT_REG_CLASS_MATCHES(REG_CLASS_UREG_PRED);
 ASSERT_REG_CLASS_MATCHES(REG_CLASS_UREG_HALF);
 ASSERT_REG_CLASS_MATCHES(REG_CLASS_UREG_FULL);
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(193)
 ASSERT_REG_CLASS_MATCHES(REG_CLASS_TEMP_REG_SPILL);
+#endif
 #undef ASSERT_REG_CLASS_MATCHES
 
 // All `byte_offset` values below are computed against `sass::ThreadRegisters`

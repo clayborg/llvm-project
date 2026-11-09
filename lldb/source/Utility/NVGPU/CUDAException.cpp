@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Utility/NVGPU/CUDAException.h"
+#include "lldb/Utility/NVGPU/CUDADebuggerAPIVersion.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <cassert>
@@ -48,6 +49,7 @@ lldb_private::CUDAExceptionToString(CUDBGException_t exception) {
     return "Warp Tensor Memory Leak";
   case CUDBG_EXCEPTION_WARP_CALL_REQUIRES_NEWER_DRIVER:
     return "Warp Call Requires Newer Driver";
+#if LLDB_NVGPU_CUDBG_API_REV_AT_LEAST(193)
   case CUDBG_EXCEPTION_WARP_MISALIGNED_PC:
     return "Warp Misaligned PC";
   case CUDBG_EXCEPTION_WARP_PC_OVERFLOW:
@@ -74,6 +76,7 @@ lldb_private::CUDAExceptionToString(CUDBGException_t exception) {
     return "Warp Block Not Present";
   case CUDBG_EXCEPTION_WARP_USER_STACK_OVERFLOW:
     return "Warp User Stack Overflow";
+#endif
   default:
     return "Device Unknown Exception";
   }
