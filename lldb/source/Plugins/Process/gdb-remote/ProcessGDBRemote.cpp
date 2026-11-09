@@ -6803,6 +6803,12 @@ void ProcessGDBRemote::DidExec() {
     if (m_vfork_in_progress_count > 0)
       --m_vfork_in_progress_count;
   }
+  // The GPU processes debugged the program image that the exec replaced. The
+  // GPU plugin targets stay for the GPU processes of the new image.
+  for (TargetSP gpu_target_sp : GetTarget().GetGPUPluginTargets())
+    if (ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
+        gpu_process_sp && gpu_process_sp->IsAlive())
+      gpu_process_sp->SetExitStatus(0, llvm::StringRef());
   Process::DidExec();
 }
 

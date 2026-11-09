@@ -55,6 +55,21 @@ static int spin(const char *ready_path, const char *result_path) {
 int main(int argc, char **argv) {
   if (argc > 3 && strcmp(argv[1], "spin") == 0)
     return spin(argv[2], argv[3]);
+  // Load the code objects without running a kernel, then exec this program to
+  // run the kernel.
+  if (argc > 1 && strcmp(argv[1], "exec") == 0) {
+    hipFuncAttributes attributes;
+    if (hipFuncGetAttributes(&attributes, reinterpret_cast<const void *>(
+                                              lifecycle_kernel)) != hipSuccess)
+      return 1;
+    execl("/proc/self/exe", argv[0], (char *)nullptr);
+    return 5;
+  }
+  // Exec this program to run the kernel before using HIP, as a launcher does.
+  if (argc > 1 && strcmp(argv[1], "launcher") == 0) {
+    execl("/proc/self/exe", argv[0], (char *)nullptr);
+    return 5;
+  }
   int *out;
   if (hipMalloc(&out, 128 * sizeof(int)) != hipSuccess)
     return 1;

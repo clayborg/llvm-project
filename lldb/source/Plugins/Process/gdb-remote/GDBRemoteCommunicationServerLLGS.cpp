@@ -323,8 +323,13 @@ Status GDBRemoteCommunicationServerLLGS::LaunchProcess() {
 
   {
     std::lock_guard<std::recursive_mutex> guard(m_debugged_process_mutex);
-    assert(m_debugged_processes.empty() && "lldb-server creating debugged "
-                                           "process but one already exists");
+    // When the native process execs, a GPU plug-in's server replaces its
+    // process before the exited one is removed.
+    assert(llvm::none_of(m_debugged_processes,
+                         [](const auto &entry) {
+                           return entry.second.process_up->IsAlive();
+                         }) &&
+           "lldb-server creating debugged process but one already exists");
     auto process_or = m_process_manager.Launch(m_process_launch_info, *this);
     if (!process_or)
       return Status::FromError(process_or.takeError());
@@ -1302,6 +1307,8 @@ void GDBRemoteCommunicationServerLLGS::ProcessStateChanged(
 
 void GDBRemoteCommunicationServerLLGS::DidExec(NativeProcessProtocol *process) {
   ClearProcessSpecificData();
+  for (auto &plugin_up : m_plugins)
+    plugin_up->NativeProcessDidExec(*process);
 }
 
 void GDBRemoteCommunicationServerLLGS::NewSubprocess(
@@ -1359,6 +1366,9 @@ Status GDBRemoteCommunicationServerLLGS::InitializeConnection(
     std::unique_ptr<Connection> connection) {
   IOObjectSP read_object_sp = connection->GetReadObject();
   GDBRemoteCommunicationServer::SetConnection(std::move(connection));
+  // A new client starts in ack mode, even if an earlier client of a GPU
+  // plug-in's server turned it off.
+  m_send_acks = true;
 
   Status error;
   m_network_handle_up = m_mainloop.RegisterReadObject(
