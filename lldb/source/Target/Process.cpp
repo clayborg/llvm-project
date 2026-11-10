@@ -1571,9 +1571,10 @@ void Process::DisableAllBreakpointSites(
     llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids) {
   m_breakpoint_site_list.ForEach([&](BreakpointSite *bp_site) -> void {
     //        bp_site->SetEnabled(true);
-    const bool was_enabled = bp_site->IsEnabled();
+    if (!bp_site->IsEnabled())
+      return;
     DisableBreakpointSite(bp_site);
-    if (disabled_site_ids && was_enabled && !bp_site->IsEnabled())
+    if (disabled_site_ids && !bp_site->IsEnabled())
       disabled_site_ids->push_back(bp_site->GetID());
   });
 }
