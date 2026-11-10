@@ -385,6 +385,10 @@ LLDBServerPluginNVGPU::CreateConnection(function_ref<Error()> before_accept) {
   if (sock) {
     GPUPluginConnectionInfo connection_info;
     connection_info.copy_cpu_breakpoints_during_attaching = true;
+    // The debugger API steps a warp that stopped at a breakpoint past it on
+    // resume, so lldb must not remove, single-step and reinsert the
+    // breakpoint itself. ProcessNVGPU ignores per-thread resume actions, and
+    // that sequence would run the kernel with the breakpoint removed.
     connection_info.should_step_over_breakpoints_on_resume = false;
     // connection_info.exe_path = "/pretend/path/to/NVGPU";
     connection_info.triple =

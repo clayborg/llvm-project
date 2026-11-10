@@ -5,4 +5,6 @@ __device__ int twice(int value) {
   return 2 * value; // breakpoint in twice
 }
 
-__global__ void add_one(int *data) { data[threadIdx.x] += 1; }
+__global__ void add_one(int *data) {
+  data[threadIdx.x] += 1; // breakpoint in add_one
+}

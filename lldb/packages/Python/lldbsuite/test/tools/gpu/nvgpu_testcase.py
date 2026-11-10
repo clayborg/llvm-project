@@ -3,7 +3,7 @@ import math
 import os
 import shutil
 import time
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import lldb
 from lldbsuite.test import configuration, lldbplatformutil, lldbutil
@@ -354,11 +354,25 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
     ) -> Optional[Dict[str, Any]]:
         """Return what `breakpoint` stops at and how, as lldb serializes it:
         its resolver, filter, options and names, but neither its ID nor its
-        locations. Return None if it does not serialize."""
+        locations. Return None if it does not serialize.
+
+        The ignore count is left out: lldb serializes it, but each hit
+        lowers it, so a copy that the GPU has hit no longer compares equal to
+        the original. The hit count is not serialized."""
         stream = lldb.SBStream()
         if not breakpoint.SerializeToStructuredData().GetAsJSON(stream).Success():
             return None
-        return json.loads(stream.GetData())
+        settings = json.loads(stream.GetData())
+        settings["Breakpoint"]["BKPTOptions"].pop("IgnoreCount", None)
+        return settings
+
+    def gpu_breakpoint(self, source: str, marker: str) -> lldb.SBBreakpoint:
+        """Set a breakpoint on the GPU target at the line of `source` that
+        contains `marker`, as `breakpoint set -f -l` does while the GPU target
+        is selected."""
+        return self.gpu_target.BreakpointCreateByLocation(
+            source, line_number(source, marker)
+        )
 
     def gpu_breakpoint_copy(self, breakpoint: lldb.SBBreakpoint) -> lldb.SBBreakpoint:
         """Return the GPU target's copy of `breakpoint`, a breakpoint set on
@@ -685,6 +699,17 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 entered = f"entered state {lldb.SBDebugger.StateAsCString(state)}"
                 if state == lldb.eStateStopped:
                     entered += self._describe_stop(process)
+            if (
+                what == "GPU"
+                and state == lldb.eStateStopped
+                and self.cpu_stops_with_gpu()
+                and self.cpu_process
+            ):
+                # lldb-server stopped the CPU with the GPU. Pull that stop
+                # before failing: tearDown kills a CPU that still looks
+                # running by interrupting it and waiting the whole interrupt
+                # timeout for a stop that is already queued.
+                self._settle_cpu(self.CPU_STOP_GRACE_SECONDS)
             self.fail(f"{what} process {entered} before {doing}")
 
     @staticmethod
@@ -1017,34 +1042,54 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         )
 
     @staticmethod
-    def _breakpoint_matcher(breakpoint: lldb.SBBreakpoint):
+    def _breakpoint_matcher(breakpoint: Union[lldb.SBBreakpoint, int]):
         """Build the (match, description) pair shared by the *_breakpoint helpers.
 
-        The match is the list of threads stopped at `breakpoint`.
+        The match is the list of threads stopped at `breakpoint`, an
+        SBBreakpoint or a breakpoint ID. A stop reports its breakpoints by ID,
+        so the ID finds the threads at a breakpoint that no longer exists, such
+        as a one-shot breakpoint after its hit.
         """
+        if isinstance(breakpoint, lldb.SBBreakpoint):
+            breakpoint_id = breakpoint.GetID()
+            description = f"at {breakpoint}"
+        else:
+            breakpoint_id = breakpoint
+            description = f"at breakpoint {breakpoint_id}"
 
         def match(process: lldb.SBProcess) -> Optional[List[lldb.SBThread]]:
-            threads = lldbutil.get_threads_stopped_at_breakpoint(process, breakpoint)
+            threads = lldbutil.get_threads_stopped_at_breakpoint_id(
+                process, breakpoint_id
+            )
             return threads or None
 
-        return match, f"at {breakpoint}"
+        return match, description
 
     def assert_gpu_stop_at_breakpoint(
-        self, breakpoint: lldb.SBBreakpoint
+        self, breakpoint: Union[lldb.SBBreakpoint, int]
     ) -> List[lldb.SBThread]:
-        """The current GPU stop must have threads stopped at `breakpoint`; return
-        them."""
+        """The current GPU stop must have threads stopped at `breakpoint`, an
+        SBBreakpoint or a breakpoint ID; return them."""
         match, description = self._breakpoint_matcher(breakpoint)
         return self.assert_gpu_stop(match, description=description)
 
+    def one_thread_at(self, breakpoint: Union[lldb.SBBreakpoint, int]) -> lldb.SBThread:
+        """The current GPU stop must have exactly one thread at `breakpoint`,
+        as at a breakpoint in a kernel of one thread or a thread-specific
+        breakpoint; return it."""
+        threads = self.assert_gpu_stop_at_breakpoint(breakpoint)
+        self.assertEqual(len(threads), 1, f"threads stopped at {breakpoint}")
+        return threads[0]
+
     def continue_gpu_until_breakpoint(
         self,
-        breakpoint: lldb.SBBreakpoint,
+        breakpoint: Union[lldb.SBBreakpoint, int],
         *,
         timeout_seconds: int = 60,
         max_continues: int = 16,
     ) -> List[lldb.SBThread]:
-        """Resume the GPU process until threads stop at `breakpoint`; return them.
+        """Resume the GPU process until threads stop at `breakpoint`, an
+        SBBreakpoint or a breakpoint ID; return them.
 
         Bounds are as in continue_gpu_until.
         """
@@ -1055,6 +1100,18 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             max_continues=max_continues,
             description=description,
         )
+
+    def reported_breakpoints(self, thread: lldb.SBThread) -> Dict[int, int]:
+        """The breakpoints that `thread`'s stop reports, as breakpoint ID to
+        the ID of the location the thread is at. A stop reports every
+        breakpoint with a location at the PC."""
+        self.assertStopReason(thread.GetStopReason(), lldb.eStopReasonBreakpoint)
+        # The stop reason data is (breakpoint ID, location ID) pairs.
+        data = [
+            thread.GetStopReasonDataAtIndex(index)
+            for index in range(thread.GetStopReasonDataCount())
+        ]
+        return dict(zip(data[0::2], data[1::2]))
 
     def for_each_thread_at_breakpoint(
         self,
@@ -1269,6 +1326,23 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
 
         self.addTearDownHook(print_unchecked)
         return collected
+
+    def packet_history(self, process: lldb.SBProcess) -> List[str]:
+        """Return the lines of `process plugin packet history` for `process`,
+        the CPU's or the GPU's: the GDB remote packets lldb has exchanged with
+        that process's lldb-server, oldest first, one `history[N]` entry per
+        packet. lldb keeps the last 512 packets of each process, so compare
+        two listings taken close together: the later one begins with the
+        earlier one unless it wrapped. There is no SB API for this; the
+        command needs the process's target selected, and the selection is
+        restored."""
+        selected = self.dbg.GetSelectedTarget()
+        self.dbg.SetSelectedTarget(process.GetTarget())
+        try:
+            self.runCmd("process plugin packet history")
+        finally:
+            self.dbg.SetSelectedTarget(selected)
+        return self.res.GetOutput().splitlines()
 
     def read_gpu_memory(
         self,

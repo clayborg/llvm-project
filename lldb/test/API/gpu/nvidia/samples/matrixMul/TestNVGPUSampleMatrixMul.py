@@ -42,13 +42,12 @@ class TestNVGPUSampleMatrixMul(MatrixMulTestCase):
         stopped = self.assert_gpu_stop_at_breakpoint(gpu_breakpoint)
         self.assert_frame_at(stopped[0].frame[0], LAUNCH_32.kernel, SOURCE, marker)
 
-        # A breakpoint stop's reason data is the breakpoint ID, then the
-        # location ID. Every thread must be at the <32> location; the frame
-        # check above shows which line that location is.
+        # Every thread must be at the <32> location; the frame check above
+        # shows which line that location is.
         def check(thread: lldb.SBThread) -> None:
             self.assertEqual(
-                thread.GetStopReasonDataAtIndex(1),
-                launched,
+                self.reported_breakpoints(thread),
+                {gpu_breakpoint.GetID(): launched},
                 f"breakpoint location {thread.GetName()} stopped at",
             )
 
