@@ -81,9 +81,7 @@ public:
     // Prefer a lane that faulted, then a fault recorded only at SM level,
     // then a trap; otherwise fall back to the first thread we created. The
     // SM-level fault ranks below a lane-level one because it carries strictly
-    // less information (an error PC but no thread coordinates or registers),
-    // matching cuda-gdb, which only consults SM exception state after finding
-    // no lane exception (`cuda-exceptions.c`).
+    // less information (an error PC but no thread coordinates or registers).
     for (lldb::tid_t tid : {m_exception_tid, m_sm_exception_tid, m_stop_tid}) {
       if (tid != LLDB_INVALID_THREAD_ID) {
         GetThreadList().SetSelectedThreadByID(tid);

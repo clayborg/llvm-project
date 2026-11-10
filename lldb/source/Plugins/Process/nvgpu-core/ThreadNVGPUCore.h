@@ -43,9 +43,7 @@ struct SMEntry;
 /// `errorPC` its single frame, which is enough to symbolicate the fault site
 /// against the loaded cubin modules. Such a thread has no lane, warp, or CTA
 /// -- those accessors return null, and register reads and address-space reads
-/// that need them fail. cuda-gdb surfaces the same state as a one-line "The
-/// exception was triggered at PC ..." diagnostic rather than a thread
-/// (`cuda-exceptions.c:print_exception_origin`).
+/// that need them fail.
 class ThreadNVGPUCore : public Thread {
 public:
   /// Construct a thread for one lane.

@@ -170,8 +170,8 @@ class TestNVGPUSampleSimplePrintf(NVGPUTestCaseBase):
     def test_kernel_line_breakpoint_does_not_stop_cpu(self):
         """A breakpoint on a kernel line, set before the program runs, stops
         the GPU but never the CPU. lldb also resolves the line in the kernel's
-        host-side stub, and disables that location once the GPU target exists,
-        as cuda-gdb creates it disabled."""
+        host-side stub, and disables that location once the GPU target
+        exists."""
         target = self.make_shared_target(EXE)
         breakpoint = target.BreakpointCreateByLocation(
             SOURCE, line_number(SOURCE, "// gpu breakpoint at printf")

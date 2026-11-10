@@ -1,10 +1,9 @@
 """
 Tests on the cuda-samples program matrixMul (see matrixmul.py), on LAUNCH_16:
 which threads lldb reports in one warp, and what stepping one GPU thread over a
-source line does to the other threads. As with cuda-gdb's `next`, only the
-stepped thread's warp should move. While every warp runs during a step, the
-step itself can also hang, and waits STEP_TIMEOUT seconds at most (see
-matrixmul.py).
+source line does to the other threads. Only the stepped thread's warp should
+move. While every warp runs during a step, the step itself can also hang, and
+waits STEP_TIMEOUT seconds at most (see matrixmul.py).
 """
 
 from typing import Tuple
@@ -77,7 +76,7 @@ class TestNVGPUSampleMatrixMulStepWarps(MatrixMulTestCase):
     def test_step_keeps_other_warps_stopped(self):
         """Stepping one thread over a source line moves its warp, the 32
         threads that run with it, and no other: the other warps stay at the
-        breakpoint, as with cuda-gdb's `next`."""
+        breakpoint."""
         breakpoint, _ = self.step_one_thread_of_all()
         # The line has a location in each instantiation of the template, and
         # the threads stopped at the one the program launches.

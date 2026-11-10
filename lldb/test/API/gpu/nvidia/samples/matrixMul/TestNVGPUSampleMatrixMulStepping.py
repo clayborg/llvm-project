@@ -1,9 +1,8 @@
 """
 Tests on the cuda-samples program matrixMul (see matrixmul.py): stepping a
 GPU thread over source lines over a barrier and around a loop, on LAUNCH_16.
-simpleCooperativeGroups tests a step over plain lines. The expected behavior
-is cuda-gdb's `next`. A step here can hang, and waits STEP_TIMEOUT seconds at
-most (see matrixmul.py).
+simpleCooperativeGroups tests a step over plain lines. A step here can hang,
+and waits STEP_TIMEOUT seconds at most (see matrixmul.py).
 """
 
 from lldbsuite.test.decorators import expectedFailureAll

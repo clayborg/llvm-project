@@ -8,9 +8,9 @@ in for it with a lane-less thread whose single frame is the SM's error PC (see
 `ThreadNVGPUCore`), which is what turns an otherwise threadless core into one
 that names the fault and its location.
 
-The live equivalent is the cuda-gdb testsuite's bug4247218, which races
-cudaDeviceSynchronize() against context destruction; an artificial core
-reproduces the resulting state deterministically and without a GPU.
+A live program reaches this state by racing cudaDeviceSynchronize() against
+context destruction; an artificial core reproduces it deterministically and
+without a GPU.
 """
 
 import json
@@ -248,8 +248,8 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
         )
 
     def test_matches_a_real_exited_kernel_core(self):
-        """Reproduce the section shape of a real dump -- the one the cuda-gdb
-        bug4247218 test leaves behind -- and check the stand-in survives it.
+        """Reproduce the section shape of a real dump of this state, and check
+        the stand-in survives it.
 
         A real producer differs from the minimal cores above in three ways
         that all touch this feature: the CUDA context outlives the kernel, the
@@ -379,9 +379,7 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
     def test_lane_exception_outranks_sm_exception(self):
         """Both fault kinds in one core: each gets its own thread, but the
         faulting lane is selected because it carries thread coordinates and
-        registers that the SM-level stand-in cannot. This is the order
-        cuda-gdb uses, which only consults SM state after finding no lane
-        exception."""
+        registers that the SM-level stand-in cannot."""
         b, dev = self._builder(with_grid=True)
         b.add_sm(
             dev, sm_id=0, exception=self.DEVICE_ILLEGAL_ADDRESS,

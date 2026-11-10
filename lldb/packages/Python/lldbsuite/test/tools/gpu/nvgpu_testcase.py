@@ -444,9 +444,9 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         host-side stub, which stops the CPU after it launches the kernel.
         """
         # TODO: lldb should not stop the CPU in a kernel's host-side stub for a
-        # breakpoint on a line of the kernel, as cuda-gdb does not. Once it
-        # does not, a kernel's line works here too: drop the note above and
-        # nvgpu-support.rst's advice to mark a line the CPU never runs.
+        # breakpoint on a line of the kernel. Once it does not, a kernel's line
+        # works here too: drop the note above and nvgpu-support.rst's advice to
+        # mark a line the CPU never runs.
         if target is None:
             exe_name = exe_name or "a.out"
             target = lldbutil.run_to_breakpoint_make_target(
