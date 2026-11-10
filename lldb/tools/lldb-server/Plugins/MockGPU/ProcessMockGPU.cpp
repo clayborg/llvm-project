@@ -9,13 +9,13 @@
 #include "ProcessMockGPU.h"
 #include "ThreadMockGPU.h"
 
+#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "llvm/Support/Error.h"
-#include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-
+#include "llvm/Support/Process.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -39,6 +39,12 @@ Status ProcessMockGPU::Halt() {
 }
 
 Status ProcessMockGPU::Detach() {
+  // Lets a test make the first detach fail.
+  if (!m_detach_failed &&
+      llvm::sys::Process::GetEnv("LLDB_MOCK_GPU_FAIL_DETACH")) {
+    m_detach_failed = true;
+    return Status::FromErrorString("the mock GPU process does not detach");
+  }
   SetState(StateType::eStateDetached, true);
   return Status();
 }

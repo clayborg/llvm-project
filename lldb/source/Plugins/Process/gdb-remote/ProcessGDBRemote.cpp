@@ -3034,6 +3034,14 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDetach(keep_stopped: %i)", keep_stopped);
 
+  // The GPU processes are detached first, and stay stopped if this process
+  // does. If this process cannot stay stopped, its detach is about to fail,
+  // so they stay attached. If one does not detach, this process stays
+  // attached too, so that the detach can be tried again.
+  if (!keep_stopped || m_gdb_comm.GetSupportsDetachAndStayStopped())
+    if (llvm::Error err = DetachGPUPluginTargets(keep_stopped))
+      return Status::FromError(std::move(err));
+
   error = m_gdb_comm.Detach(keep_stopped);
   if (log) {
     if (error.Success())
@@ -3056,6 +3064,21 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
 
   // KillDebugserverProcess ();
   return error;
+}
+
+llvm::Error ProcessGDBRemote::DetachGPUPluginTargets(bool keep_stopped) {
+  for (const TargetSP &gpu_target_sp : GetTarget().GetGPUPluginTargets()) {
+    ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
+    if (!gpu_process_sp || !gpu_process_sp->IsAlive())
+      continue;
+    Status error = gpu_process_sp->Detach(keep_stopped);
+    if (error.Fail())
+      return llvm::createStringError(
+          llvm::formatv("could not detach from GPU process {0}: {1}",
+                        gpu_process_sp->GetID(), error)
+              .str());
+  }
+  return llvm::Error::success();
 }
 
 Status ProcessGDBRemote::DoDestroy() {

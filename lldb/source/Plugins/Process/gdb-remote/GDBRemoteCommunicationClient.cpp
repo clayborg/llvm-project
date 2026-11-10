@@ -1738,6 +1738,19 @@ bool GDBRemoteCommunicationClient::DeallocateMemory(addr_t addr) {
   return false;
 }
 
+bool GDBRemoteCommunicationClient::GetSupportsDetachAndStayStopped() {
+  if (m_supports_detach_stay_stopped == eLazyBoolCalculate) {
+    StringExtractorGDBRemote response;
+    if (SendPacketAndWaitForResponse("qSupportsDetachAndStayStopped:",
+                                     response) == PacketResult::Success &&
+        response.IsOKResponse())
+      m_supports_detach_stay_stopped = eLazyBoolYes;
+    else
+      m_supports_detach_stay_stopped = eLazyBoolNo;
+  }
+  return m_supports_detach_stay_stopped == eLazyBoolYes;
+}
+
 Status GDBRemoteCommunicationClient::Detach(bool keep_stopped,
                                             lldb::pid_t pid) {
   Status error;
@@ -1745,29 +1758,12 @@ Status GDBRemoteCommunicationClient::Detach(bool keep_stopped,
 
   packet.PutChar('D');
   if (keep_stopped) {
-    if (m_supports_detach_stay_stopped == eLazyBoolCalculate) {
-      char packet[64];
-      const int packet_len =
-          ::snprintf(packet, sizeof(packet), "qSupportsDetachAndStayStopped:");
-      assert(packet_len < (int)sizeof(packet));
-      UNUSED_IF_ASSERT_DISABLED(packet_len);
-      StringExtractorGDBRemote response;
-      if (SendPacketAndWaitForResponse(packet, response) ==
-              PacketResult::Success &&
-          response.IsOKResponse()) {
-        m_supports_detach_stay_stopped = eLazyBoolYes;
-      } else {
-        m_supports_detach_stay_stopped = eLazyBoolNo;
-      }
-    }
-
-    if (m_supports_detach_stay_stopped == eLazyBoolNo) {
+    if (!GetSupportsDetachAndStayStopped()) {
       error = Status::FromErrorString(
           "Stays stopped not supported by this target.");
       return error;
-    } else {
-      packet.PutChar('1');
     }
+    packet.PutChar('1');
   }
 
   if (GetMultiprocessSupported()) {
@@ -1788,6 +1784,8 @@ Status GDBRemoteCommunicationClient::Detach(bool keep_stopped,
       SendPacketAndWaitForResponse(packet.GetString(), response);
   if (packet_result != PacketResult::Success)
     error = Status::FromErrorString("Sending disconnect packet failed.");
+  else if (response.IsErrorResponse())
+    error = response.GetStatus();
   return error;
 }
 

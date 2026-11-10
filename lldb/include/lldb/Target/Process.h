@@ -2381,7 +2381,14 @@ public:
   const StopPointSiteList<lldb_private::BreakpointSite> &
   GetBreakpointSiteList() const;
 
-  void DisableAllBreakpointSites();
+  /// Disable all the breakpoint sites.
+  ///
+  /// \param[out] disabled_site_ids
+  ///     If not null, receives the IDs of the sites that this disabled, not
+  ///     those that were disabled already, so that a caller can enable just
+  ///     these again.
+  void DisableAllBreakpointSites(
+      std::vector<lldb::break_id_t> *disabled_site_ids = nullptr);
 
   Status ClearBreakpointSiteByID(lldb::user_id_t break_id);
 

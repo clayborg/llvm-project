@@ -529,6 +529,21 @@ private:
   /// yet in \a modules, and send each plug-in the ones that have resolved.
   void DeliverPendingGPUSymbols(const ModuleList &modules);
 
+  /// Detach from the processes of this target's GPU plugin targets, before
+  /// this process detaches: a GPU plug-in may have to undo what it set up
+  /// while lldb-server still traces this process, and lldb does not hear when
+  /// a stopped GPU process ends once this one has gone.
+  ///
+  /// \param[in] keep_stopped
+  ///     Whether the GPU processes stay stopped, like this process. A GPU
+  ///     process whose GDB server cannot keep it stopped does not detach.
+  ///
+  /// \return
+  ///     An error if a GPU process did not detach, in which case this process
+  ///     must not detach either, or it would leave that GPU process stopped
+  ///     without a debugger.
+  llvm::Error DetachGPUPluginTargets(bool keep_stopped);
+
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
   void HandleAsyncMisc(llvm::StringRef data) override;

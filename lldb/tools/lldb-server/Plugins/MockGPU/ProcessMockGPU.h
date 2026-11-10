@@ -22,6 +22,7 @@ class ProcessMockGPU : public NativeProcessProtocol {
   // TODO: change NativeProcessProtocol::GetArchitecture() to return by value
   mutable ArchSpec m_arch;
   ProcessInstanceInfo m_process_info;
+  bool m_detach_failed = false;
 
 public:
 

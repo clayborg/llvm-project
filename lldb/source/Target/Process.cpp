@@ -12,6 +12,7 @@
 #include <optional>
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/Threading.h"
 
@@ -1566,10 +1567,15 @@ Process::GetBreakpointSiteList() const {
   return m_breakpoint_site_list;
 }
 
-void Process::DisableAllBreakpointSites() {
-  m_breakpoint_site_list.ForEach([this](BreakpointSite *bp_site) -> void {
+void Process::DisableAllBreakpointSites(
+    std::vector<lldb::break_id_t> *disabled_site_ids) {
+  m_breakpoint_site_list.ForEach([&](BreakpointSite *bp_site) -> void {
     //        bp_site->SetEnabled(true);
+    if (!bp_site->IsEnabled())
+      return;
     DisableBreakpointSite(bp_site);
+    if (disabled_site_ids && !bp_site->IsEnabled())
+      disabled_site_ids->push_back(bp_site->GetID());
   });
 }
 
@@ -3596,13 +3602,35 @@ Status Process::Detach(bool keep_stopped) {
     }
 
     m_thread_list.DiscardThreadPlans();
-    DisableAllBreakpointSites();
+    std::vector<lldb::break_id_t> disabled_site_ids;
+    disabled_site_ids.reserve(m_breakpoint_site_list.GetSize());
+    DisableAllBreakpointSites(&disabled_site_ids);
 
     error = DoDetach(keep_stopped);
     if (error.Success()) {
       DidDetach();
       StopPrivateStateThread();
     } else {
+      // The process stays attached, so it needs its breakpoints back. A site
+      // can go away while the process detaches, so each is found by its ID.
+      for (lldb::break_id_t site_id : disabled_site_ids) {
+        BreakpointSiteSP bp_site_sp = m_breakpoint_site_list.FindByID(site_id);
+        if (!bp_site_sp || bp_site_sp->IsEnabled())
+          continue;
+        Status enable_error = EnableBreakpointSite(bp_site_sp.get());
+        if (enable_error.Success())
+          continue;
+        StreamString locations;
+        bp_site_sp->GetDescription(&locations, eDescriptionLevelBrief);
+        Debugger::ReportWarning(
+            llvm::formatv("failed to set breakpoint {0} at {1:x} again after "
+                          "the detach failed: {2}",
+                          locations.GetString(), bp_site_sp->GetLoadAddress(),
+                          enable_error)
+                .str(),
+            GetTarget().GetDebugger().GetID());
+      }
+      m_destroy_in_process = false;
       return error;
     }
   }
