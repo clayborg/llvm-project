@@ -135,6 +135,36 @@ class TestNVGPUBreakpointStops(BreakpointBehaviorsTestCase):
         self.finish()
 
     @expectedFailureAll(
+        "a continue drops the thread selection, and the next stop selects the "
+        "first thread at the breakpoint"
+    )
+    def test_selected_thread_stays_selected_at_the_next_stop(self):
+        """The GPU thread a user selects, as `thread select --threadidx` does,
+        is still the selected thread at the next stop when it stopped there
+        too. reduce's one warp stops at the partner-read line with all 32
+        threads in each iteration of its loop."""
+        self.start()
+        breakpoint = self.gpu_breakpoint(SOURCE, "// partner read")
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        self.for_each_thread_at_breakpoint(
+            breakpoint, WARP, self.width_check(WIDTHS[0])
+        )
+        chosen = self.thread_coords(self.select_gpu_thread(threadidx=[7]))
+        threads = self.continue_gpu_until_breakpoint(breakpoint)
+        self.assertIn(
+            chosen,
+            [self.thread_coords(thread) for thread in threads],
+            "threads at the breakpoint at the next stop",
+        )
+        self.assertEqual(
+            self.thread_coords(self.gpu_process.GetSelectedThread()),
+            chosen,
+            "the selected thread at the next stop",
+        )
+        self.gpu_target.BreakpointDelete(breakpoint.GetID())
+        self.finish()
+
+    @expectedFailureAll(
         "lldb checks a breakpoint's ignore count once per thread, so at the warp's "
         "first stop a count of 1 is used up by one of the 32 threads and the warp "
         "stops there with every thread reporting the breakpoint"

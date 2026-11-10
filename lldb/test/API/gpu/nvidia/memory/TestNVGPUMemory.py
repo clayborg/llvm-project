@@ -1,5 +1,6 @@
 import lldb
 from lldbsuite.test import lldbutil
+from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -47,3 +48,32 @@ class TestNVGPUMemory(NVGPUTestCaseBase):
                 "0x0000000c 0x0000000d 0x0000000e 0x0000000f",
             ],
         )
+
+    @expectedFailureAll(
+        "a read in a named address space returns only what fits in one "
+        "memory-read packet, and reports success"
+    )
+    def test_read_larger_than_one_packet(self):
+        """A read of global memory that is larger than one memory-read packet
+        returns all of it, as `memory read -p global` of a large buffer asks
+        for. The same read with no address space does."""
+        self.build()
+        source = "memory.cu"
+        _, _, thread, _ = self.run_to_cpu_line(source, "// big buffer filled")
+        address = thread.frame[0].FindVariable("d_big").GetValueAsAddress()
+        # Memory is read at a GPU stop: the kernel's fault.
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+
+        # What the program wrote, see memory.cu.
+        size = 1 << 20
+        expected = bytes(i % 251 for i in range(size))
+
+        error = lldb.SBError()
+        data = self.gpu_process.ReadMemory(address, size, error)
+        self.assertSuccess(error, f"reading {size} bytes with no address space")
+        self.assertEqual(len(data), size, "bytes read with no address space")
+        self.assertTrue(data == expected, "the bytes read with no address space")
+
+        data = self.read_gpu_memory(address, "global", size)
+        self.assertEqual(len(data), size, "bytes read from the global space")
+        self.assertTrue(data == expected, "the bytes read from the global space")

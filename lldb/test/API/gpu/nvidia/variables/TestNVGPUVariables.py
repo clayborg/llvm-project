@@ -3,6 +3,7 @@ Test reading the variables of a stopped GPU thread.
 """
 
 import lldb
+from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -48,4 +49,23 @@ class TestNVGPUVariables(NVGPUTestCaseBase):
         self.assert_int_variable(frame, "index", index)
         self.assert_int_variable(frame, "total", 3 * index + 10)
 
+        self.continue_gpu_to_exit()
+
+    @expectedFailureAll("expressions cannot read a variable that is in local memory")
+    def test_expressions_read_local_memory_variables(self):
+        """Expressions, which `p` and `expr` evaluate, read a variable that is
+        in a thread's local memory, such as an array, as `frame variable`
+        does."""
+        self.build()
+        self.run_to_cpu_line(SOURCE, "// cpu breakpoint before launch")
+        breakpoint = self.gpu_breakpoint(SOURCE, "// breakpoint in accumulate")
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        frame = self.assert_gpu_stop_at_breakpoint(breakpoint)[0].GetFrameAtIndex(0)
+        self.assert_int_variable(frame, "steps[2]", 3)
+        for expression, expected in (("steps[2]", 3), ("steps[0] + steps[3]", 5)):
+            self.assertEqual(
+                self.evaluate_expression(frame, expression).GetValueAsSigned(),
+                expected,
+                expression,
+            )
         self.continue_gpu_to_exit()

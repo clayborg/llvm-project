@@ -186,10 +186,8 @@ llvm::Error PlatformNVGPU::LocationToValue(RegisterContext *reg_ctx,
     RegisterValue reg_value;
     llvm::Error error = reg_ctx->ReadRegister(reg_kind, location, reg_value);
 
-    if (error) {
-      return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                     "failed to read register");
-    }
+    if (error)
+      return error;
 
     if (!reg_value.GetScalarValue(value.GetScalar())) {
       return llvm::createStringError(

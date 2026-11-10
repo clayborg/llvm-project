@@ -6,8 +6,10 @@ __device__ __noinline__ int triple(int value) {
 __global__ void accumulate(int *totals) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int total = triple(index);
-  for (int step = 1; step <= 4; ++step)
-    total += step;
+  // An array is in local memory, not in registers.
+  int steps[4] = {1, 2, 3, 4};
+  for (int i = 0; i < 4; ++i)
+    total += steps[i];
   totals[index] = total; // breakpoint in accumulate
 }
 
