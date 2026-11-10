@@ -1568,7 +1568,7 @@ Process::GetBreakpointSiteList() const {
 }
 
 void Process::DisableAllBreakpointSites(
-    llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids) {
+    std::vector<lldb::break_id_t> *disabled_site_ids) {
   m_breakpoint_site_list.ForEach([&](BreakpointSite *bp_site) -> void {
     //        bp_site->SetEnabled(true);
     if (!bp_site->IsEnabled())
@@ -3602,7 +3602,8 @@ Status Process::Detach(bool keep_stopped) {
     }
 
     m_thread_list.DiscardThreadPlans();
-    llvm::SmallVector<lldb::break_id_t> disabled_site_ids;
+    std::vector<lldb::break_id_t> disabled_site_ids;
+    disabled_site_ids.reserve(m_breakpoint_site_list.GetSize());
     DisableAllBreakpointSites(&disabled_site_ids);
 
     error = DoDetach(keep_stopped);

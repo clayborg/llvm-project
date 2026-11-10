@@ -62,7 +62,6 @@
 
 #include "llvm/ADT/AddressRanges.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/VersionTuple.h"
@@ -2389,7 +2388,7 @@ public:
   ///     those that were disabled already, so that a caller can enable just
   ///     these again.
   void DisableAllBreakpointSites(
-      llvm::SmallVectorImpl<lldb::break_id_t> *disabled_site_ids = nullptr);
+      std::vector<lldb::break_id_t> *disabled_site_ids = nullptr);
 
   Status ClearBreakpointSiteByID(lldb::user_id_t break_id);
 
