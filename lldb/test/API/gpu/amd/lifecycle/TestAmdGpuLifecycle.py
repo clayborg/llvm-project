@@ -44,21 +44,17 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
 
         self.continue_cpu_to_exit(listener)
 
-    def test_gpu_kill_fails(self):
-        """Test that killing the GPU process fails, since the CPU process owns
-        the program, and that deleting the GPU target still resumes the stopped
-        waves."""
+    def test_gpu_kill_detaches(self):
+        """Test that killing the GPU process detaches from it instead, as the
+        AMD GPU plug-in asks, since the CPU process owns the program. The detach
+        resumes the stopped waves."""
         listener = self.stop_at_gpu_breakpoint()
 
         gpu_process = self.gpu_process
-        self.assertFailure(
-            gpu_process.Kill(),
-            "cannot kill a GPU process; select the CPU target and kill its "
-            "process instead",
-        )
-        self.assertState(gpu_process.GetState(), lldb.eStateStopped)
+        self.assertSuccess(gpu_process.Kill())
+        self.assertState(gpu_process.GetState(), lldb.eStateDetached)
+        self.assertState(self.cpu_process.GetState(), lldb.eStateStopped)
 
-        self.assertTrue(self.dbg.DeleteTarget(self.gpu_target))
         self.continue_cpu_to_exit(listener)
 
     def test_cpu_kill_detaches_gpu(self):
