@@ -296,6 +296,11 @@ public:
 
   llvm::Expected<bool> SaveCore(llvm::StringRef outfile) override;
 
+  /// Set the name of the GPU plug-in whose process this is.
+  void SetGPUPluginName(llvm::StringRef name) {
+    m_gpu_plugin_name = name.str();
+  }
+
 protected:
   friend class ThreadGDBRemote;
   friend class GDBRemoteCommunicationClient;
@@ -612,6 +617,10 @@ private:
   /// Names of the symbols each GPU plug-in requested that have not resolved
   /// yet, keyed by plug-in name.
   llvm::StringMap<std::vector<std::string>> m_pending_gpu_symbols;
+
+  /// For the process of a GPU plugin target, the name of its GPU plug-in.
+  /// Empty for any other process.
+  std::string m_gpu_plugin_name;
 };
 
 } // namespace process_gdb_remote
