@@ -1191,6 +1191,10 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
                 "created process");
   // Set the session name on the GPU target so it can be retrieved later
   gpu_target_sp->SetTargetSessionName(gpu_action.session_name);
+  // Tell the new GPU process its plug-in's name. ConnectProcess() made it with
+  // this plug-in, so it is a ProcessGDBRemote.
+  std::static_pointer_cast<ProcessGDBRemote>(process_sp)
+      ->SetGPUPluginName(gpu_action.plugin_name);
   // Broadcast the target creation event so DAP can create a child session
   auto event_sp = std::make_shared<Event>(
       Target::eBroadcastBitNewTargetCreated,
