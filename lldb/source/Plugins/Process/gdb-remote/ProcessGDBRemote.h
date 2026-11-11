@@ -155,8 +155,6 @@ public:
 
   Status DoSignal(int signal) override;
 
-  Status WillDestroy() override;
-
   Status DoDestroy() override;
 
   void RefreshStateAfterStop() override;
@@ -555,6 +553,11 @@ private:
   ///     must not detach either, or it would leave that GPU process stopped
   ///     without a debugger.
   llvm::Error DetachGPUPluginTargets(bool keep_stopped);
+
+  /// Kill the processes of this target's GPU plugin targets, before this
+  /// process is killed. A GPU plug-in can ask lldb to detach from its GPU
+  /// process instead, with LLDBSettings::kill_should_detach.
+  llvm::Error KillGPUPluginTargets();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
