@@ -93,6 +93,15 @@ public:
   /// Clean up expired event threads from the collection.
   void ReleaseExpiredEventThreads();
 
+  /// Increment the number of DAP sessions that use \a debugger. A GPU child
+  /// session uses the debugger of the session that started it.
+  void IncrementDebuggerSessionCount(lldb::SBDebugger debugger);
+
+  /// Decrement the number of DAP sessions that use \a debugger, and return the
+  /// new number. A session does this when it ends, after it stops using the
+  /// shared event thread, which reads the debugger's events.
+  unsigned DecrementDebuggerSessionCount(lldb::SBDebugger debugger);
+
 private:
   DAPSessionManager() = default;
   ~DAPSessionManager() = default;
@@ -112,6 +121,9 @@ private:
   /// share the same debugger instance.
   std::map<lldb::user_id_t, std::weak_ptr<ManagedEventThread>>
       m_debugger_event_threads;
+
+  /// Map from debugger ID to the number of DAP sessions that use it.
+  std::map<lldb::user_id_t, unsigned> m_debugger_session_counts;
 };
 
 } // namespace lldb_dap

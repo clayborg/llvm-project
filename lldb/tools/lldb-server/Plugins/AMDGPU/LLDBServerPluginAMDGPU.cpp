@@ -683,6 +683,8 @@ std::optional<LLDBSettings> LLDBServerPluginAMDGPU::GetLLDBSettings() {
   settings.gpu_plugin_name = GetPluginName();
   settings.dyld_plugin_name = "gdb-remote-gpu";
   settings.send_dyld_packet_to_gpu = false;
+  // If the user tries to kill the GPU process, it should detach instead.
+  settings.kill_should_detach = true;
   return settings;
 }
 

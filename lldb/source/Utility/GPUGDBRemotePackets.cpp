@@ -93,7 +93,8 @@ bool fromJSON(const llvm::json::Value &value, LLDBSettings &data,
          o.map("dyld_plugin_name", data.dyld_plugin_name) &&
          o.map("gpu_plugin_name", data.gpu_plugin_name) && 
          o.map("send_dyld_packet_to_gpu",
-               data.send_dyld_packet_to_gpu);
+               data.send_dyld_packet_to_gpu) &&
+         o.mapOptional("kill_should_detach", data.kill_should_detach);
 }
 
 llvm::json::Value toJSON(const LLDBSettings &data) {
@@ -102,6 +103,7 @@ llvm::json::Value toJSON(const LLDBSettings &data) {
       {"gpu_plugin_name", data.gpu_plugin_name},
       {"send_dyld_packet_to_gpu",
        data.send_dyld_packet_to_gpu},
+      {"kill_should_detach", data.kill_should_detach},
   });
 }
 
