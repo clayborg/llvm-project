@@ -196,6 +196,12 @@ Status ProcessAMDGPU::Halt() {
 }
 
 Status ProcessAMDGPU::Detach() {
+  // Detaching from the AMD debug library resumes every stopped wave, as
+  // ROCgdb's detach does. The native process stays under the debugger.
+  if (llvm::Error err = RunAmdDbgApiCommand(
+          [&] { return amd_dbgapi_process_detach(GetDbgApiProcessID()); }))
+    return Status::FromError(std::move(err));
+  m_debugger->GpuProcessDidDetach();
   SetState(StateType::eStateDetached, true);
   return Status();
 }
@@ -809,6 +815,12 @@ bool ProcessAMDGPU::handleDebugEvent(amd_dbgapi_event_id_t eventId,
     amd_dbgapi_event_processed(eventId);
 
   return result;
+}
+
+Status ProcessAMDGPU::StopWavesAfterAttach() {
+  // The waves were running, so stop them as an interrupt would.
+  SetState(StateType::eStateRunning, true);
+  return Interrupt();
 }
 
 void ProcessAMDGPU::UpdateThreadListFromWaves() {

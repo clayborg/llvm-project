@@ -244,6 +244,8 @@ public:
   // Override DidExit so we can disconnect from the remote GDB server
   void DidExit() override;
 
+  bool SetExitStatus(int exit_status, llvm::StringRef exit_string) override;
+
   void SetUserSpecifiedMaxMemoryTransferSize(uint64_t user_specified_max);
 
   bool GetModuleSpec(const FileSpec &module_file_spec, const ArchSpec &arch,
@@ -518,6 +520,11 @@ private:
 
   Status HandleConnectionRequest(const GPUActions &gpu_action);
 
+  /// Disable the breakpoints that HandleGPUBreakpoints() set in this process
+  /// for the GPU plug-in \a gpu_plugin_name. The plug-in's GPU process calls
+  /// this once it has detached, as the plug-in no longer needs them.
+  void GPUProcessWillDestroy(llvm::StringRef gpu_plugin_name);
+
   Status HandleGPUActions(const GPUActions &gpu_action);
 
   /// Look up \a symbol_names in \a modules, and set each entry of
@@ -548,6 +555,11 @@ private:
   ///     must not detach either, or it would leave that GPU process stopped
   ///     without a debugger.
   llvm::Error DetachGPUPluginTargets(bool keep_stopped);
+
+  /// Kill the processes of this target's GPU plugin targets, before this
+  /// process is killed. A GPU plug-in can ask lldb to detach from its GPU
+  /// process instead, with LLDBSettings::kill_should_detach.
+  llvm::Error KillGPUPluginTargets();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
@@ -621,6 +633,10 @@ private:
   /// For the process of a GPU plugin target, the name of its GPU plug-in.
   /// Empty for any other process.
   std::string m_gpu_plugin_name;
+
+  /// The IDs of the breakpoints that HandleGPUBreakpoints() set for each GPU
+  /// plug-in, keyed by plug-in name.
+  llvm::StringMap<std::vector<lldb::break_id_t>> m_gpu_plugin_breakpoints;
 };
 
 } // namespace process_gdb_remote

@@ -73,6 +73,14 @@ llvm::StringRef LLDBServerPluginMockGPU::GetPluginName() {
   return "mock-gpu";
 }
 
+std::optional<LLDBSettings> LLDBServerPluginMockGPU::GetLLDBSettings() {
+  std::optional<LLDBSettings> settings = LLDBServerPlugin::GetLLDBSettings();
+  // Like the AMD plug-in, detach instead when the user tries to kill the GPU
+  // process.
+  settings->kill_should_detach = true;
+  return settings;
+}
+
 void LLDBServerPluginMockGPU::CloseFDs() {
   if (m_fds[0] != -1) {
     close(m_fds[0]);

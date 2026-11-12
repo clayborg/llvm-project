@@ -311,6 +311,44 @@ Status LLDBServerPluginAMDGPU::DetachAmdDbgApi() {
   return Status();
 }
 
+void LLDBServerPluginAMDGPU::DetachAndExitGPUProcess() {
+  if (m_amd_dbg_api_state != AmdDbgApiState::Attached &&
+      m_amd_dbg_api_state != AmdDbgApiState::RuntimeLoaded)
+    return;
+  // A GPU process that lldb detached from the library is gone from the GDB
+  // server.
+  if (ProcessAMDGPU *gpu_process = GetGPUProcess()) {
+    if (Status error = gpu_process->Detach(); error.Fail()) {
+      LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s: %s", __FUNCTION__,
+                error.AsCString());
+      SetErrorState();
+      return;
+    }
+    gpu_process->HandleNativeProcessExit(WaitStatus(WaitStatus::Exit, 0));
+  }
+  m_gpu_internal_bp.reset();
+  m_wait_for_gpu_internal_bp_stop = false;
+  m_amd_dbg_api_state = AmdDbgApiState::Detached;
+}
+
+void LLDBServerPluginAMDGPU::NativeProcessDidExec(
+    NativeProcessProtocol &process) {
+  // The GPU code and breakpoints went away with the old program image. Like
+  // ROCgdb, detach from the AMD debug library, which is all that it allows
+  // after an exec, end the GPU process, and attach to the new image at its
+  // exec stop.
+  DetachAndExitGPUProcess();
+  if (m_amd_dbg_api_state == AmdDbgApiState::Detached)
+    m_amd_dbg_api_state = AmdDbgApiState::Initialized;
+}
+
+void LLDBServerPluginAMDGPU::ClientDidDisconnect() {
+  // Let the GPU process of a new program image connect.
+  std::lock_guard<std::mutex> guard(m_connect_mutex);
+  m_is_connected = false;
+  m_is_listening = false;
+}
+
 void LLDBServerPluginAMDGPU::HandleNotifierDataReady() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOG(log, "{}: m_notifier_fd data is ready", __FUNCTION__);
@@ -491,6 +529,20 @@ GPUActions LLDBServerPluginAMDGPU::SetConnectionInfo() {
   return actions;
 }
 
+GPUActions LLDBServerPluginAMDGPU::ConnectAfterAttach() {
+  ProcessAMDGPU *gpu_process = GetGPUProcess();
+  // The library reports changes to the code object list, not the code objects
+  // loaded before the attach, so handle those as a change.
+  gpu_process->handleDebugEvent(AMD_DBGAPI_EVENT_NONE,
+                                AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED);
+  if (Status error = gpu_process->StopWavesAfterAttach(); error.Fail())
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s: failed to stop the waves: %s",
+              __FUNCTION__, error.AsCString());
+  GPUActions actions = SetConnectionInfo();
+  actions.load_libraries = gpu_process->HasDyldChangesToReport();
+  return actions;
+}
+
 GPUActions LLDBServerPluginAMDGPU::SetGpuLoaderBreakpointByAddress() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGF(log, "%s Requesting gpu breakpoint at 0x%p", __FUNCTION__,
@@ -524,6 +576,12 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                 error.AsCString());
       return std::nullopt;
     }
+    // A program that ran before the debugger attached loaded its runtime and
+    // code objects already, so the loader breakpoint that creates the GPU
+    // connection is not hit for them. Like ROCgdb, take the code objects and
+    // stop the waves now.
+    if (m_amd_dbg_api_state == AmdDbgApiState::RuntimeLoaded)
+      return ConnectAfterAttach();
   }
 
   if (ReadyToSetGpuLoaderBreakpointByAddress()) {
@@ -683,6 +741,8 @@ std::optional<LLDBSettings> LLDBServerPluginAMDGPU::GetLLDBSettings() {
   settings.gpu_plugin_name = GetPluginName();
   settings.dyld_plugin_name = "gdb-remote-gpu";
   settings.send_dyld_packet_to_gpu = false;
+  // If the user tries to kill the GPU process, it should detach instead.
+  settings.kill_should_detach = true;
   return settings;
 }
 

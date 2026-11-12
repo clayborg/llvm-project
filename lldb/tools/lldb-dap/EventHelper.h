@@ -56,7 +56,7 @@ void EventThread(lldb::SBDebugger debugger, lldb::SBBroadcaster broadcaster,
 /// Event handler functions called by EventThread.
 /// These handlers extract the necessary objects from events and find the
 /// appropriate DAP instance to handle them.
-void HandleProcessEvent(const lldb::SBEvent &event, bool &done, Log *log);
+void HandleProcessEvent(const lldb::SBEvent &event, Log *log);
 void HandleTargetEvent(const lldb::SBEvent &event, Log *log);
 void HandleBreakpointEvent(const lldb::SBEvent &event, Log *log);
 void HandleThreadEvent(const lldb::SBEvent &event, Log *log);

@@ -203,6 +203,76 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
 
         self.runCmd("target switch cpu")
         self.assertTrue(self.dbg.GetSelectedTarget() == self.cpu_target)
+
+    def test_mock_gpu_program_exit_exits_gpu(self):
+        """Test that the GPU process exits when the CPU process does."""
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        gpu_process = self.gpu_process
+        cpu_process = self.cpu_process
+        self.assertSuccess(cpu_process.Continue())
+        self.assertState(cpu_process.GetState(), lldb.eStateExited)
+        self.wait_for_exit(gpu_process)
+        # The GPU process exits with the status of the CPU process.
+        self.assertEqual(gpu_process.GetExitStatus(), 0)
+
+    def test_mock_gpu_rerun_reuses_gpu_target(self):
+        """
+        Test that running the program again connects the new GPU process to
+        the GPU target of the first run. The target keeps the breakpoints set
+        on it, and doesn't get a second copy of the CPU breakpoints.
+        """
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        gpu_target = self.gpu_target
+        gpu_target.BreakpointCreateByName("gpu_kernel")
+        num_gpu_bkpts = gpu_target.GetNumBreakpoints()
+        first_gpu_process_id = self.gpu_process.GetUniqueID()
+
+        self.assertSuccess(self.cpu_process.Kill())
+        process = self.cpu_target.LaunchSimple(
+            None, None, self.get_process_working_directory()
+        )
+        self.assertState(process.GetState(), lldb.eStateStopped)
+        lldbutil.continue_to_source_breakpoint(
+            self, process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        self.assertEqual(self.dbg.GetNumTargets(), 2)
+        self.assertTrue(self.gpu_target == gpu_target)
+        self.assertEqual(gpu_target.GetNumBreakpoints(), num_gpu_bkpts)
+        self.assertNotEqual(self.gpu_process.GetUniqueID(), first_gpu_process_id)
+
+    def test_mock_gpu_target_delete_keeps_cpu_process(self):
+        """
+        Test that deleting the GPU target leaves the CPU target running and no
+        longer paired with it.
+        """
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        # Another reference, such as lldb-dap's, can keep a deleted target
+        # alive, so the CPU target has to forget it.
+        held = lldb.SBTarget(self.gpu_target)
+        self.assertTrue(self.dbg.DeleteTarget(self.gpu_target))
+        self.assertFalse(held.IsValid())
+        self.assertEqual(self.dbg.GetNumTargets(), 1)
+        self.select_cpu()
+        self.expect("target switch", error=True, substrs=["No GPU targets found."])
+
+        cpu_process = self.cpu_process
+        self.assertSuccess(cpu_process.Continue())
+        self.assertState(cpu_process.GetState(), lldb.eStateExited)
+        self.assertEqual(cpu_process.GetExitStatus(), 0)
+
     def test_mock_gpu_first_breakpoint_hit(self):
         """
         Test that we can hit the first breakpoint on the cpu target,
