@@ -974,6 +974,9 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
   if (!thread.GetIsActive())
     response.PutCString("inactive:1;");
 
+  if (thread.GetImplicitlyResumed())
+    response.PutCString("implicitly_resumed:1;");
+
   // Include the thread name if there is one.
   const std::string thread_name = thread.GetName();
   if (!thread_name.empty()) {
@@ -1014,9 +1017,8 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
     // actually have stop reasons. We use the new "jstopinfo" key whose values
     // is hex ascii JSON that contains the thread IDs thread stop info only for
     // threads that have stop reasons. Only send this if we have more than one
-    // thread otherwise this packet has all the info it needs, unless the
-    // thread was implicitly resumed, which only jstopinfo can say.
-    if (thread_num > 1 || thread.GetImplicitlyResumed()) {
+    // thread otherwise this packet has all the info it needs.
+    if (thread_num > 1) {
       const bool threads_with_valid_stop_info_only = true;
       llvm::Expected<json::Array> threads_info = GetJSONThreadsInfo(
           *m_current_process, threads_with_valid_stop_info_only);

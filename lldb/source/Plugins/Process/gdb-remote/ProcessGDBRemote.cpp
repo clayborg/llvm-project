@@ -2720,13 +2720,13 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       queue_serial_number, lane_id, simd_id, active);
 }
 
-void ProcessGDBRemote::MarkImplicitlyResumedThreads() {
+void ProcessGDBRemote::HandleImplicitlyResumedThreads(lldb::tid_t stop_tid) {
+  std::unordered_set<lldb::tid_t> resumed_tids;
+  if (stop_tid != LLDB_INVALID_THREAD_ID)
+    resumed_tids.insert(stop_tid);
   StructuredData::Array *thread_infos =
       m_jstopinfo_sp ? m_jstopinfo_sp->GetAsArray() : nullptr;
-  if (!thread_infos)
-    return;
-  std::unordered_set<lldb::tid_t> resumed_tids;
-  const size_t n = thread_infos->GetSize();
+  const size_t n = thread_infos ? thread_infos->GetSize() : 0;
   for (size_t i = 0; i < n; ++i) {
     StructuredData::Dictionary *thread_dict =
         thread_infos->GetItemAtIndex(i)->GetAsDictionary();
@@ -2771,6 +2771,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     std::optional<lldb::tid_t> lane_id;
     std::optional<lldb::tid_t> simd_id;
     bool active = true;
+    bool implicitly_resumed = false;
     std::string sync_plugin;
     const uint8_t signo = stop_packet.GetHexU8();
     llvm::StringRef key;
@@ -2975,6 +2976,8 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
           simd_id = tmp_id;
       } else if (key.compare("inactive") == 0) {
         active = false;
+      } else if (key.compare("implicitly_resumed") == 0) {
+        implicitly_resumed = true;
       } else if (key.compare("sync-plugin") == 0) {
         sync_plugin = std::string(value);
       } else if (key.size() == 2 && ::isxdigit(key[0]) && ::isxdigit(key[1])) {
@@ -3014,7 +3017,8 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     // Mark the implicitly resumed threads first: SetThreadStopInfo keeps the
     // old stop info of a thread that was suspended, and this thread may be one
     // of them.
-    MarkImplicitlyResumedThreads();
+    HandleImplicitlyResumedThreads(implicitly_resumed ? tid
+                                                      : LLDB_INVALID_THREAD_ID);
 
     ThreadSP thread_sp = SetThreadStopInfo(
         tid, expedited_register_map, signo, thread_name, reason, description,

@@ -2243,6 +2243,18 @@ following keys and values:
     in the SVE Streaming Mode, but that is less common (see ESR
     register flag "WPF", "Watchpoint might be False-Positive") and
     not currently handled by lldb.
+* `implicitly_resumed` - `unsigned` (optional) -
+  `1` if the last resume ran the thread of this stop reply although the resume
+  packet left it suspended, as a GPU lane runs when another lane of its SIMD
+  group runs. lldb then reads the thread's stop info afresh and, unless the
+  user suspended the thread, lets it take part in deciding whether the process
+  stops, as for a thread that lldb resumed. The `jstopinfo` key reports the
+  other threads that ran this way.
+
+  Example:
+  ```
+  implicitly_resumed:1;
+  ```
 * `threads` - `comma-sep-base16` -
   A list of thread ids for all threads (including
   the thread that we're reporting as stopped) that
@@ -2276,21 +2288,20 @@ following keys and values:
 * `jstopinfo` - `ascii-hex` -
   An ASCII hex encoded JSON array of dictionaries that describe the stop info
   of threads, with the keys of the `jThreadsInfo` dictionaries except
-  `registers` and `memory`. A server can include only the threads that have a
-  stop reason, as debugserver does, or every thread, as lldb-server does;
+  `registers` and `memory`; the stop reply itself expedites the registers of
+  the thread that it reports. A server can include only the threads that have
+  a stop reason, as debugserver does, or every thread, as lldb-server does;
   lldb takes a thread without a dictionary to have no stop reason. Like
   `thread-pcs`, this is only emitted when the `threads` key is included.
 
-  A dictionary can have the key `implicitly_resumed` with the value `true`,
-  which means that the last resume ran the thread although the resume packet
-  left it suspended, as a GPU lane runs when another lane of its SIMD group
-  runs. lldb then reads the thread's stop info afresh and, unless the user
-  suspended the thread, lets it take part in deciding whether the process
-  stops, as for a thread that lldb resumed. A server must send `jstopinfo`
-  when it implicitly resumed a thread, even if the process has only one
-  thread, and must include each such thread even if it has no stop reason.
-  lldb-server reports `implicitly_resumed` in `jThreadsInfo` too, but lldb
-  only reads it here, because it needs it before it decides whether to stop.
+  A dictionary can contain `"implicitly_resumed": true`. It means the same as
+  the `implicitly_resumed` stop reply key, but for the thread that the
+  dictionary describes. The server must include a dictionary for each such
+  thread, even if the thread has no stop reason.
+
+  lldb-server also sends this key in `jThreadsInfo`, but lldb ignores it
+  there. lldb needs this information before it decides whether to stop, so it
+  reads it from the stop reply.
 
   Example, before hex encoding:
   ```

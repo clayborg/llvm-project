@@ -1,7 +1,7 @@
 """
 Test that lldb takes a new stop info from a thread that it suspended, and asks
-that thread whether to stop, when a stop reply's jstopinfo marks it
-"implicitly_resumed".
+that thread whether to stop, when a stop reply marks it "implicitly_resumed",
+with a key of its own for the thread of the reply or in jstopinfo.
 
 lldb keeps the stop info of a thread that it suspended, and does not ask that
 thread whether the process should stop. The threads of a SIMD group, such as
@@ -94,7 +94,7 @@ class TestImplicitlyResumed(GDBRemoteTestBase):
                             implicitly_resumed=True,
                         ),
                     ],
-                    fields=exception("second"),
+                    fields="implicitly_resumed:1;" + exception("second"),
                 )
 
         self.server.responder = MyResponder()
@@ -111,6 +111,48 @@ class TestImplicitlyResumed(GDBRemoteTestBase):
         self.assertStopReason(thread_2.GetStopReason(), lldb.eStopReasonException)
         self.assertEqual(thread_2.GetStopDescription(100), "second")
         self.assertEqual(process.GetSelectedThread().GetThreadID(), 2)
+
+    def test_new_stop_reason_of_last_thread_stops_the_process(self):
+        """
+        lldb runs thread 1 alone. Its SIMD group runs thread 2 too, thread 1
+        exits, and thread 2 raises another exception. The stop reply lists
+        thread 2 alone, so it has no jstopinfo, and only its own
+        implicitly_resumed key marks thread 2.
+        """
+
+        class MyResponder(SoloResumeResponder):
+            def haltReason(self):
+                return stop_reply(
+                    2,
+                    [lane(1), lane(2, reason="exception", description="first")],
+                    fields=exception("first"),
+                )
+
+            def vCont(self, packet):
+                if len(self.resumes()) > 1:
+                    return "W00"
+                fields = "implicitly_resumed:1;" + exception("second")
+                return "T05thread:2;lane:1;simd:%d;threads:2;%s" % (SIMD, fields)
+
+            # lldb resumes every thread, here only thread 2, with "c".
+            def cont(self):
+                return "W00"
+
+        self.server.responder = MyResponder()
+        process = self.connect_x86_64()
+        thread_1 = process.GetThreadByID(1)
+        thread_2 = process.GetThreadByID(2)
+        self.assertEqual(thread_2.GetStopDescription(100), "first")
+
+        # Run thread 1 alone, which suspends thread 2.
+        error = lldb.SBError()
+        thread_1.RunToAddress(0x1000, error)
+        self.assertEqual(self.server.responder.resumes(), ["vCont;c:1"])
+        self.assertSuccess(error)
+        self.assertState(process.GetState(), lldb.eStateStopped)
+        self.assertEqual(process.GetNumThreads(), 1)
+        self.assertStopReason(thread_2.GetStopReason(), lldb.eStopReasonException)
+        self.assertEqual(thread_2.GetStopDescription(100), "second")
 
     def test_new_breakpoint_hit_is_counted(self):
         """

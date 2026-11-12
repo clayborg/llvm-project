@@ -109,7 +109,7 @@ protected:
   /// to stay suspended, as a GPU lane runs when another lane of its SIMD group
   /// runs. The process sets this when it stops and must clear it at the next
   /// resume. LLGS reports it to the client as the "implicitly_resumed" key in
-  /// jstopinfo and jThreadsInfo.
+  /// the stop reply, jstopinfo and jThreadsInfo.
   bool m_implicitly_resumed = false;
 };
 }
