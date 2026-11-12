@@ -491,6 +491,20 @@ GPUActions LLDBServerPluginAMDGPU::SetConnectionInfo() {
   return actions;
 }
 
+GPUActions LLDBServerPluginAMDGPU::ConnectAfterAttach() {
+  ProcessAMDGPU *gpu_process = GetGPUProcess();
+  // The library reports changes to the code object list, not the code objects
+  // loaded before the attach, so handle those as a change.
+  gpu_process->handleDebugEvent(AMD_DBGAPI_EVENT_NONE,
+                                AMD_DBGAPI_EVENT_KIND_CODE_OBJECT_LIST_UPDATED);
+  if (Status error = gpu_process->StopWavesAfterAttach(); error.Fail())
+    LLDB_LOGF(GetLog(GDBRLog::Plugin), "%s: failed to stop the waves: %s",
+              __FUNCTION__, error.AsCString());
+  GPUActions actions = SetConnectionInfo();
+  actions.load_libraries = gpu_process->HasDyldChangesToReport();
+  return actions;
+}
+
 GPUActions LLDBServerPluginAMDGPU::SetGpuLoaderBreakpointByAddress() {
   Log *log = GetLog(GDBRLog::Plugin);
   LLDB_LOGF(log, "%s Requesting gpu breakpoint at 0x%p", __FUNCTION__,
@@ -524,6 +538,12 @@ std::optional<GPUActions> LLDBServerPluginAMDGPU::NativeProcessIsStopping() {
                 error.AsCString());
       return std::nullopt;
     }
+    // A program that ran before the debugger attached loaded its runtime and
+    // code objects already, so the loader breakpoint that creates the GPU
+    // connection is not hit for them. Like ROCgdb, take the code objects and
+    // stop the waves now.
+    if (m_amd_dbg_api_state == AmdDbgApiState::RuntimeLoaded)
+      return ConnectAfterAttach();
   }
 
   if (ReadyToSetGpuLoaderBreakpointByAddress()) {
@@ -683,6 +703,8 @@ std::optional<LLDBSettings> LLDBServerPluginAMDGPU::GetLLDBSettings() {
   settings.gpu_plugin_name = GetPluginName();
   settings.dyld_plugin_name = "gdb-remote-gpu";
   settings.send_dyld_packet_to_gpu = false;
+  // If the user tries to kill the GPU process, it should detach instead.
+  settings.kill_should_detach = true;
   return settings;
 }
 

@@ -65,6 +65,10 @@ public:
   std::optional<GPUDynamicLoaderResponse>
   GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args) override;
 
+  /// Called by the GPU process once it has detached from the AMD debug
+  /// library, which closes the notifier that the plug-in watches.
+  void GpuProcessDidDetach() { m_gpu_event_read_up.reset(); }
+
   NativeProcessProtocol *GetNativeProcess() {
     return m_native_process.GetCurrentProcess();
   }
@@ -108,6 +112,9 @@ private:
   std::optional<GPUPluginConnectionInfo> CreateConnection();
   GPUActions SetGpuLoaderBreakpointByAddress();
   GPUActions SetConnectionInfo();
+  /// Create the GPU connection for a program that ran before the debugger
+  /// attached, with its code objects loaded and its waves stopping.
+  GPUActions ConnectAfterAttach();
   Status HandleAmdDbgApiAttachError(llvm::StringRef error_msg,
                                     amd_dbgapi_status_t status);
 
