@@ -3,6 +3,7 @@ Basic tests for the Mock GPU Plugin.
 """
 
 import json
+import os
 import re
 
 import lldb
@@ -75,6 +76,68 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
             "Mock GPU Thread Name",
             "GPU thread has the right name",
         )
+
+    def set_plugin_env(self, name, value):
+        """Set an environment variable the Mock GPU plug-in reads, restoring
+        it after the test. lldb-server inherits it from this process."""
+        previous = os.environ.get(name)
+        os.environ[name] = value
+
+        def restore():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+
+        self.addTearDownHook(restore)
+
+    def test_mock_gpu_target_group(self):
+        """
+        Verify that the CPU and GPU targets are in one target group once the
+        GPU connects, and that deleting both targets removes the group.
+        """
+        self.common_setup()
+        self.expect("target groups list", substrs=["No target groups."])
+
+        # Continue to the breakpoint after GPU is initialized.
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec)
+        self.expect(
+            "target groups list",
+            substrs=[
+                "group #0: CPU and accelerator targets",
+                "target #0: CPU",
+                "target #1: accelerator",
+            ],
+        )
+
+        # Deleting a target takes it out of the group, and deleting the last
+        # target removes the group.
+        cpu_target = self.cpu_target
+        self.assertTrue(self.dbg.DeleteTarget(self.gpu_target))
+        self.expect(
+            "target groups list",
+            substrs=["group #0: CPU and accelerator targets", "target #0: CPU"],
+        )
+        self.expect("target groups list", substrs=["target #1"], matching=False)
+        self.assertTrue(self.dbg.DeleteTarget(cpu_target))
+        self.expect("target groups list", substrs=["No target groups."])
+
+    def test_mock_gpu_connection_failure_removes_target_group(self):
+        """
+        Verify that when lldb can't connect to the GPU, the target group it
+        formed for the CPU and GPU targets is removed again.
+        """
+        self.set_plugin_env("LLDB_MOCK_GPU_CONNECT_URL", "connect://localhost:0")
+        # Don't use common_setup(): it calls setUp() again, which drops the
+        # tearDown hook that restores the environment.
+        self.build()
+        source_spec = lldb.SBFileSpec(SOURCE_FILE, False)
+        lldbutil.run_to_source_breakpoint(self, CPU_BEFORE_BREAKPOINT_COMMENT, source_spec)
+
+        # The connection fails at gpu_initialize, and the CPU process keeps
+        # running.
+        lldbutil.continue_to_source_breakpoint(self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, source_spec)
+        self.expect("target groups list", substrs=["No target groups."])
 
     def test_mock_gpu_register_read(self):
         """

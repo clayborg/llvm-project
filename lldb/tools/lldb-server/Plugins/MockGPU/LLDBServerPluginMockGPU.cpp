@@ -15,6 +15,7 @@
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -129,6 +130,10 @@ std::optional<GPUPluginConnectionInfo> LLDBServerPluginMockGPU::CreateConnection
     const uint16_t listen_port = (*sock)->GetLocalPortNumber();
     connection_info.connect_url = llvm::formatv("connect://localhost:{}", 
                                                 listen_port);
+    // Tests set LLDB_MOCK_GPU_CONNECT_URL to advertise a URL that lldb
+    // can't connect to.
+    if (const char *url = std::getenv("LLDB_MOCK_GPU_CONNECT_URL"))
+      connection_info.connect_url = url;
     connection_info.copy_cpu_breakpoints_during_attaching = true;
     LLDB_LOGF(log, "%s listening to %u", __PRETTY_FUNCTION__, listen_port);
     
