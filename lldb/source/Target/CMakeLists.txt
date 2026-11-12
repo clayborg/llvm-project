@@ -51,6 +51,8 @@ add_lldb_library(lldbTarget
   StructuredDataPlugin.cpp
   SystemRuntime.cpp
   Target.cpp
+  TargetGroup.cpp
+  TargetGroupList.cpp
   TargetList.cpp
   Thread.cpp
   ThreadGroup.cpp

@@ -28,6 +28,7 @@
 #include "lldb/Host/Terminal.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Platform.h"
+#include "lldb/Target/TargetGroupList.h"
 #include "lldb/Target/TargetList.h"
 #include "lldb/Utility/Broadcaster.h"
 #include "lldb/Utility/ConstString.h"
@@ -199,6 +200,8 @@ public:
   /// \return
   ///     A global shared target list.
   TargetList &GetTargetList() { return m_target_list; }
+
+  TargetGroupList &GetTargetGroupList() { return m_target_group_list; }
 
   PlatformList &GetPlatformList() { return m_platform_list; }
 
@@ -739,6 +742,7 @@ protected:
 
   TerminalState m_terminal_state;
   TargetList m_target_list;
+  TargetGroupList m_target_group_list;
 
   PlatformList m_platform_list;
   lldb::ListenerSP m_listener_sp;

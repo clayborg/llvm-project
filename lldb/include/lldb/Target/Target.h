@@ -33,6 +33,7 @@
 #include "lldb/Target/SectionLoadHistory.h"
 #include "lldb/Target/Statistics.h"
 #include "lldb/Target/SyntheticFrameProvider.h"
+#include "lldb/Target/TargetGroupList.h"
 #include "lldb/Target/ThreadSpec.h"
 #include "lldb/Utility/ArchSpec.h"
 #include "lldb/Utility/Broadcaster.h"
@@ -1720,6 +1721,20 @@ public:
   ///   The number of GPU plugin targets associated with this target.
   size_t GetNumGPUPluginTargets() const { return m_gpu_plugin_targets.size(); }
 
+  /// Return the target groups this target belongs to.
+  std::vector<lldb::TargetGroupSP> GetTargetGroups() const;
+
+protected:
+  friend class TargetGroup;
+  friend class TargetGroupList;
+
+  /// Called only by TargetGroup::AddTarget to record group membership.
+  void AddTargetGroup(const lldb::TargetGroupSP &group_sp);
+  /// Called only by TargetGroup::RemoveTarget to remove group membership.
+  void RemoveTargetGroup(const TargetGroup *group);
+
+public:
+
   /// \return
   ///   Any GPU plugin target associated with this target, or null if there are
   ///   no GPU plugin targets.
@@ -1877,6 +1892,8 @@ protected:
   /// native target to resume as well, we can use this to make this happen.
   lldb::TargetWP m_native_target_gpu_wp;
   bool m_is_cpu_target = true;
+  /// Every target group this target belongs to.
+  TargetGroupList m_target_groups;
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);
