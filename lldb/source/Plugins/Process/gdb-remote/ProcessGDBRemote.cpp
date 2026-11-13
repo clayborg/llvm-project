@@ -2740,9 +2740,13 @@ void ProcessGDBRemote::HandleImplicitlyResumedThreads(lldb::tid_t stop_tid) {
   }
   if (resumed_tids.empty())
     return;
+  // Only a suspended thread can be implicitly resumed. A thread that this stop
+  // already handled is no longer suspended, which keeps the stop info that
+  // lldb computed for it since.
   for (const ThreadSP &thread_sp : m_thread_list_real.Threads())
-    if (resumed_tids.count(thread_sp->GetProtocolID()))
-      thread_sp->MarkImplicitlyResumed();
+    if (thread_sp->GetTemporaryResumeState() == eStateSuspended &&
+        resumed_tids.count(thread_sp->GetProtocolID()))
+      thread_sp->DidImplicitlyResume();
 }
 
 StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
@@ -3014,7 +3018,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
 
     m_last_stop_primary_tid = tid;
 
-    // Mark the implicitly resumed threads first: SetThreadStopInfo keeps the
+    // Handle the implicitly resumed threads first: SetThreadStopInfo keeps the
     // old stop info of a thread that was suspended, and this thread may be one
     // of them.
     HandleImplicitlyResumedThreads(implicitly_resumed ? tid

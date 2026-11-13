@@ -443,8 +443,8 @@ protected:
       std::optional<lldb::tid_t> lane_id, std::optional<lldb::tid_t> simd_id,
       bool inactive, llvm::StringRef sync_plugin = {});
 
-  /// Call Thread::MarkImplicitlyResumed on each thread that the last stop
-  /// reply reports as implicitly resumed: \a stop_tid, unless it is
+  /// Call Thread::DidImplicitlyResume on each suspended thread that the last
+  /// stop reply reports as implicitly resumed: \a stop_tid, unless it is
   /// LLDB_INVALID_THREAD_ID, and each thread that jstopinfo marks.
   void HandleImplicitlyResumedThreads(lldb::tid_t stop_tid);
 

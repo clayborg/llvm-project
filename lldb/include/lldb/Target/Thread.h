@@ -219,6 +219,14 @@ public:
   // sure to call it.
   virtual void DidResume();
 
+  /// Notifies the thread at a stop that the last resume ran it although it
+  /// was suspended for that resume, as a GPU lane runs when another lane of
+  /// its SIMD group runs. The thread's stop info is then computed afresh, and
+  /// unless the user suspended the thread, it takes part in deciding whether
+  /// the process stops, as if it had been resumed. If you subclass this, be
+  /// sure to call it.
+  virtual void DidImplicitlyResume();
+
   // This notifies the thread when a private stop occurs.
   virtual void DidStop();
 
@@ -1265,14 +1273,6 @@ public:
   void SetStopInfo(const lldb::StopInfoSP &stop_info_sp);
 
   void ResetStopInfo();
-
-  /// Record that the last resume ran this thread although the thread was
-  /// suspended for it, as a GPU lane runs when another lane of its SIMD group
-  /// runs. The thread's stop info is then computed afresh, and unless the
-  /// user suspended the thread, it takes part in deciding whether the process
-  /// stops, as if it had been resumed. Does nothing if the thread was not
-  /// suspended for the last resume.
-  void MarkImplicitlyResumed();
 
   void SetShouldReportStop(Vote vote);
   
