@@ -9,6 +9,7 @@
 #ifndef LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXTAMDGPUIMPL_H
 #define LLDB_SOURCE_PLUGINS_PROCESS_UTILITY_REGISTERCONTEXTAMDGPUIMPL_H
 
+#include "AmdDbgApiRegisterTypeParser.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/lldb-private-types.h"
 #include <amd-dbgapi/amd-dbgapi.h>
@@ -109,6 +110,8 @@ private:
     size_t register_count = 0;
     size_t register_buffer_size = 0;
     uint32_t pc_register_num = 0;
+    // Owns the RegisterFlags that reg_infos[i].flags_type points to.
+    AmdDbgApiRegisterTypeParser register_types;
   };
 
   static std::unordered_map<uint64_t, ArchitectureRegisterInfo>
