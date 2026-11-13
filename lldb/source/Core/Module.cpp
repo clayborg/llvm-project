@@ -353,6 +353,23 @@ ObjectFile *Module::GetMemoryObjectFile(const lldb::ProcessSP &process_sp,
   return m_objfile_sp.get();
 }
 
+ModuleSpec Module::GetModuleSpec() {
+  std::lock_guard<std::recursive_mutex> guard(m_mutex);
+  const UUID &uuid = GetUUID();
+  DataExtractorSP extractor_sp = m_extractor_sp;
+  ObjectFile *objfile = GetObjectFile();
+  ModuleSpec spec(m_file, uuid, extractor_sp);
+  spec.GetPlatformFileSpec() = m_platform_file;
+  spec.GetSymbolFileSpec() = m_symfile_spec;
+  spec.GetArchitecture() = m_arch;
+  spec.SetObjectName(m_object_name);
+  spec.SetObjectOffset(objfile ? objfile->GetFileOffset() : m_object_offset);
+  spec.SetObjectSize(objfile ? objfile->GetByteSize() : m_object_size);
+  spec.GetObjectModificationTime() = m_object_mod_time;
+  spec.GetSourceMappingList() = m_source_mappings;
+  return spec;
+}
+
 const lldb_private::UUID &Module::GetUUID() {
   if (!m_did_set_uuid.load()) {
     std::lock_guard<std::recursive_mutex> guard(m_mutex);
@@ -1200,7 +1217,12 @@ ObjectFile *Module::GetObjectFile() {
       else if (m_file)
         file_size = FileSystem::Instance().GetByteSize(m_file);
 
-      if (file_size > m_object_offset) {
+      // A supplied subobject extractor starts at byte zero even when its
+      // backing-file offset is larger than the extractor itself.
+      const bool data_backed_object =
+          m_extractor_sp && m_object_size &&
+          m_extractor_sp->GetByteSize() == m_object_size;
+      if (data_backed_object || file_size > m_object_offset) {
         m_did_load_objfile = true;
         // FindPlugin will modify its data_sp argument. Do not let it
         // modify our m_data_sp member.
