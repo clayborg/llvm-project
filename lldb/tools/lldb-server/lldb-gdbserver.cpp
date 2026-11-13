@@ -50,7 +50,11 @@
 
 #if defined(LLDB_ENABLE_AMDGPU_PLUGIN)
 #include "Plugins/AMDGPU/LLDBServerPluginAMDGPU.h"
-#endif  
+#endif
+
+#if defined(LLDB_ENABLE_INTELGT_PLUGIN)
+#include "Plugins/IntelGT/LLDBServerPluginIntelGT.h"
+#endif
 
 #if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
 #include "Plugins/MockGPU/LLDBServerPluginMockGPU.h"
@@ -469,6 +473,14 @@ int main_gdbserver(int argc, char *argv[]) {
     // ptrace() thread.
     gdb_server.InstallPlugin(
         std::make_unique<lldb_private::lldb_server::LLDBServerPluginAMDGPU>(gdb_server, mainloop));
+  }
+#endif
+#if defined(LLDB_ENABLE_INTELGT_PLUGIN)
+  {
+    // Level Zero must be called from the same thread as ptrace.
+    gdb_server.InstallPlugin(
+        std::make_unique<lldb_private::lldb_server::LLDBServerPluginIntelGT>(
+            gdb_server, mainloop));
   }
 #endif
 #if defined(LLDB_ENABLE_MOCKGPU_PLUGIN)
