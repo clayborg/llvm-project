@@ -1225,6 +1225,13 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   // this plug-in, so it is a ProcessGDBRemote.
   std::static_pointer_cast<ProcessGDBRemote>(process_sp)
       ->SetGPUPluginName(gpu_action.plugin_name);
+  // The GPU plug-in can ask lldb to detach from the GPU process when the user
+  // tries to kill it. Only the GPU process's connection has its settings.
+  if (std::optional<LLDBSettings> settings =
+          static_cast<ProcessGDBRemote &>(*process_sp)
+              .GetGDBRemote()
+              .GetLLDBSettings())
+    process_sp->SetKillShouldDetach(settings->kill_should_detach);
   // Broadcast the target creation event so DAP can create a child session
   auto event_sp = std::make_shared<Event>(
       Target::eBroadcastBitNewTargetCreated,
@@ -1276,6 +1283,8 @@ void ProcessGDBRemote::HandleGPUBreakpoints(const GPUActions &gpu_action) {
           std::make_shared<GPUBreakpointCallbackBaton>(std::move(args_up));
       bp_sp->SetCallback(GPUBreakpointHitCallback, baton_sp,
                          /*is_synchronous=*/true);
+      m_gpu_plugin_breakpoints[gpu_action.plugin_name].push_back(
+          bp_sp->GetID());
     }
   }
 }
@@ -1648,6 +1657,19 @@ ProcessGDBRemote::TraceGetBinaryData(const TraceGetBinaryDataRequest &request) {
 void ProcessGDBRemote::DidExit() {
   // When we exit, disconnect from the GDB server communications
   m_gdb_comm.Disconnect();
+}
+
+bool ProcessGDBRemote::SetExitStatus(int exit_status,
+                                     llvm::StringRef exit_string) {
+  if (!Process::SetExitStatus(exit_status, exit_string))
+    return false;
+  // GPU processes can't outlive this process.
+  if (TargetSP target_sp = CalculateTarget())
+    for (TargetSP gpu_target_sp : target_sp->GetGPUPluginTargets())
+      if (ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
+          gpu_process_sp && gpu_process_sp->IsAlive())
+        gpu_process_sp->SetExitStatus(exit_status, exit_string);
+  return true;
 }
 
 void ProcessGDBRemote::DidAttach(ArchSpec &process_arch) {
@@ -3090,6 +3112,13 @@ Status ProcessGDBRemote::DoDetach(bool keep_stopped) {
   if (!error.Success())
     return error;
 
+  // A GPU plug-in no longer needs its breakpoints in the CPU process.
+  if (!m_gpu_plugin_name.empty())
+    if (TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU())
+      if (ProcessSP cpu_process_sp = cpu_target_sp->GetProcessSP())
+        static_cast<ProcessGDBRemote *>(cpu_process_sp.get())
+            ->GPUProcessWillDestroy(m_gpu_plugin_name);
+
   // Sleep for one second to let the process get all detached...
   StopAsyncThread();
 
@@ -3115,9 +3144,46 @@ llvm::Error ProcessGDBRemote::DetachGPUPluginTargets(bool keep_stopped) {
   return llvm::Error::success();
 }
 
+llvm::Error ProcessGDBRemote::KillGPUPluginTargets() {
+  for (const TargetSP &gpu_target_sp : GetTarget().GetGPUPluginTargets()) {
+    ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
+    if (!gpu_process_sp || !gpu_process_sp->IsAlive())
+      continue;
+    Status error = gpu_process_sp->Destroy(/*force_kill=*/true);
+    if (error.Fail())
+      return llvm::createStringError(
+          llvm::formatv("could not kill GPU process {0}: {1}",
+                        gpu_process_sp->GetID(), error)
+              .str());
+  }
+  return llvm::Error::success();
+}
+
+// Clean up any state in the CPU process that was related to the GPU plugin.
+void ProcessGDBRemote::GPUProcessWillDestroy(llvm::StringRef gpu_plugin_name) {
+  // Disable the internal breakpoints set in the CPU process by any GPUActions.
+  auto it = m_gpu_plugin_breakpoints.find(gpu_plugin_name);
+  if (it == m_gpu_plugin_breakpoints.end())
+    return;
+  const auto &[plugin_name, bp_ids] = *it;
+  for (lldb::break_id_t bp_id : bp_ids)
+    if (BreakpointSP bp_sp = GetTarget().GetBreakpointByID(bp_id))
+      bp_sp->SetEnabled(false);
+}
+
 Status ProcessGDBRemote::DoDestroy() {
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDestroy()");
+
+  // A GPU process that Process::DestroyImpl() detached has nothing left to
+  // kill, and stays detached instead of getting an exit status below.
+  if (GetTarget().IsGPUTarget() && GetPrivateState() == eStateDetached)
+    return Status();
+
+  // Kill the GPU processes first. Their GPU plug-ins may detach from them
+  // instead.
+  if (llvm::Error err = KillGPUPluginTargets())
+    LLDB_LOG_ERROR(log, std::move(err), "ProcessGDBRemote::DoDestroy(): {0}");
 
   // Interrupt if our inferior is running...
   int exit_status = SIGABRT;

@@ -1089,6 +1089,11 @@ llvm::Error DAP::Loop() {
     // Destroy the debugger when the session ends. This will trigger the
     // debugger's destroy callbacks for earlier logging and clean-ups, rather
     // than waiting for the termination of the lldb-dap process.
+    // Sessions that share the debugger, such as a GPU child session and the
+    // session that started it, leave it to the last of them to end.
+    if (DAPSessionManager::GetInstance().DecrementDebuggerSessionCount(
+            debugger) > 0)
+      return;
     lldb::SBDebugger::Destroy(debugger);
   });
 
@@ -1331,6 +1336,7 @@ llvm::Error DAP::InitializeDebugger(int debugger_id,
     return llvm::createStringError(
         "Unable to find existing debugger for debugger ID");
   }
+  DAPSessionManager::GetInstance().IncrementDebuggerSessionCount(debugger);
 
   // Find the target within the debugger by its globally unique ID
   lldb::SBTarget target = debugger.FindTargetByGloballyUniqueID(target_id);
@@ -1347,6 +1353,7 @@ llvm::Error DAP::InitializeDebugger(int debugger_id,
 
 llvm::Error DAP::InitializeDebugger() {
   debugger = lldb::SBDebugger::Create(/*argument_name=*/false);
+  DAPSessionManager::GetInstance().IncrementDebuggerSessionCount(debugger);
 
   // Configure input/output/error file descriptors.
   debugger.SetInputFile(in);
