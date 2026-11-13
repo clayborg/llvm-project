@@ -108,8 +108,8 @@ protected:
   /// Set if the last resume ran this thread although the client asked for it
   /// to stay suspended, as a GPU lane runs when another lane of its SIMD group
   /// runs. The process sets this when it stops and must clear it at the next
-  /// resume. LLGS reports it to the client as the "implicitly_resumed" key in
-  /// the stop reply, jstopinfo and jThreadsInfo.
+  /// resume. LLGS lists such threads to the client in the
+  /// "implicitly_resumed_threads" key of the stop reply.
   bool m_implicitly_resumed = false;
 };
 }

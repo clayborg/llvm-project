@@ -77,7 +77,6 @@
 #include <optional>
 #include <sstream>
 #include <thread>
-#include <unordered_set>
 
 #include "GDBRemoteRegisterContext.h"
 #include "GDBRemoteRegisterFallback.h"
@@ -1957,22 +1956,27 @@ void ProcessGDBRemote::ClearThreadIDList() {
   m_thread_pcs.clear();
 }
 
-size_t ProcessGDBRemote::UpdateThreadIDsFromStopReplyThreadsValue(
-    llvm::StringRef value) {
-  m_thread_ids.clear();
-  lldb::pid_t pid = m_gdb_comm.GetCurrentProcessID();
+/// Parse a comma-separated list of thread IDs, the value of a stop reply key
+/// such as "threads", keeping the threads of process \a pid.
+static std::vector<lldb::tid_t> ParseThreadIDList(llvm::StringRef value,
+                                                  lldb::pid_t pid) {
+  std::vector<lldb::tid_t> tids;
   StringExtractorGDBRemote thread_ids{value};
-
   do {
     auto pid_tid = thread_ids.GetPidTid(pid);
     if (pid_tid && pid_tid->first == pid) {
       lldb::tid_t tid = pid_tid->second;
       if (tid != LLDB_INVALID_THREAD_ID &&
           tid != StringExtractorGDBRemote::AllProcesses)
-        m_thread_ids.push_back(tid);
+        tids.push_back(tid);
     }
   } while (thread_ids.GetChar() == ',');
+  return tids;
+}
 
+size_t ProcessGDBRemote::UpdateThreadIDsFromStopReplyThreadsValue(
+    llvm::StringRef value) {
+  m_thread_ids = ParseThreadIDList(value, m_gdb_comm.GetCurrentProcessID());
   return m_thread_ids.size();
 }
 
@@ -2720,32 +2724,17 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       queue_serial_number, lane_id, simd_id, active);
 }
 
-void ProcessGDBRemote::HandleImplicitlyResumedThreads(lldb::tid_t stop_tid) {
-  std::unordered_set<lldb::tid_t> resumed_tids;
-  if (stop_tid != LLDB_INVALID_THREAD_ID)
-    resumed_tids.insert(stop_tid);
-  StructuredData::Array *thread_infos =
-      m_jstopinfo_sp ? m_jstopinfo_sp->GetAsArray() : nullptr;
-  const size_t n = thread_infos ? thread_infos->GetSize() : 0;
-  for (size_t i = 0; i < n; ++i) {
-    StructuredData::Dictionary *thread_dict =
-        thread_infos->GetItemAtIndex(i)->GetAsDictionary();
-    bool implicitly_resumed = false;
-    lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
-    if (thread_dict &&
-        thread_dict->GetValueForKeyAsBoolean("implicitly_resumed",
-                                             implicitly_resumed) &&
-        implicitly_resumed && thread_dict->GetValueForKeyAsInteger("tid", tid))
-      resumed_tids.insert(tid);
-  }
-  if (resumed_tids.empty())
+void ProcessGDBRemote::HandleImplicitlyResumedThreads(
+    std::vector<lldb::tid_t> tids) {
+  if (tids.empty())
     return;
+  llvm::sort(tids);
   // Only a suspended thread can be implicitly resumed. A thread that this stop
   // already handled is no longer suspended, which keeps the stop info that
   // lldb computed for it since.
   for (const ThreadSP &thread_sp : m_thread_list_real.Threads())
     if (thread_sp->GetTemporaryResumeState() == eStateSuspended &&
-        resumed_tids.count(thread_sp->GetProtocolID()))
+        llvm::binary_search(tids, thread_sp->GetProtocolID()))
       thread_sp->DidImplicitlyResume();
 }
 
@@ -2775,7 +2764,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     std::optional<lldb::tid_t> lane_id;
     std::optional<lldb::tid_t> simd_id;
     bool active = true;
-    bool implicitly_resumed = false;
+    std::vector<lldb::tid_t> implicitly_resumed_tids;
     std::string sync_plugin;
     const uint8_t signo = stop_packet.GetHexU8();
     llvm::StringRef key;
@@ -2982,10 +2971,8 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         uint32_t inactive = 0;
         if (!value.getAsInteger(0, inactive))
           active = inactive == 0;
-      } else if (key.compare("implicitly_resumed") == 0) {
-        uint32_t resumed = 0;
-        if (!value.getAsInteger(0, resumed))
-          implicitly_resumed = resumed != 0;
+      } else if (key.compare("implicitly_resumed_threads") == 0) {
+        implicitly_resumed_tids = ParseThreadIDList(value, pid);
       } else if (key.compare("sync-plugin") == 0) {
         sync_plugin = std::string(value);
       } else if (key.size() == 2 && ::isxdigit(key[0]) && ::isxdigit(key[1])) {
@@ -3025,8 +3012,7 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
     // Handle the implicitly resumed threads first: SetThreadStopInfo keeps the
     // old stop info of a thread that was suspended, and this thread may be one
     // of them.
-    HandleImplicitlyResumedThreads(implicitly_resumed ? tid
-                                                      : LLDB_INVALID_THREAD_ID);
+    HandleImplicitlyResumedThreads(std::move(implicitly_resumed_tids));
 
     ThreadSP thread_sp = SetThreadStopInfo(
         tid, expedited_register_map, signo, thread_name, reason, description,

@@ -889,9 +889,6 @@ GetJSONThreadsInfo(NativeProcessProtocol &process, bool abridged) {
     if (!thread.GetIsActive())
       thread_obj.try_emplace("inactive", true);
 
-    if (thread.GetImplicitlyResumed())
-      thread_obj.try_emplace("implicitly_resumed", true);
-
     if (signum != 0)
       thread_obj.try_emplace("signal", signum);
 
@@ -974,8 +971,19 @@ GDBRemoteCommunicationServerLLGS::PrepareStopReplyPacketForThread(
   if (!thread.GetIsActive())
     response.PutCString("inactive:1;");
 
-  if (thread.GetImplicitlyResumed())
-    response.PutCString("implicitly_resumed:1;");
+  // Unlike "threads", this does not wait for QListThreadsInStopReply, because
+  // the client needs it to decide whether to stop.
+  bool listed_resumed_thread = false;
+  for (NativeThreadProtocol &listed_thread : process.Threads()) {
+    if (!listed_thread.GetImplicitlyResumed())
+      continue;
+    response.PutCString(listed_resumed_thread ? ","
+                                              : "implicitly_resumed_threads:");
+    response.Format("{0:x-}", listed_thread.GetID());
+    listed_resumed_thread = true;
+  }
+  if (listed_resumed_thread)
+    response.PutChar(';');
 
   // Include the thread name if there is one.
   const std::string thread_name = thread.GetName();

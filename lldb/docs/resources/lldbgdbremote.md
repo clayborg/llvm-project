@@ -2269,17 +2269,20 @@ following keys and values:
   ```
   inactive:1;
   ```
-* `implicitly_resumed` - `unsigned` (optional) -
-  `1` if the last resume ran the thread of this stop reply although the resume
-  packet left it suspended, as a GPU lane runs when another lane of its SIMD
-  group runs. lldb then reads the thread's stop info afresh and, unless the
-  user suspended the thread, lets it take part in deciding whether the process
-  stops, as for a thread that lldb resumed. `0` means the same as no key. The
-  `jstopinfo` key reports the other threads that ran this way.
+* `implicitly_resumed_threads` - `comma-sep-base16` (optional) -
+  A list of the threads that the last resume ran although the resume packet
+  left them suspended, as a GPU lane runs when another lane of its SIMD group
+  runs. The list can include the thread that this `T` packet reports. lldb
+  reads the stop info of each of these threads afresh and, unless the user
+  suspended the thread, lets it take part in deciding whether the process
+  stops, as for a thread that lldb resumed. lldb needs this list to decide
+  whether to stop, so unlike `threads`, the server sends it whether or not
+  lldb sent `QListThreadsInStopReply`. Without the key, no thread ran this
+  way.
 
   Example:
   ```
-  implicitly_resumed:1;
+  implicitly_resumed_threads:633b2,63424;
   ```
 * `threads` - `comma-sep-base16` -
   A list of thread ids for all threads (including
@@ -2320,19 +2323,9 @@ following keys and values:
   lldb takes a thread without a dictionary to have no stop reason. Like
   `thread-pcs`, this is only emitted when the `threads` key is included.
 
-  A dictionary can contain `"implicitly_resumed": true`. It means the same as
-  the `implicitly_resumed` stop reply key, but for the thread that the
-  dictionary describes, and `false` means the same as no key. The server must
-  include a dictionary for each such thread, even if the thread has no stop
-  reason.
-
-  lldb-server also sends this key in `jThreadsInfo`, but lldb ignores it
-  there. lldb needs this information before it decides whether to stop, so it
-  reads it from the stop reply.
-
   Example, before hex encoding:
   ```
-  [{"tid":1,"reason":"breakpoint"},{"tid":2,"implicitly_resumed":true}]
+  [{"tid":1,"signal":5,"reason":"breakpoint"},{"tid":2}]
   ```
 * `addressing_bits` - `unsigned` (optional) -
   Specifies how many bits in addresses are significant for addressing, base
