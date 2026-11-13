@@ -112,6 +112,49 @@ class TestImplicitlyResumed(GDBRemoteTestBase):
         self.assertEqual(thread_2.GetStopDescription(100), "second")
         self.assertEqual(process.GetSelectedThread().GetThreadID(), 2)
 
+    def test_false_value_is_no_mark(self):
+        """
+        As in test_new_stop_reason_stops_the_process, but the stop reply's
+        implicitly_resumed key is 0 and jstopinfo's is false, which do not mark
+        thread 2. lldb keeps thread 2's exception from the first stop, finds no
+        reason to stop, and resumes the process again.
+        """
+
+        class MyResponder(SoloResumeResponder):
+            def haltReason(self):
+                return stop_reply(
+                    2,
+                    [lane(1), lane(2, reason="exception", description="first")],
+                    fields=exception("first"),
+                )
+
+            def vCont(self, packet):
+                if len(self.resumes()) > 1:
+                    return "W00"
+                return stop_reply(
+                    2,
+                    [
+                        lane(1),
+                        lane(
+                            2,
+                            reason="exception",
+                            description="second",
+                            implicitly_resumed=False,
+                        ),
+                    ],
+                    fields="implicitly_resumed:0;" + exception("second"),
+                )
+
+        self.server.responder = MyResponder()
+        process = self.connect_x86_64()
+        thread_1 = process.GetThreadByID(1)
+
+        # Run thread 1 alone, which suspends thread 2.
+        error = lldb.SBError()
+        thread_1.RunToAddress(0x1000, error)
+        self.assertEqual(self.server.responder.resumes(), ["vCont;c:1", "vCont;c:1"])
+        self.assertState(process.GetState(), lldb.eStateExited)
+
     def test_new_stop_reason_of_last_thread_stops_the_process(self):
         """
         lldb runs thread 1 alone. Its SIMD group runs thread 2 too, thread 1

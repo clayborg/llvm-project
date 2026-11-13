@@ -2248,8 +2248,8 @@ following keys and values:
   packet left it suspended, as a GPU lane runs when another lane of its SIMD
   group runs. lldb then reads the thread's stop info afresh and, unless the
   user suspended the thread, lets it take part in deciding whether the process
-  stops, as for a thread that lldb resumed. The `jstopinfo` key reports the
-  other threads that ran this way.
+  stops, as for a thread that lldb resumed. `0` means the same as no key. The
+  `jstopinfo` key reports the other threads that ran this way.
 
   Example:
   ```
@@ -2296,8 +2296,9 @@ following keys and values:
 
   A dictionary can contain `"implicitly_resumed": true`. It means the same as
   the `implicitly_resumed` stop reply key, but for the thread that the
-  dictionary describes. The server must include a dictionary for each such
-  thread, even if the thread has no stop reason.
+  dictionary describes, and `false` means the same as no key. The server must
+  include a dictionary for each such thread, even if the thread has no stop
+  reason.
 
   lldb-server also sends this key in `jThreadsInfo`, but lldb ignores it
   there. lldb needs this information before it decides whether to stop, so it

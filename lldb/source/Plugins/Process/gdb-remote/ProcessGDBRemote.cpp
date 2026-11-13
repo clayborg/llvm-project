@@ -2707,7 +2707,7 @@ ProcessGDBRemote::SetThreadStopInfo(StructuredData::Dictionary *thread_dict) {
       if (tmp_id != LLDB_INVALID_SIMD_ID)
         simd_id = tmp_id;
     } else if (key == g_key_inactive) {
-      active = false;
+      active = !object->GetBooleanValue();
     } else if (key == g_key_signal)
       signo = object->GetUnsignedIntegerValue(LLDB_INVALID_SIGNAL_NUMBER);
     return true; // Keep iterating through all dictionary key/value pairs
@@ -2979,9 +2979,13 @@ StateType ProcessGDBRemote::SetThreadStopInfo(StringExtractor &stop_packet) {
         if (!value.getAsInteger(0, tmp_id))
           simd_id = tmp_id;
       } else if (key.compare("inactive") == 0) {
-        active = false;
+        uint32_t inactive = 0;
+        if (!value.getAsInteger(0, inactive))
+          active = inactive == 0;
       } else if (key.compare("implicitly_resumed") == 0) {
-        implicitly_resumed = true;
+        uint32_t resumed = 0;
+        if (!value.getAsInteger(0, resumed))
+          implicitly_resumed = resumed != 0;
       } else if (key.compare("sync-plugin") == 0) {
         sync_plugin = std::string(value);
       } else if (key.size() == 2 && ::isxdigit(key[0]) && ::isxdigit(key[1])) {
