@@ -12,6 +12,7 @@
 #include "RegisterContextMockGPU.h"
 #include "lldb/Host/common/NativeThreadProtocol.h"
 #include "lldb/lldb-private-forward.h"
+#include <optional>
 #include <string>
 
 namespace lldb_private {
@@ -25,7 +26,8 @@ class ThreadMockGPU : public NativeThreadProtocol {
 
 public:
   ThreadMockGPU(ProcessMockGPU &process, lldb::tid_t tid, lldb::tid_t lane_id,
-                lldb::tid_t simd_id);
+                std::optional<lldb::tid_t> simd_id,
+                std::optional<lldb::tid_t> simt_id = std::nullopt);
 
   // NativeThreadProtocol Interface
   std::string GetName() override;

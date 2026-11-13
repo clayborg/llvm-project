@@ -12,8 +12,10 @@ using namespace lldb_private;
 using namespace lldb_server;
 
 ThreadMockGPU::ThreadMockGPU(ProcessMockGPU &process, lldb::tid_t tid,
-                             lldb::tid_t lane_id, lldb::tid_t simd_id)
-    : NativeThreadProtocol(process, tid, lane_id, simd_id),
+                             lldb::tid_t lane_id,
+                             std::optional<lldb::tid_t> simd_id,
+                             std::optional<lldb::tid_t> simt_id)
+    : NativeThreadProtocol(process, tid, lane_id, simd_id, simt_id),
       m_reg_context(*this) {
   m_stop_info.reason = lldb::eStopReasonTrace;
 }
@@ -50,6 +52,8 @@ ThreadMockGPU::GetExtendedInfo(const llvm::json::Value &args) {
     info["lane_id"] = static_cast<int64_t>(*m_lane_id);
   if (m_simd_id)
     info["simd_id"] = static_cast<int64_t>(*m_simd_id);
+  if (m_simt_id)
+    info["simt_id"] = static_cast<int64_t>(*m_simt_id);
   return llvm::json::Value(std::move(info));
 }
 

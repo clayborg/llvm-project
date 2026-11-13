@@ -308,6 +308,44 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.assertEqual(cpu_thread.GetLaneID(), lldb.LLDB_INVALID_LANE_ID)
         self.assertEqual(cpu_thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)
 
+    def run_to_gpu_with_simt_group(self):
+        """Run to the breakpoint after GPU initialization with the mock SIMT
+        group. Return the threads of the group by lane."""
+        self.set_plugin_env("LLDB_MOCK_GPU_SIMT_GROUP", "1")
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+        self.select_gpu()
+        # ProcessMockGPU::UpdateThreads() sets this ID and lanes 0 and 1.
+        threads = {
+            thread.GetLaneID(): thread
+            for thread in self.gpu_process
+            if thread.GetSIMT() == 7
+        }
+        self.assertEqual(sorted(threads), [0, 1])
+        return threads
+
+    def test_mock_gpu_simt_id(self):
+        """
+        Test that a SIMT thread reports its SIMT group and no SIMD group, and
+        that other threads report no SIMT group.
+        """
+        threads = self.run_to_gpu_with_simt_group()
+        for thread in threads.values():
+            self.assertEqual(thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)
+
+        # The mock GPU's first thread is in a SIMD group.
+        simd_thread = self.gpu_process.GetThreadByID(3456)
+        self.assertTrue(simd_thread.IsValid())
+        self.assertEqual(simd_thread.GetSIMD(), 1)
+        self.assertEqual(simd_thread.GetSIMT(), lldb.LLDB_INVALID_SIMT_ID)
+
+        self.select_cpu()
+        cpu_thread = self.cpu_process.GetThreadAtIndex(0)
+        self.assertTrue(cpu_thread.IsValid())
+        self.assertEqual(cpu_thread.GetSIMT(), lldb.LLDB_INVALID_SIMT_ID)
+
     def test_mock_gpu_requested_symbols(self):
         """
         Test that lldb sends the plug-in each symbol it asks for once, with its

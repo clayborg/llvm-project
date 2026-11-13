@@ -28,7 +28,8 @@ class NativeThreadProtocol {
 public:
   NativeThreadProtocol(NativeProcessProtocol &process, lldb::tid_t tid,
                        std::optional<lldb::tid_t> lane_id = std::nullopt,
-                       std::optional<lldb::tid_t> simd_id = std::nullopt);
+                       std::optional<lldb::tid_t> simd_id = std::nullopt,
+                       std::optional<lldb::tid_t> simt_id = std::nullopt);
 
   virtual ~NativeThreadProtocol() = default;
 
@@ -44,6 +45,7 @@ public:
   lldb::tid_t GetID() const { return m_tid; }
   std::optional<lldb::tid_t> GetLaneID() const { return m_lane_id; }
   std::optional<lldb::tid_t> GetSIMD() const { return m_simd_id; }
+  std::optional<lldb::tid_t> GetSIMT() const { return m_simt_id; }
   virtual bool GetIsActive() const { return m_active; }
   void SetIsActive(bool b) { m_active = b; }
   NativeProcessProtocol &GetProcess() { return m_process; }
@@ -99,6 +101,9 @@ protected:
   /// An optional SIMD group ID for the thread used to identify the GPU SIMD.
   /// This can be used to identify the ID of the wave or warp for the lane.
   std::optional<lldb::tid_t> m_simd_id;
+  /// An optional SIMT group ID, such as a GPU warp ID. A thread has a SIMD
+  /// group ID or a SIMT group ID, not both.
+  std::optional<lldb::tid_t> m_simt_id;
   /// Set to false if this thread is not active. This can be used to indicate
   /// that a GPU lane is not active. When single stepping this can be used to
   /// step until the thread becomes active again.

@@ -107,6 +107,8 @@ public:
 
   lldb::tid_t GetSIMD() const;
 
+  lldb::tid_t GetSIMT() const;
+
   lldb::queue_id_t GetQueueID() const;
 
   bool GetInfoItemByPathAsString(const char *path, SBStream &strm);

@@ -96,18 +96,27 @@ See also :py:class:`SBFrame` ."
     LLDB_INVALID_LANE_ID if this thread id is not a valid GPU lane id.  How
     lanes are numbered is defined by the GPU vendor, and 0 can be a valid lane,
     so compare against LLDB_INVALID_LANE_ID rather than against 0 to test
-    whether a thread has a lane.  See related GetSIMD."
+    whether a thread has a lane.  See related GetSIMD and GetSIMT."
 ) lldb::SBThread::GetLaneID;
 
 %feature("docstring", "
-    Return the SIMD group (GPU wave or warp) this thread belongs to, as a
+    Return the SIMD group (such as a GPU wave) this thread belongs to, as a
     lldb::tid_t, or LLDB_INVALID_SIMD_ID if this thread id is not a valid SIMD
     group id.  The value is an opaque vendor handle rather than an index, and 0
     can be a valid group, so compare against LLDB_INVALID_SIMD_ID rather than
     against 0.  All lanes of a SIMD group share one program counter and are
     stopped and resumed together, so threads reporting the same value here
-    cannot be stepped independently.  See related GetLaneID."
+    cannot be stepped independently.  See related GetLaneID and GetSIMT."
 ) lldb::SBThread::GetSIMD;
+
+%feature("docstring", "
+    Return the SIMT group (such as a GPU warp) this thread belongs to, as a
+    lldb::tid_t, or LLDB_INVALID_SIMT_ID if it is in none.  The value is an
+    opaque vendor handle, and 0 can be valid.  Each thread of a SIMT group has
+    its own program counter, but stepping or resuming one thread may advance
+    the others.  A thread is in a SIMD group or a SIMT group, not both.  See
+    related GetLaneID and GetSIMD."
+) lldb::SBThread::GetSIMT;
 
 %feature("docstring", "
     Return the queue name associated with this thread, if any, as a str.
