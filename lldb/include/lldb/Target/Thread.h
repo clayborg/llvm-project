@@ -1151,6 +1151,11 @@ public:
   std::optional<lldb::tid_t> GetSIMD() const { return m_simd; }
   void SetSIMD(std::optional<lldb::tid_t> simd) { m_simd = simd; }
 
+  /// An optional SIMT group ID, such as a GPU warp ID. A thread has a SIMD
+  /// group ID or a SIMT group ID, not both.
+  std::optional<lldb::tid_t> GetSIMT() const { return m_simt; }
+  void SetSIMT(std::optional<lldb::tid_t> simt) { m_simt = simt; }
+
   bool GetIsActive() const { return m_active; }
   void SetIsActive(bool b) { m_active = b; }
 
@@ -1431,6 +1436,8 @@ protected:
   std::optional<lldb::tid_t> m_lane_id;
   /// The GPU lane SIMD groupd ID (wave/warp/core), if any.
   std::optional<lldb::tid_t> m_simd;
+  /// The SIMT group ID, if any.
+  std::optional<lldb::tid_t> m_simt;
   /// Set to false if this thread is not active.
   ///
   /// This can be used for GPU lanes to indicate that a lane is not active.

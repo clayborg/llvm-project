@@ -131,6 +131,14 @@ size_t ProcessMockGPU::UpdateThreads() {
     // Set the thread to inactive to verify gets sent back to LLDB.
     m_threads.back()->SetIsActive(false);
     SetCurrentThreadID(tid);
+
+    // Lets a test add a SIMT group of two threads.
+    if (llvm::sys::Process::GetEnv("LLDB_MOCK_GPU_SIMT_GROUP")) {
+      const lldb::tid_t simt_id = 7;
+      for (lldb::tid_t lane = 0; lane < 2; ++lane)
+        m_threads.push_back(std::make_unique<ThreadMockGPU>(
+            *this, tid + 1 + lane, lane, /*simd_id=*/std::nullopt, simt_id));
+    }
   }
   return m_threads.size();
 }
