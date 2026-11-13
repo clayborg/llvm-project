@@ -2243,6 +2243,32 @@ following keys and values:
     in the SVE Streaming Mode, but that is less common (see ESR
     register flag "WPF", "Watchpoint might be False-Positive") and
     not currently handled by lldb.
+* `lane` - `unsigned` (optional) -
+  The thread's lane in its SIMD group, in base 10.
+
+  Example:
+  ```
+  lane:3;
+  ```
+* `simd` - `unsigned` (optional) -
+  The ID of the thread's SIMD group, in base 10. lldb groups the threads that
+  report the same ID.
+
+  Example:
+  ```
+  simd:48;
+  ```
+* `inactive` - `unsigned` (optional) -
+  `1` if the thread is not active, as a GPU lane that its SIMD group is not
+  running, for example on the other side of a branch. lldb keeps a source-level
+  step going while the thread is inactive. `0` means the same as no key. In
+  `jThreadsInfo` and `jstopinfo` dictionaries, the value is a boolean:
+  `"inactive": true`.
+
+  Example:
+  ```
+  inactive:1;
+  ```
 * `implicitly_resumed` - `unsigned` (optional) -
   `1` if the last resume ran the thread of this stop reply although the resume
   packet left it suspended, as a GPU lane runs when another lane of its SIMD
