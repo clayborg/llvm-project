@@ -13,13 +13,9 @@ class TestNVGPUKill(NVGPUTestCaseBase):
     def run_to_gpu_stop(self) -> None:
         """Run the program to the breakpoint in its kernel, and pull the stop
         that the CPU makes with the GPU's."""
-        self.run_to_cpu_line(
-            SOURCE,
-            "// cpu breakpoint before launch",
-            exe_name=self.build_shared("kill"),
+        breakpoint = self.run_to_gpu_line(
+            SOURCE, "// breakpoint in kernel", exe_name=self.build_shared("kill")
         )
-        breakpoint = self.gpu_breakpoint(SOURCE, "// breakpoint in kernel")
-        self.continue_cpu_and_wait_for_gpu_to_stop()
         self.one_thread_at(breakpoint)
         if self.cpu_stops_with_gpu():
             # A kill of a CPU process that has stopped but still looks

@@ -11,7 +11,7 @@ __global__ void store_indices(int *data) {
 int main() {
   int *data;
   cudaMalloc(&data, N * sizeof(int));
-  store_indices<<<1, N>>>(data); // cpu breakpoint before launch
+  store_indices<<<1, N>>>(data);
   int host[N];
   cudaMemcpy(host, data, sizeof(host), cudaMemcpyDeviceToHost);
   cudaFree(data);

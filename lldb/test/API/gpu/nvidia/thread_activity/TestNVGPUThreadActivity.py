@@ -1,6 +1,5 @@
 import lldb
 from lldbsuite.test import lldbutil
-from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 
@@ -12,12 +11,8 @@ class TestNVGPUThreadActivity(NVGPUTestCaseBase):
         self.build()
         # The program loads this from its working directory.
         lldbutil.install_to_target(self, self.getBuildArtifact("loaded.fatbin"))
-        self.run_to_cpu_line(source, "// before kernel launch")
+        breakpoint = self.run_to_gpu_line(source, "// divergent store")
         self.select_gpu()
-        breakpoint = self.gpu_target.BreakpointCreateByLocation(
-            lldb.SBFileSpec(source), line_number(source, "// divergent store")
-        )
-        self.continue_cpu_and_wait_for_gpu_to_stop()
         self.assert_gpu_stop_at_breakpoint(breakpoint)
 
     def test_divergent_branch(self):

@@ -17,7 +17,7 @@ int main() {
   const int blocks = 2, threads = 32, n = blocks * threads;
   int *totals;
   cudaMalloc(&totals, n * sizeof(int));
-  accumulate<<<blocks, threads>>>(totals); // cpu breakpoint before launch
+  accumulate<<<blocks, threads>>>(totals);
   cudaDeviceSynchronize();
 
   int host[n];

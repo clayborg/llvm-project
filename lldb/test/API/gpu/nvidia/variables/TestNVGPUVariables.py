@@ -4,7 +4,6 @@ Test reading the variables of a stopped GPU thread.
 
 import lldb
 from lldbsuite.test.decorators import expectedFailureAll
-from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
 SOURCE = "variables.cu"
@@ -23,15 +22,11 @@ class TestNVGPUVariables(NVGPUTestCaseBase):
         cubin maps each function's PTX registers to SASS registers in a block of
         its own, and the functions here reuse the same PTX register names."""
         self.build()
-        self.run_to_cpu_line(SOURCE, "// cpu breakpoint before launch")
-        triple_breakpoint = self.gpu_target.BreakpointCreateByLocation(
-            SOURCE, line_number(SOURCE, "// breakpoint in triple")
-        )
-        accumulate_breakpoint = self.gpu_target.BreakpointCreateByLocation(
-            SOURCE, line_number(SOURCE, "// breakpoint in accumulate")
+        triple_breakpoint = self.run_to_gpu_line(SOURCE, "// breakpoint in triple")
+        accumulate_breakpoint = self.gpu_breakpoint(
+            SOURCE, "// breakpoint in accumulate"
         )
 
-        self.continue_cpu_and_wait_for_gpu_to_stop()
         thread = self.assert_gpu_stop_at_breakpoint(triple_breakpoint)[0]
         frame = thread.GetFrameAtIndex(0)
         self.assert_frame_at(frame, "triple(int)", SOURCE, "// breakpoint in triple")
@@ -57,9 +52,7 @@ class TestNVGPUVariables(NVGPUTestCaseBase):
         in a thread's local memory, such as an array, as `frame variable`
         does."""
         self.build()
-        self.run_to_cpu_line(SOURCE, "// cpu breakpoint before launch")
-        breakpoint = self.gpu_breakpoint(SOURCE, "// breakpoint in accumulate")
-        self.continue_cpu_and_wait_for_gpu_to_stop()
+        breakpoint = self.run_to_gpu_line(SOURCE, "// breakpoint in accumulate")
         frame = self.assert_gpu_stop_at_breakpoint(breakpoint)[0].GetFrameAtIndex(0)
         self.assert_int_variable(frame, "steps[2]", 3)
         for expression, expected in (("steps[2]", 3), ("steps[0] + steps[3]", 5)):

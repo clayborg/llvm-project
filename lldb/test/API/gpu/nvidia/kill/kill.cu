@@ -12,7 +12,7 @@ __global__ void count(int *result, int iterations) {
 int main() {
   int *result = nullptr;
   cudaMalloc(&result, sizeof(int));
-  count<<<1, 1>>>(result, 4); // cpu breakpoint before launch
+  count<<<1, 1>>>(result, 4);
   cudaDeviceSynchronize();
   cudaFree(result);
   return 0;

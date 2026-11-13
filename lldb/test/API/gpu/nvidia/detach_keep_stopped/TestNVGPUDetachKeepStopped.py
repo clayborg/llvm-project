@@ -13,16 +13,13 @@ class TestNVGPUDetachKeepStopped(NVGPUTestCaseBase):
         """Stop the GPU at its first breakpoint; return the second."""
         if not self.cpu_stops_with_gpu():
             self.skipTest("NVGPU_DISABLE_CPU_STOP_ON_GPU_STOP=1 keeps the CPU running")
-        self.run_to_cpu_line(
+        first = self.run_to_gpu_line(
             SOURCE,
-            "// cpu breakpoint before launch",
+            "// gpu breakpoint first",
             exe_name=self.build_shared("keep_stopped"),
         )
-        first = self.gpu_breakpoint(SOURCE, "// gpu breakpoint first")
-        second = self.gpu_breakpoint(SOURCE, "// gpu breakpoint second")
-        self.continue_cpu_and_wait_for_gpu_to_stop()
         self.assert_gpu_stop_at_breakpoint(first)
-        return second
+        return self.gpu_breakpoint(SOURCE, "// gpu breakpoint second")
 
     def assert_still_debugged(self, second):
         """lldb still debugs both processes: the GPU stops at its second

@@ -439,14 +439,10 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         target's copy of the breakpoint. `exe_name` and `target` are as for
         run_to_cpu_line.
 
-        Use it for a line the CPU never runs, such as one in a __device__
-        function. lldb also resolves a line of a kernel in the kernel's
-        host-side stub, which stops the CPU after it launches the kernel.
+        The line can be in a kernel's body. lldb also resolves such a line in
+        the host code that launches the kernel, and disables that location
+        once the GPU target exists, so the CPU does not stop there.
         """
-        # TODO: lldb should not stop the CPU in a kernel's host-side stub for a
-        # breakpoint on a line of the kernel. Once it does not, a kernel's line
-        # works here too: drop the note above and nvgpu-support.rst's advice to
-        # mark a line the CPU never runs.
         if target is None:
             exe_name = exe_name or "a.out"
             target = lldbutil.run_to_breakpoint_make_target(

@@ -11,7 +11,7 @@ int main() {
   unsigned *output = nullptr;
   if (cudaMalloc(&output, 32 * sizeof(*output)) != cudaSuccess)
     return 1;
-  activity<<<1, 32>>>(output); // before kernel launch
+  activity<<<1, 32>>>(output);
   if (cudaDeviceSynchronize() != cudaSuccess)
     return 1;
   // The test stops the GPU at this module load.
