@@ -149,11 +149,15 @@ public:
 
   Status DoHalt(bool &caused_stop) override;
 
+  Status WillDetach() override;
+
   Status DoDetach(bool keep_stopped) override;
 
   bool DetachRequiresHalt() override { return true; }
 
   Status DoSignal(int signal) override;
+
+  Status WillDestroy() override;
 
   Status DoDestroy() override;
 
@@ -518,6 +522,11 @@ private:
 
   Status HandleConnectionRequest(const GPUActions &gpu_action);
 
+  /// Disable the breakpoints that HandleGPUBreakpoints() set in this process
+  /// for the GPU plug-in \a gpu_plugin_name. The plug-in's GPU process calls
+  /// this when it detaches, as the plug-in no longer needs them.
+  void CleanupGPUState(llvm::StringRef gpu_plugin_name);
+
   Status HandleGPUActions(const GPUActions &gpu_action);
 
   /// Look up \a symbol_names in \a modules, and set each entry of
@@ -621,6 +630,10 @@ private:
   /// For the process of a GPU plugin target, the name of its GPU plug-in.
   /// Empty for any other process.
   std::string m_gpu_plugin_name;
+
+  /// The IDs of the breakpoints that HandleGPUBreakpoints() set for each GPU
+  /// plug-in, keyed by plug-in name.
+  llvm::StringMap<std::vector<lldb::break_id_t>> m_gpu_plugin_breakpoints;
 };
 
 } // namespace process_gdb_remote
