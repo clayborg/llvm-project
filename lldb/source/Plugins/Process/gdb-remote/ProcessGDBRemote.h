@@ -149,11 +149,15 @@ public:
 
   Status DoHalt(bool &caused_stop) override;
 
+  Status WillDetach() override;
+
   Status DoDetach(bool keep_stopped) override;
 
   bool DetachRequiresHalt() override { return true; }
 
   Status DoSignal(int signal) override;
+
+  Status WillDestroy() override;
 
   Status DoDestroy() override;
 
@@ -520,8 +524,8 @@ private:
 
   /// Disable the breakpoints that HandleGPUBreakpoints() set in this process
   /// for the GPU plug-in \a gpu_plugin_name. The plug-in's GPU process calls
-  /// this once it has detached, as the plug-in no longer needs them.
-  void GPUProcessWillDestroy(llvm::StringRef gpu_plugin_name);
+  /// this when it detaches, as the plug-in no longer needs them.
+  void CleanupGPUState(llvm::StringRef gpu_plugin_name);
 
   Status HandleGPUActions(const GPUActions &gpu_action);
 
@@ -553,11 +557,6 @@ private:
   ///     must not detach either, or it would leave that GPU process stopped
   ///     without a debugger.
   llvm::Error DetachGPUPluginTargets(bool keep_stopped);
-
-  /// Kill the processes of this target's GPU plugin targets, before this
-  /// process is killed. A GPU plug-in can ask lldb to detach from its GPU
-  /// process instead, with LLDBSettings::kill_should_detach.
-  llvm::Error KillGPUPluginTargets();
 
   // ContinueDelegate interface
   void HandleAsyncStdout(llvm::StringRef out) override;
