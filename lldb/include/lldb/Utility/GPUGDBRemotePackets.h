@@ -168,6 +168,9 @@ struct LLDBSettings {
   /// forward it to the GPU plug-in via a call to the
   /// LLDBServerPlugin::GetGPUDynamicLoaderLibraryInfos().
   bool send_dyld_packet_to_gpu = true;
+  /// If this is true, LLDB detaches from the process when the user tries to
+  /// kill it, for example because the process is part of the native process.
+  bool kill_should_detach = false;
 };
 
 bool fromJSON(const llvm::json::Value &value, LLDBSettings &data,

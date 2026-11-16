@@ -139,4 +139,23 @@ void DAPSessionManager::ReleaseExpiredEventThreads() {
   }
 }
 
+void DAPSessionManager::IncrementDebuggerSessionCount(
+    lldb::SBDebugger debugger) {
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  ++m_debugger_session_counts[debugger.GetID()];
+}
+
+unsigned
+DAPSessionManager::DecrementDebuggerSessionCount(lldb::SBDebugger debugger) {
+  std::lock_guard<std::mutex> lock(m_sessions_mutex);
+  auto it = m_debugger_session_counts.find(debugger.GetID());
+  if (it == m_debugger_session_counts.end())
+    return 0;
+  auto &[debugger_id, num_sessions] = *it;
+  unsigned remaining = --num_sessions;
+  if (remaining == 0)
+    m_debugger_session_counts.erase(it);
+  return remaining;
+}
+
 } // namespace lldb_dap

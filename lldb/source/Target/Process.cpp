@@ -3668,7 +3668,7 @@ Status Process::DestroyImpl(bool force_kill) {
   // failed and the process stays around for some reason it won't be in a
   // confused state.
 
-  if (force_kill)
+  if (force_kill && !m_kill_should_detach)
     m_should_detach = false;
 
   if (GetShouldDetach()) {
