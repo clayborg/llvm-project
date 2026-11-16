@@ -4,7 +4,6 @@ information (-G).
 """
 
 import lldb
-from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -36,14 +35,9 @@ class TestNVGPULineInfo(NVGPUTestCaseBase):
             f".debug_info in {module.GetFileSpec().GetFilename()}",
         )
 
-    @expectedFailureAll(
-        "lldb has no line entry for a cubin with .debug_line but no .debug_info"
-    )
     def test_line_entry_from_line_table(self):
         """Test that the stop in the kernel has a line entry from the line
-        table, in the kernel's source. Expected to fail until lldb reads the
-        line table of a cubin that has no .debug_info; the mark comes off with
-        the change that makes it pass."""
+        table, in the kernel's source."""
         line_entry = self.stop_in_square().GetLineEntry()
         self.assertTrue(line_entry.IsValid(), "no line entry at the stop")
         self.assertEqual(line_entry.GetFileSpec().GetFilename(), self.SOURCE)
