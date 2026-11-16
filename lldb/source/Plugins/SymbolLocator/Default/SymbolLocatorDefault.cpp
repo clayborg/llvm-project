@@ -80,10 +80,13 @@ std::optional<ModuleSpec> SymbolLocatorDefault::LocateExecutableObjectFile(
       exec_fspec ? exec_fspec.GetFilename().AsCString("<NULL>") : "<NULL>",
       arch ? arch->GetArchitectureName() : "<NULL>", (const void *)uuid);
 
+  if (!exec_fspec)
+    return {};
   ModuleSpecList module_specs;
   ModuleSpec matched_module_spec;
-  if (exec_fspec &&
-      ObjectFile::GetModuleSpecifications(exec_fspec, 0, 0, module_specs) &&
+  if (ObjectFile::GetModuleSpecifications(
+          exec_fspec, module_spec.GetObjectOffset(), module_spec.GetObjectSize(),
+          module_specs, module_spec.GetData()) &&
       module_specs.FindMatchingModuleSpec(module_spec, matched_module_spec)) {
     ModuleSpec result;
     result.GetFileSpec() = exec_fspec;

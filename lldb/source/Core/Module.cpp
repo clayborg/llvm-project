@@ -158,8 +158,7 @@ Module::Module(const ModuleSpec &module_spec)
   // file lookups still need whole-file enumeration so container plugins can
   // contribute every member or slice before we pick the matching spec.
   ModuleSpecList modules_specs;
-  const bool use_explicit_bounds =
-      data_sp && module_spec.HasObjectFileBounds();
+  const bool use_explicit_bounds = data_sp && module_spec.HasObjectFileBounds();
   const auto module_offset =
       use_explicit_bounds ? module_spec.GetObjectOffset() : 0;
   const auto module_size =
@@ -351,6 +350,22 @@ ObjectFile *Module::GetMemoryObjectFile(const lldb::ProcessSP &process_sp,
     }
   }
   return m_objfile_sp.get();
+}
+
+ModuleSpec Module::GetModuleSpec() {
+  std::lock_guard<std::recursive_mutex> guard(m_mutex);
+  const UUID &uuid = GetUUID();
+  ObjectFile *objfile = GetObjectFile();
+  ModuleSpec spec(m_file, uuid, m_data_sp);
+  spec.GetPlatformFileSpec() = m_platform_file;
+  spec.GetSymbolFileSpec() = m_symfile_spec;
+  spec.GetArchitecture() = m_arch;
+  spec.GetObjectName() = m_object_name;
+  spec.SetObjectOffset(objfile ? objfile->GetFileOffset() : m_object_offset);
+  spec.SetObjectSize(objfile ? objfile->GetByteSize() : m_object_size);
+  spec.GetObjectModificationTime() = m_object_mod_time;
+  spec.GetSourceMappingList() = m_source_mappings;
+  return spec;
 }
 
 const lldb_private::UUID &Module::GetUUID() {
@@ -1212,12 +1227,12 @@ ObjectFile *Module::GetObjectFile() {
         // Memory-backed slices already supply the exact subobject bytes. Plain
         // file-backed container members still reopen through the rest of the
         // backing file so the object plugin can recover the final bounds.
-        const lldb::offset_t object_size =
-            (m_data_sp && m_object_size) ? m_object_size
-                                         : file_size - m_object_offset;
-        m_objfile_sp = ObjectFile::FindPlugin(
-            shared_from_this(), &m_file, m_object_offset, object_size, data_sp,
-            data_offset);
+        const lldb::offset_t object_size = (m_data_sp && m_object_size)
+                                               ? m_object_size
+                                               : file_size - m_object_offset;
+        m_objfile_sp =
+            ObjectFile::FindPlugin(shared_from_this(), &m_file, m_object_offset,
+                                   object_size, data_sp, data_offset);
         if (m_objfile_sp) {
           // Once we get the object file, update our module with the object
           // file's architecture since it might differ in vendor/os if some

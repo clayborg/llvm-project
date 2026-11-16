@@ -536,6 +536,12 @@ public:
 
   uint64_t GetObjectSize() const { return m_object_size; }
 
+  /// Describe this module, preserving the parsed object's bounds and any
+  /// already-provided bytes.
+  ///
+  /// This may load the module's object file.
+  ModuleSpec GetModuleSpec();
+
   /// Get the object file representation for the current architecture.
   ///
   /// If the object file has not been located or parsed yet, this function
