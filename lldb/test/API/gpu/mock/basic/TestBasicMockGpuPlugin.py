@@ -308,6 +308,36 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         self.assertEqual(cpu_thread.GetLaneID(), lldb.LLDB_INVALID_LANE_ID)
         self.assertEqual(cpu_thread.GetSIMD(), lldb.LLDB_INVALID_SIMD_ID)
 
+    def test_mock_gpu_vcont_step_until_active(self):
+        self.common_setup()
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+
+        self.select_gpu()
+        thread = self.gpu_process.GetThreadAtIndex(0)
+        self.assertTrue(thread.IsValid())
+        self.assertFalse(thread.IsActive())
+        tid = thread.GetThreadID()
+        self.expect(
+            "process plugin packet send 'vCont?'",
+            patterns=[r"response: vCont(?:;[^;\n]+)*;a(?:;|\n)"],
+        )
+
+        for action in ("a", "a:0", "a:-1", f"a:{tid:x}junk", f"a:{tid:x};c"):
+            self.expect(
+                f"process plugin packet send 'vCont;{action}'",
+                patterns=[r"response: E03(?:;|\n)"],
+            )
+
+        pid = self.gpu_process.GetProcessID()
+        for thread_id in (f"{tid:x}", f"p{pid:x}.{tid:x}"):
+            self.expect(
+                f"process plugin packet send 'vCont;a:{thread_id}'",
+                patterns=[rf"response: T[0-9a-f]{{2}}thread:{tid:x};.*reason:trace;"],
+            )
+            self.assertNotIn("inactive:1;", self.res.GetOutput())
+
     def test_mock_gpu_requested_symbols(self):
         """
         Test that lldb sends the plug-in each symbol it asks for once, with its

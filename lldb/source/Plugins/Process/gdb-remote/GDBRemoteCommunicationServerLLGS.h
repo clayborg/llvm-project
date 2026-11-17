@@ -223,6 +223,8 @@ protected:
 
   PacketResult Handle_vCont(StringExtractorGDBRemote &packet);
 
+  PacketResult Handle_vContStepUntilActive(StringExtractorGDBRemote &packet);
+
   PacketResult Handle_vCont_actions(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_stop_reason(StringExtractorGDBRemote &packet);

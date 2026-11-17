@@ -557,6 +557,18 @@ bool GDBRemoteCommunicationClient::GetVContSupported(char flavor) {
   return false;
 }
 
+bool GDBRemoteCommunicationClient::GetVContStepUntilActiveSupported() {
+  // The server may select a different process after the initial vCont? query.
+  StringExtractorGDBRemote response;
+  if (SendPacketAndWaitForResponse("vCont?", response) != PacketResult::Success)
+    return false;
+
+  llvm::StringRef actions = response.GetStringRef();
+  if (!actions.consume_front("vCont;"))
+    return false;
+  return llvm::is_contained(llvm::split(actions, ';'), "a");
+}
+
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationClient::SendThreadSpecificPacketAndWaitForResponse(
     lldb::tid_t tid, StreamString &&payload,

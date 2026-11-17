@@ -1661,6 +1661,7 @@ Status ProcessGDBRemote::WillResume() {
   m_continue_C_tids.clear();
   m_continue_s_tids.clear();
   m_continue_S_tids.clear();
+  m_step_until_active_tid = LLDB_INVALID_THREAD_ID;
   m_jstopinfo_sp.reset();
   m_jthreadsinfo_sp.reset();
   return Status();
@@ -1700,8 +1701,19 @@ Status ProcessGDBRemote::DoResume(RunDirection direction) {
     // Number of threads continuing with "S", i.e. single-stepping with a signal
     // to deliver.
     const size_t num_continue_S_tids = m_continue_S_tids.size();
-    if (direction == RunDirection::eRunForward &&
-        m_gdb_comm.HasAnyVContSupport()) {
+    if (m_step_until_active_tid != LLDB_INVALID_THREAD_ID) {
+      if (direction != RunDirection::eRunForward || num_continue_c_tids ||
+          num_continue_C_tids || num_continue_s_tids || num_continue_S_tids)
+        return Status::FromErrorString(
+            "stepping until active requires a single forward resume with no "
+            "signal");
+      if (m_gdb_comm.GetMultiprocessSupported())
+        continue_packet.Format("vCont;a:p{0:x-}.{1:x-}", GetID(),
+                               m_step_until_active_tid);
+      else
+        continue_packet.Format("vCont;a:{0:x-}", m_step_until_active_tid);
+    } else if (direction == RunDirection::eRunForward &&
+               m_gdb_comm.HasAnyVContSupport()) {
       std::string pid_prefix;
       if (m_gdb_comm.GetMultiprocessSupported())
         pid_prefix = llvm::formatv("p{0:x-}.", GetID());

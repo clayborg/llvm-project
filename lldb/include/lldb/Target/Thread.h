@@ -634,6 +634,13 @@ public:
   ///     An error that describes anything that went wrong
   virtual Status StepOut(uint32_t frame_idx = 0);
 
+  /// Start a resume operation that stops when this thread becomes active.
+  ///
+  /// \return
+  ///     An error if the target does not support this operation or cannot
+  ///     resume the thread.
+  virtual Status StepUntilActive();
+
   /// Retrieves the per-thread data area.
   /// Most OSs maintain a per-thread pointer (e.g. the FS register on
   /// x64), which we return the value of here.

@@ -77,6 +77,42 @@ protected:
   MockServer server;
 };
 
+TEST_F(GDBRemoteCommunicationClientTest, VContStepUntilActiveSupported) {
+  auto result = std::async(std::launch::async, [&] {
+    return client.GetVContStepUntilActiveSupported();
+  });
+  HandlePacket(server, "vCont?", "vCont;c;C;s;S;a;t");
+  EXPECT_TRUE(result.get());
+}
+
+TEST_F(GDBRemoteCommunicationClientTest, VContStepUntilActiveAfterSelection) {
+  auto standard_actions = std::async(
+      std::launch::async, [&] { return client.HasAnyVContSupport(); });
+  HandlePacket(server, "vCont?", "vCont;c;C;s;S;t");
+  EXPECT_TRUE(standard_actions.get());
+
+  auto activation = std::async(std::launch::async, [&] {
+    return client.GetVContStepUntilActiveSupported();
+  });
+  HandlePacket(server, "vCont?", "vCont;c;C;s;S;t");
+  EXPECT_FALSE(activation.get());
+
+  activation = std::async(std::launch::async, [&] {
+    return client.GetVContStepUntilActiveSupported();
+  });
+  HandlePacket(server, "vCont?", "vCont;c;C;s;S;t;a");
+  EXPECT_TRUE(activation.get());
+}
+
+TEST_F(GDBRemoteCommunicationClientTest,
+       VContStepUntilActiveRequiresExactToken) {
+  auto result = std::async(std::launch::async, [&] {
+    return client.GetVContStepUntilActiveSupported();
+  });
+  HandlePacket(server, "vCont?", "vCont;c;C;s;S;activation");
+  EXPECT_FALSE(result.get());
+}
+
 TEST_F(GDBRemoteCommunicationClientTest, WriteRegister) {
   const lldb::tid_t tid = 0x47;
   const uint32_t reg_num = 4;

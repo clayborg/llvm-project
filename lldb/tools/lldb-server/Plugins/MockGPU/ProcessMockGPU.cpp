@@ -16,14 +16,16 @@
 #include "lldb/Utility/UnimplementedError.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Process.h"
+#include <csignal>
 
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
 
-ProcessMockGPU::ProcessMockGPU(lldb::pid_t pid, NativeDelegate &delegate)
-    : NativeProcessProtocol(pid, -1, delegate) {
+ProcessMockGPU::ProcessMockGPU(lldb::pid_t pid, NativeDelegate &delegate,
+                               MainLoop &main_loop)
+    : NativeProcessProtocol(pid, -1, delegate), m_main_loop(main_loop) {
   m_state = eStateStopped;
   UpdateThreads();
 }
@@ -33,7 +35,40 @@ Status ProcessMockGPU::Resume(const ResumeActionList &resume_actions) {
   return Status();
 }
 
+Status ProcessMockGPU::StepUntilActive(lldb::tid_t tid) {
+  if (!GetThreadByID(tid))
+    return Status::FromErrorString("Unknown mock GPU thread");
+
+  // Deliver the stop after LLGS has handled the resume request. Halt can
+  // cancel this operation from the native process's delayed-stop thread.
+  auto activation = std::make_shared<lldb::tid_t>(tid);
+  std::atomic_store(&m_pending_activation, activation);
+  std::weak_ptr<lldb::tid_t> pending_activation = activation;
+  auto complete_activation = [this, pending_activation](MainLoopBase &) {
+    auto activation_tid = pending_activation.lock();
+    if (!activation_tid || !std::atomic_compare_exchange_strong(
+                               &m_pending_activation, &activation_tid, {}))
+      return;
+    auto *thread = static_cast<ThreadMockGPU *>(GetThreadByID(*activation_tid));
+    if (thread) {
+      thread->SetIsActive(true);
+      thread->m_stop_info.reason = eStopReasonTrace;
+      thread->m_stop_info.signo = SIGTRAP;
+      SetCurrentThreadID(*activation_tid);
+    }
+    SetState(eStateStopped, true);
+  };
+  if (!m_main_loop.AddPendingCallback(complete_activation)) {
+    std::atomic_store(&m_pending_activation, {});
+    return Status::FromErrorString("Could not queue the mock GPU stop");
+  }
+
+  SetState(eStateRunning, true);
+  return Status();
+}
+
 Status ProcessMockGPU::Halt() {
+  std::atomic_store(&m_pending_activation, {});
   SetState(StateType::eStateStopped, true);
   return Status();
 }
@@ -45,6 +80,7 @@ Status ProcessMockGPU::Detach() {
     m_detach_failed = true;
     return Status::FromErrorString("the mock GPU process does not detach");
   }
+  std::atomic_store(&m_pending_activation, {});
   SetState(StateType::eStateDetached, true);
   return Status();
 }
@@ -311,7 +347,8 @@ ProcessMockGPU::Manager::Launch(
     ProcessLaunchInfo &launch_info,
     NativeProcessProtocol::NativeDelegate &native_delegate) {
   lldb::pid_t pid = 1234;
-  auto proc_up = std::make_unique<ProcessMockGPU>(pid, native_delegate);
+  auto proc_up =
+      std::make_unique<ProcessMockGPU>(pid, native_delegate, m_mainloop);
   proc_up->SetLaunchInfo(launch_info);
   return proc_up;
 }
@@ -334,5 +371,6 @@ void ProcessMockGPU::HandleNativeProcessExit(const WaitStatus &exit_status) {
            __FUNCTION__, exit_status);
 
   // Set our exit status to match the native process and notify delegates
+  std::atomic_store(&m_pending_activation, {});
   SetExitStatus(exit_status, true);
 }

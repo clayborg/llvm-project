@@ -60,6 +60,18 @@ public:
 
   virtual Status Resume(const ResumeActionList &resume_actions) = 0;
 
+  /// Return whether the process supports stepping until a thread is active.
+  virtual bool SupportsSteppingUntilActive() const { return false; }
+
+  /// Resume execution until the specified thread is active.
+  ///
+  /// Report a trace stop on that thread when the operation completes. If it
+  /// is already active, report the stop without executing an instruction.
+  /// A breakpoint or exception can interrupt the operation.
+  virtual Status StepUntilActive(lldb::tid_t) {
+    return Status::FromErrorString("Stepping until active is not supported");
+  }
+
   virtual Status Halt() = 0;
 
   virtual Status Detach() = 0;

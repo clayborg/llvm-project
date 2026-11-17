@@ -1907,8 +1907,50 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont_actions(
     StringExtractorGDBRemote &packet) {
   StreamString response;
   response.Printf("vCont;c;C;s;S;t");
+  if (m_continue_process && m_continue_process->SupportsSteppingUntilActive())
+    response.PutCString(";a");
 
   return SendPacketNoLock(response.GetString());
+}
+
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunicationServerLLGS::Handle_vContStepUntilActive(
+    StringExtractorGDBRemote &packet) {
+  constexpr llvm::StringLiteral prefix = "vCont;a:";
+  if (!packet.GetStringRef().starts_with(prefix))
+    return SendIllFormedResponse(packet, "'a' action requires a thread ID");
+
+  packet.SetFilePos(prefix.size());
+  const lldb::pid_t default_pid = m_continue_process
+                                      ? m_continue_process->GetID()
+                                      : LLDB_INVALID_PROCESS_ID;
+  auto pid_tid = packet.GetPidTid(default_pid);
+  if (!pid_tid || packet.GetBytesLeft() ||
+      pid_tid->second == StringExtractorGDBRemote::AllThreads)
+    return SendIllFormedResponse(packet,
+                                 "'a' action requires one concrete thread ID");
+
+  auto [pid, tid] = *pid_tid;
+  auto process_it = m_debugged_processes.find(pid);
+  if (process_it == m_debugged_processes.end())
+    return SendErrorResponse(GDBRemoteServerError::eErrorNoProcess);
+
+  NativeProcessProtocol &process = *process_it->second.process_up;
+  if (!process.SupportsSteppingUntilActive())
+    return SendIllFormedResponse(packet, "'a' action not supported");
+  if (!process.CanResume())
+    return SendErrorResponse(0x37);
+  if (!process.GetThreadByID(tid))
+    return SendErrorResponse(GDBRemoteServerError::eErrorResume);
+
+  Status error = process.StepUntilActive(tid);
+  if (error.Fail()) {
+    LLDB_LOG(GetLog(LLDBLog::Process),
+             "Process {0} failed to step until thread {1} is active: {2}",
+             process.GetID(), tid, error);
+    return SendErrorResponse(GDBRemoteServerError::eErrorResume);
+  }
+  return SendContinueSuccessResponse();
 }
 
 static bool ResumeActionListStopsAllThreads(ResumeActionList &actions) {
@@ -1929,6 +1971,9 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
   Log *log = GetLog(LLDBLog::Process);
   LLDB_LOGF(log, "GDBRemoteCommunicationServerLLGS::%s handling vCont packet",
             __FUNCTION__);
+
+  if (packet.GetStringRef().starts_with("vCont;a"))
+    return Handle_vContStepUntilActive(packet);
 
   packet.SetFilePos(::strlen("vCont"));
 

@@ -221,6 +221,8 @@ public:
 
   bool GetVContSupported(char flavor);
 
+  bool GetVContStepUntilActiveSupported();
+
   bool GetpPacketSupported(lldb::tid_t tid);
 
   enum class xPacketState {
