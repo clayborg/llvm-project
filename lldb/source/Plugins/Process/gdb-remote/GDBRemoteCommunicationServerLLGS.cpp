@@ -1943,11 +1943,10 @@ GDBRemoteCommunicationServerLLGS::Handle_vContStepUntilActive(
   if (!process.GetThreadByID(tid))
     return SendErrorResponse(GDBRemoteServerError::eErrorResume);
 
-  Status error = process.StepUntilActive(tid);
-  if (error.Fail()) {
-    LLDB_LOG(GetLog(LLDBLog::Process),
-             "Process {0} failed to step until thread {1} is active: {2}",
-             process.GetID(), tid, error);
+  if (llvm::Error error = process.StepUntilActive(tid)) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Process), std::move(error),
+                   "process {1} failed to step until thread {2} is active: {0}",
+                   process.GetID(), tid);
     return SendErrorResponse(GDBRemoteServerError::eErrorResume);
   }
   return SendContinueSuccessResponse();

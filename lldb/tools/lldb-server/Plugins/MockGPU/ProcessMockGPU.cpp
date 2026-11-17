@@ -35,9 +35,9 @@ Status ProcessMockGPU::Resume(const ResumeActionList &resume_actions) {
   return Status();
 }
 
-Status ProcessMockGPU::StepUntilActive(lldb::tid_t tid) {
+llvm::Error ProcessMockGPU::StepUntilActive(lldb::tid_t tid) {
   if (!GetThreadByID(tid))
-    return Status::FromErrorString("Unknown mock GPU thread");
+    return llvm::createStringError("unknown mock GPU thread");
 
   // Deliver the stop after LLGS has handled the resume request. Halt can
   // cancel this operation from the native process's delayed-stop thread.
@@ -60,11 +60,11 @@ Status ProcessMockGPU::StepUntilActive(lldb::tid_t tid) {
   };
   if (!m_main_loop.AddPendingCallback(complete_activation)) {
     std::atomic_store(&m_pending_activation, {});
-    return Status::FromErrorString("Could not queue the mock GPU stop");
+    return llvm::createStringError("could not queue the mock GPU stop");
   }
 
   SetState(eStateRunning, true);
-  return Status();
+  return llvm::Error::success();
 }
 
 Status ProcessMockGPU::Halt() {

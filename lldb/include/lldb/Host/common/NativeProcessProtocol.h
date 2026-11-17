@@ -68,8 +68,8 @@ public:
   /// Report a trace stop on that thread when the operation completes. If it
   /// is already active, report the stop without executing an instruction.
   /// A breakpoint or exception can interrupt the operation.
-  virtual Status StepUntilActive(lldb::tid_t) {
-    return Status::FromErrorString("Stepping until active is not supported");
+  virtual llvm::Error StepUntilActive(lldb::tid_t) {
+    return llvm::createStringError("stepping until active is not supported");
   }
 
   virtual Status Halt() = 0;

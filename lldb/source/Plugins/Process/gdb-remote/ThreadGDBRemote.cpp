@@ -34,6 +34,10 @@ using namespace lldb_private::process_gdb_remote;
 
 namespace {
 
+/// Runs the remote target until the selected thread is active.
+///
+/// The plan completes when the remote reports an explicit trace stop for the
+/// requested thread and that thread is active.
 class ThreadPlanStepUntilActive final : public ThreadPlan {
 public:
   explicit ThreadPlanStepUntilActive(Thread &thread)

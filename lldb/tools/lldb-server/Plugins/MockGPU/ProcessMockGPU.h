@@ -51,7 +51,7 @@ class Manager : public NativeProcessProtocol::Manager {
   Status Resume(const ResumeActionList &resume_actions) override;
 
   bool SupportsSteppingUntilActive() const override { return true; }
-  Status StepUntilActive(lldb::tid_t tid) override;
+  llvm::Error StepUntilActive(lldb::tid_t tid) override;
 
   Status Halt() override;
 
