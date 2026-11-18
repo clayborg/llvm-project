@@ -1947,6 +1947,15 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
   }
 
   std::unordered_map<lldb::pid_t, ResumeActionList> thread_actions;
+  auto append_action = [&](lldb::pid_t process_id, const ResumeAction &action) {
+    ResumeActionList &actions = thread_actions[process_id];
+    // The first all-thread action matches any thread that has not already
+    // matched an earlier action. It shadows all subsequent actions.
+    if (!actions.IsEmpty() &&
+        actions.GetFirst()[actions.GetSize() - 1].tid == LLDB_INVALID_THREAD_ID)
+      return;
+    actions.Append(action);
+  };
 
   while (packet.GetBytesLeft() && *packet.Peek() == ';') {
     // Skip the semi-colon.
@@ -2035,10 +2044,10 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
       if (tid != LLDB_INVALID_THREAD_ID)
         return SendIllFormedResponse(
             packet, "vCont: p-1 is not valid with a specific tid");
-      for (auto &process_it : m_debugged_processes)
-        thread_actions[process_it.first].Append(thread_action);
+      for (const auto &process_it : m_debugged_processes)
+        append_action(process_it.first, thread_action);
     } else
-      thread_actions[pid].Append(thread_action);
+      append_action(pid, thread_action);
   }
 
   assert(thread_actions.size() >= 1);
@@ -2080,11 +2089,6 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
         }
 
         LLDB_LOG(log, "halted process {0}", x.first);
-
-        // hack to avoid enabling stdio forwarding after stop
-        // TODO: remove this when we improve stdio forwarding for nonstop
-        assert(thread_actions.size() == 1);
-        return SendOKResponse();
       }
     } else {
       PacketResult resume_res =
