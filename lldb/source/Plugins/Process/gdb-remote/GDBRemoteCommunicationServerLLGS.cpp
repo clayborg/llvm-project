@@ -2046,8 +2046,9 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
             packet, "vCont: p-1 is not valid with a specific tid");
       for (const auto &process_it : m_debugged_processes)
         append_action(process_it.first, thread_action);
-    } else
+    } else {
       append_action(pid, thread_action);
+    }
   }
 
   assert(thread_actions.size() >= 1);
