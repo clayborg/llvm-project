@@ -13,6 +13,11 @@ TEST STRUCTURE:
     test_thread_count__<basename>
     test_registers__<basename>
     test_local_variables__<basename>
+    test_modules__<basename>     (combined module list)
+    test_backtrace__<basename>   (faulting GPU wave backtrace)
+
+  Each comparison logs the data gathered from both debuggers (module lists,
+  backtraces) and any differences via self.trace(), visible in the dotest log.
 
 ARCHITECTURAL DIFFERENCE:
 - LLDB: Creates TWO targets (CPU + GPU). Must use `target select` to switch
@@ -43,6 +48,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from framework.comparator import ResultComparator
+from framework.debugger_interface import DebuggerResult
 from framework.gdb_driver import GdbDriver
 from framework.lldb_driver import LldbDriver
 
@@ -54,10 +60,14 @@ def _get_default_core_dir():
 
 
 def _get_rocgdb_path():
-    """Get ROCgdb path by looking in PATH.
-    TODO: make this configurable via lit configuration.
+    """Get the ROCgdb binary.
+
+    Prefer GPU_COMPARISON_ROCGDB (the eval script points this at the
+    platform010 ROCm-7.0 rocgdb, which can open ROCm7 GPU cores; the system
+    /usr/bin/rocgdb fails to initialize the ROCm debug API on them). Fall
+    back to PATH.
     """
-    return shutil.which("rocgdb")
+    return os.environ.get("GPU_COMPARISON_ROCGDB") or shutil.which("rocgdb")
 
 
 def _get_core_files():
@@ -89,7 +99,7 @@ class TestAmdGpuCoreFileComparison(TestBase):
     # Per-core-file setup / teardown helpers
     # ------------------------------------------------------------------
 
-    def _load_core(self, core_path):
+    def _load_core(self, core_path, auto_load_debuginfo=False):
         """Load a core file in both debuggers and return (gdb_driver, lldb_driver, comparator)."""
         rocgdb_path = _get_rocgdb_path()
         if not rocgdb_path:
@@ -119,8 +129,18 @@ class TestAmdGpuCoreFileComparison(TestBase):
             pc_tolerance=0,
         )
 
-        gdb_driver.load_core(core_path)
-        lldb_driver.load_core(core_path)
+        # Module and backtrace comparisons request auto-load-debuginfo; the
+        # other comparisons keep the cheaper plain core load.
+        gdb_result = gdb_driver.load_core(
+            core_path, auto_load_debuginfo=auto_load_debuginfo
+        )
+        lldb_result = lldb_driver.load_core(
+            core_path, auto_load_debuginfo=auto_load_debuginfo
+        )
+        for label, result in (("ROCgdb", gdb_result), ("ROCLLDB", lldb_result)):
+            auto_load_output = result.extra_data.get("auto_load_output")
+            if auto_load_output:
+                self.trace(f"{label} auto-load-debuginfo:\n{auto_load_output}")
 
         # Store for cleanup in tearDown
         self._active_gdb_driver = gdb_driver
@@ -140,6 +160,61 @@ class TestAmdGpuCoreFileComparison(TestBase):
     # ------------------------------------------------------------------
     # Comparison helpers
     # ------------------------------------------------------------------
+
+    def _select_lldb_gpu_thread_matching_rocgdb(self, gdb_driver, lldb_driver):
+        """Select LLDB's GPU wave that matches ROCgDB's selected AMDGPU wave."""
+        lldb_select_result = lldb_driver.select_gpu()
+        if not lldb_select_result.success:
+            self.skipTest(lldb_select_result.error_message)
+        if lldb_driver.get_thread_count() == 0:
+            self.skipTest("No GPU threads in LLDB")
+
+        gdb_selected = gdb_driver.get_selected_thread()
+        if not gdb_selected.success:
+            self.trace(
+                "Could not query ROCgDB selected thread; keeping LLDB default "
+                f"GPU selection: {gdb_selected.error_message}"
+            )
+            return None
+
+        selected = gdb_selected.extra_data
+        self.trace(
+            "ROCgDB selected thread: "
+            f"gdb_thread={selected.get('id')} "
+            f"arch={selected.get('architecture')} "
+            f"wave={selected.get('amdgpu_wave_id')} "
+            f"lane={selected.get('amdgpu_lane_id')} "
+            f"pc={hex(selected.get('pc') or 0)} "
+            f"function={selected.get('function')}"
+        )
+        if selected.get("selected_line"):
+            self.trace(f"ROCgDB selected thread line: {selected['selected_line']}")
+
+        wave_id = selected.get("amdgpu_wave_id")
+        if wave_id is None:
+            self.trace(
+                "ROCgDB selected thread did not expose an AMDGPU wave id; "
+                "keeping LLDB default GPU selection"
+            )
+            return None
+
+        lldb_thread = lldb_driver.select_thread(wave_id)
+        if not lldb_thread.success:
+            self.fail(
+                "LLDB failed to select the ROCGDB-selected AMDGPU wave "
+                f"{wave_id}: {lldb_thread.error_message}"
+            )
+
+        info = lldb_thread.extra_data
+        self.trace(
+            "Selected LLDB GPU thread to match ROCGDB: "
+            f"wave={wave_id} "
+            f"lldb_tid={info.get('selected_thread')} "
+            f"index={info.get('selected_index_id')} "
+            f"name={info.get('selected_name')} "
+            f"target={info.get('target_triple')}"
+        )
+        return wave_id
 
     def _compare_variable_sets(self, comparator, gdb_vars, lldb_vars):
         """Compare variable sets between GDB and LLDB.
@@ -224,12 +299,7 @@ class TestAmdGpuCoreFileComparison(TestBase):
         gdb_driver, lldb_driver, comparator = self._load_core(core_path)
 
         gdb_result = gdb_driver.get_registers()
-
-        lldb_select_result = lldb_driver.select_gpu()
-        if not lldb_select_result.success:
-            self.skipTest(lldb_select_result.error_message)
-        if lldb_driver.get_thread_count() == 0:
-            self.skipTest("No GPU threads in LLDB")
+        self._select_lldb_gpu_thread_matching_rocgdb(gdb_driver, lldb_driver)
 
         lldb_result = lldb_driver.get_registers()
         self.assertTrue(
@@ -285,22 +355,17 @@ class TestAmdGpuCoreFileComparison(TestBase):
     def _run_local_variables_comparison(self, core_path):
         """Compare GPU local variables between debuggers for a core file.
 
-        Both debuggers select the crashing thread by default when loading a core.
-        We rely on this default selection rather than searching for threads,
-        which would change GDB's selected thread state.
+        ROCgDB and ROCLLDB use different default faulting-wave selection
+        policies. Query ROCgDB's selected AMDGPU wave id, then select the
+        matching ROCLLDB GPU thread before reading LLDB locals.
         """
         gdb_driver, lldb_driver, comparator = self._load_core(core_path)
-
-        lldb_select_result = lldb_driver.select_gpu()
-        if not lldb_select_result.success:
-            self.skipTest(lldb_select_result.error_message)
-        if lldb_driver.get_thread_count() == 0:
-            self.skipTest("No GPU threads in LLDB")
 
         # Get local variables from GDB using the default selected thread.
         # IMPORTANT: Do NOT call get_all_threads() here as it changes GDB's
         # selected thread!
         gdb_vars = gdb_driver.get_local_variables()
+        self._select_lldb_gpu_thread_matching_rocgdb(gdb_driver, lldb_driver)
 
         # Get local variables from LLDB through the LLDB adapter only.
         lldb_vars = lldb_driver.get_local_variables()
@@ -379,6 +444,157 @@ class TestAmdGpuCoreFileComparison(TestBase):
             ),
         )
 
+    def _run_module_comparison(self, core_path):
+        """Compare combined module lists for a core file.
+
+        ROCgdb reports modules as one flat objfile list. ROCLLDB keeps CPU and
+        GPU modules on separate targets, so gather both targets into one result
+        before comparing. This avoids depending on debugger-specific host/device
+        classification.
+        """
+        gdb_driver, lldb_driver, comparator = self._load_core(
+            core_path, auto_load_debuginfo=True
+        )
+
+        gdb_result = gdb_driver.get_modules()
+        self.assertTrue(
+            gdb_result.success,
+            f"GDB failed to list modules: {gdb_result.error_message}",
+        )
+
+        lldb_result = lldb_driver.get_combined_modules()
+        self.assertTrue(
+            lldb_result.success,
+            f"LLDB failed to list modules: {lldb_result.error_message}",
+        )
+
+        comparison = comparator.compare_modules(gdb_result, lldb_result)
+        gdb_normalized_modules = comparator.get_normalized_module_counts(gdb_result)
+        lldb_normalized_modules = comparator.get_normalized_module_counts(lldb_result)
+
+        def fmt(mod):
+            return f"{mod.name} uuid={mod.uuid or '?'}"
+
+        self.trace("\n=== Module comparison ===")
+        self.trace(f"GDB normalized modules: {len(gdb_normalized_modules)}")
+        self.trace(f"LLDB normalized modules: {len(lldb_normalized_modules)}")
+        for target_info in lldb_result.extra_data.get("targets", []):
+            target_name = target_info["name"]
+            if target_info.get("skipped"):
+                self.trace(
+                    f"\nLLDB {target_name} target modules: skipped "
+                    f"({target_info.get('error', '')})"
+                )
+                continue
+
+            target_modules = DebuggerResult(
+                success=True, modules=target_info.get("modules", [])
+            )
+            normalized_modules = comparator.get_normalized_module_counts(
+                target_modules
+            )
+            self.trace(
+                f"\nLLDB {target_name} target normalized modules: "
+                f"{len(normalized_modules)}"
+            )
+        for mod in gdb_result.modules:
+            self.trace(f"  GDB: {fmt(mod)}")
+        for mod in lldb_result.modules:
+            self.trace(f"  LLDB: {fmt(mod)}")
+
+        if not gdb_normalized_modules and not lldb_normalized_modules:
+            self.skipTest(
+                "No modules reported by either debugger "
+                "(executable/debug info unavailable for this core?)"
+            )
+
+        differences = comparison.differences
+        gdb_only_modules = comparison.gdb_only.get("modules", [])
+        lldb_only_modules = comparison.lldb_only.get("modules", [])
+
+        # These keys have already been normalized by the comparator. GDB-only
+        # entries are failures; LLDB-only entries are expected when LLDB sees
+        # extra placeholders or file-backed GPU code objects.
+        if gdb_only_modules:
+            self.trace(
+                f"  GDB-only normalized module keys missing from LLDB "
+                f"({len(gdb_only_modules)}): "
+                + ", ".join(str(m) for m in gdb_only_modules[:10])
+            )
+        if lldb_only_modules:
+            self.trace(
+                f"  LLDB-extra normalized module keys allowed "
+                f"({len(lldb_only_modules)}): "
+                + ", ".join(str(m) for m in lldb_only_modules[:10])
+            )
+
+        failure_lines = []
+        if differences:
+            failure_lines.append(f"Module differences: {len(differences)}; first 10:")
+            for diff in differences[:10]:
+                self.trace(f"  {diff.description}")
+                failure_lines.append(f"  {diff.description}")
+
+        if failure_lines:
+            self.fail("Module comparison failed:\n" + "\n".join(failure_lines))
+
+    def _run_backtrace_comparison(self, core_path):
+        """Compare the faulting GPU wave's backtrace between debuggers.
+
+        ROCgDB and ROCLLDB use different default faulting-wave selection
+        policies. Query ROCgDB's selected AMDGPU wave id, then select the
+        matching ROCLLDB GPU thread before collecting the LLDB backtrace.
+
+        PCs and depth must match. Function names fail only when ROCgDB has a
+        real symbol and ROCLLDB reports it as unknown; extra ROCLLDB
+        symbolication and demangler spelling differences are diagnostics.
+        """
+        gdb_driver, lldb_driver, comparator = self._load_core(
+            core_path, auto_load_debuginfo=True
+        )
+
+        gdb_result = gdb_driver.get_backtrace()
+        self.assertTrue(
+            gdb_result.success,
+            f"GDB failed to get backtrace: {gdb_result.error_message}",
+        )
+        self._select_lldb_gpu_thread_matching_rocgdb(gdb_driver, lldb_driver)
+
+        lldb_result = lldb_driver.get_backtrace()
+        self.assertTrue(
+            lldb_result.success,
+            f"LLDB failed to get backtrace: {lldb_result.error_message}",
+        )
+
+        def fmt(frame):
+            location = f" at {frame.file}:{frame.line}" if frame.file else ""
+            return f"#{frame.index} {hex(frame.pc)} {frame.function}{location}"
+
+        self.trace("\n=== GPU backtrace comparison (faulting wave) ===")
+        self.trace(f"GDB frames: {len(gdb_result.backtrace)}")
+        self.trace(f"LLDB frames: {len(lldb_result.backtrace)}")
+        for frame in gdb_result.backtrace[:10]:
+            self.trace(f"  GDB: {fmt(frame)}")
+        for frame in lldb_result.backtrace[:10]:
+            self.trace(f"  LLDB: {fmt(frame)}")
+
+        comparison = comparator.compare_backtrace(gdb_result, lldb_result)
+
+        # Empty on both sides is no coverage, not parity (see module test).
+        if not gdb_result.backtrace and not lldb_result.backtrace:
+            self.skipTest("Neither debugger produced any backtrace frames")
+
+        if comparison.differences:
+            failure_lines = [
+                f"Backtrace differences: {len(comparison.differences)}; first 10:"
+            ]
+            for diff in comparison.differences[:10]:
+                self.trace(f"  {diff.description}")
+                failure_lines.append(f"  {diff.description}")
+            self.fail(
+                "GPU backtrace comparison failed:\n" + "\n".join(failure_lines)
+            )
+
     # ------------------------------------------------------------------
     # Placeholder when no core files are available
     # ------------------------------------------------------------------
@@ -436,6 +652,22 @@ def _add_core_file_tests():
             test.__doc__ = f"Local variables comparison for {os.path.basename(cp)}"
             return test
 
+        def make_modules_test(cp=core_path):
+            @skipUnlessArch("x86_64")
+            @skipUnlessPlatform(["linux"])
+            def test(self):
+                self._run_module_comparison(cp)
+            test.__doc__ = f"Module comparison for {os.path.basename(cp)}"
+            return test
+
+        def make_backtrace_test(cp=core_path):
+            @skipUnlessArch("x86_64")
+            @skipUnlessPlatform(["linux"])
+            def test(self):
+                self._run_backtrace_comparison(cp)
+            test.__doc__ = f"GPU backtrace comparison for {os.path.basename(cp)}"
+            return test
+
         setattr(
             TestAmdGpuCoreFileComparison,
             f"test_thread_count__{basename}",
@@ -450,6 +682,16 @@ def _add_core_file_tests():
             TestAmdGpuCoreFileComparison,
             f"test_local_variables__{basename}",
             make_local_variables_test(),
+        )
+        setattr(
+            TestAmdGpuCoreFileComparison,
+            f"test_modules__{basename}",
+            make_modules_test(),
+        )
+        setattr(
+            TestAmdGpuCoreFileComparison,
+            f"test_backtrace__{basename}",
+            make_backtrace_test(),
         )
 
 
