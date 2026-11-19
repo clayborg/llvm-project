@@ -376,6 +376,39 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
             thread.GetStopDescription(256),
         )
 
+    def test_unclaimed_sm_exception_stands_in_beside_surviving_lane(self):
+        """An SM can record a fault while none of its surviving warps has a
+        valid error PC, so no active lane can borrow the SM's exception. The
+        fault would then be invisible, so it gets a stand-in alongside the
+        lane, and the stand-in is selected because it is the only thread that
+        carries the fault."""
+        b, dev = self._builder(with_grid=True)
+        sm = b.add_sm(
+            dev, sm_id=0, exception=self.WARP_ILLEGAL_INSTRUCTION,
+            error_pc=self.ERROR_PC,
+        )
+        # No warp errorPC: the lane cannot borrow sm.exception.
+        self._add_lane(b, sm, block_idx=(0, 0, 0))
+        _, process = self.generate_and_load_artificial_core(
+            b, name="unclaimedsmfault.nvcudmp"
+        )
+
+        self.assertEqual(
+            self._thread_names(process),
+            [self._lane_name((0, 0, 0)), self._sm_name(0, 0)],
+        )
+        lane, stand_in = process.GetThreadAtIndex(0), process.GetThreadAtIndex(1)
+        self.assertEqual(lane.GetStopReason(), lldb.eStopReasonNone)
+        self.assertEqual(stand_in.GetStopReason(), lldb.eStopReasonException)
+        self.assertIn(
+            "CUDA Exception: Warp Illegal Instruction",
+            stand_in.GetStopDescription(256),
+        )
+        self.assertEqual(stand_in.GetFrameAtIndex(0).GetPC(), self.ERROR_PC)
+        self.assertEqual(
+            process.GetSelectedThread().GetName(), self._sm_name(0, 0)
+        )
+
     def test_lane_exception_outranks_sm_exception(self):
         """Both fault kinds in one core: each gets its own thread, but the
         faulting lane is selected because it carries thread coordinates and

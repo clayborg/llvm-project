@@ -305,7 +305,8 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
   // thread order is unchanged.
   for (const SectionSP &sm :
        nvgpu_core::FindDescendantsByType(*m_root_sp, eSectionTypeNVGPUSm)) {
-    const uint32_t tid_before_sm = tid;
+    // Whether a lane on this SM carries an exception, its own or the SM's.
+    bool sm_has_lane_exception = false;
 
     for (const SectionSP &warp :
          nvgpu_core::FindDescendantsByType(*sm, eSectionTypeNVGPUWarp)) {
@@ -342,6 +343,8 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
 
         // Remember the first thread of each stop kind so an interesting
         // thread is auto-selected: prefer an exception, fall back to a trap.
+        if (thread_sp->GetAttributedException() != 0)
+          sm_has_lane_exception = true;
         if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
             thread_sp->GetAttributedException() != 0) {
           m_exception_tid = tid;
@@ -352,14 +355,16 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
       }
     }
 
-    if (tid != tid_before_sm)
+    if (sm_has_lane_exception)
       continue;
 
-    // No lane on this SM survived to the dump. If the SM row nonetheless
-    // records a fault -- a kernel that faulted but ran to completion before
-    // the coredump was written -- the exception has no lane to be attributed
-    // to and would otherwise be invisible, so stand in for it with a thread
-    // carrying the SM's error PC as its only frame.
+    // No lane on this SM carries an exception. If the SM row nonetheless
+    // records a fault, it has no lane to be attributed to and would otherwise
+    // be invisible, so stand in for it with a thread carrying the SM's error
+    // PC as its only frame. This happens when no lane survived to the dump (a
+    // kernel that faulted but ran to completion before the coredump was
+    // written), and when the fault was recorded only at SM level: no
+    // surviving warp has a valid error PC, so no lane can claim it.
     llvm::Expected<nvgpu_core::SMEntry> sm_or =
         nvgpu_core::ReadAndDecode<nvgpu_core::SMEntry>(sm, core);
     if (!sm_or) {
@@ -381,7 +386,7 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
 
   LLDB_LOG(log,
            "ProcessNVGPUCore: created {0} threads ({1} standing in for "
-           "SM-level exceptions with no surviving lane)",
+           "SM-level exceptions no lane carries)",
            tid, sm_exception_threads);
   return tid > 0;
 }
