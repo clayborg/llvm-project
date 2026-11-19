@@ -234,7 +234,8 @@ ProcessNVGPU *LLDBServerPluginNVGPU::GetGPUProcess() const {
 }
 
 std::optional<GPUActions> LLDBServerPluginNVGPU::NativeProcessIsStopping() {
-  return TryLateAttach();
+  TryLateAttach();
+  return std::nullopt;
 }
 
 std::optional<GPUActions> LLDBServerPluginNVGPU::SetRequestedSymbols(
@@ -246,7 +247,7 @@ std::optional<GPUActions> LLDBServerPluginNVGPU::SetRequestedSymbols(
     return std::nullopt;
   m_libcuda_symbols_received = true;
   m_late_attach_symbols = symbols;
-  std::optional<GPUActions> actions = TryLateAttach();
+  TryLateAttach();
   // When lldb launched the application, or attached before it initialized
   // CUDA, the initialization breakpoints bring the debugger API up instead.
   if (!m_late_attach_symbols.empty())
@@ -254,19 +255,19 @@ std::optional<GPUActions> LLDBServerPluginNVGPU::SetRequestedSymbols(
               "The CUDA driver cannot attach before the application has a "
               "CUDA context. lldb-server asks it to attach again each time "
               "the process stops");
-  return actions;
+  return std::nullopt;
 }
 
-std::optional<GPUActions> LLDBServerPluginNVGPU::TryLateAttach() {
+void LLDBServerPluginNVGPU::TryLateAttach() {
   // A call to cuInit that the initialization breakpoints follow can bring the
   // debugger API up, which its return shows first.
   if (m_late_attach_symbols.empty() || m_pending_cuinit)
-    return std::nullopt;
+    return;
   // jGPUPluginSymbols and stops are handled on the native server's thread, the
   // only one that may use its process, while the process is stopped.
   NativeProcessProtocol *native_process = m_native_process.GetCurrentProcess();
   if (!native_process)
-    return std::nullopt;
+    return;
 
   auto get_symbol_address = [this](StringRef name) {
     return FindSymbolValue(m_late_attach_symbols, name);
@@ -277,23 +278,12 @@ std::optional<GPUActions> LLDBServerPluginNVGPU::TryLateAttach() {
     m_late_attach_symbols.clear();
     LLDB_LOG_ERROR(GetLog(GDBRLog::Plugin), requested.takeError(),
                    "Cannot attach to the GPU of the running application: {0}");
-    return std::nullopt;
+    return;
   }
   if (!*requested)
-    return std::nullopt;
+    return;
   m_late_attach_symbols.clear();
   m_late_attach_requested = true;
-
-  // The driver calls the function these breakpoints are on once the
-  // application runs, and lldb sets them before it resumes the application.
-  GPUActions actions = GetNewGPUAction();
-  actions.breakpoints.emplace_back(
-      CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(
-          CUDADebuggerAPI::LIBCUDA_LIBRARY_NAME));
-  actions.breakpoints.emplace_back(
-      CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(
-          CUDADebuggerAPI::LIBCUDA_LIBRARY_NAME_ALT));
-  return actions;
 }
 
 void LLDBServerPluginNVGPU::AcceptAndMainLoopThread(
@@ -571,6 +561,12 @@ LLDBServerPluginNVGPU::BreakpointWasHit(GPUPluginBreakpointHitArgs &args) {
                                 name_info->function_name);
 
   if (*function == CUDADebuggerAPI::BreakpointFunction::AttachFinished) {
+    if (!m_late_attach_requested) {
+      LLDB_LOG(GetLog(GDBRLog::Plugin),
+               "Ignoring an attach-finished breakpoint before requesting a "
+               "late attach");
+      return GPUPluginBreakpointHitResponse(GetNewGPUAction());
+    }
     auto get_symbol_address = [&args](StringRef name) {
       return args.GetSymbolValue(name);
     };
@@ -774,6 +770,8 @@ GPUActions LLDBServerPluginNVGPU::GetInitializeActions() {
         CUDADebuggerAPI::GetCuInitBreakpointInfo(library_name));
     init_actions.breakpoints.push_back(
         CUDADebuggerAPI::GetPreInitBreakpointInfo(library_name));
+    init_actions.breakpoints.push_back(
+        CUDADebuggerAPI::GetAttachFinishedBreakpointInfo(library_name));
   }
   for (StringLiteral name : CUDADebuggerAPI::GetLateAttachSymbolNames())
     init_actions.symbol_names.push_back(name.str());

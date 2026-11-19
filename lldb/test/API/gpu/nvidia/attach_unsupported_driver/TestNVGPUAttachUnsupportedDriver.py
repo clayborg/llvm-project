@@ -46,6 +46,12 @@ class TestNVGPUAttachUnsupportedDriver(NVGPUTestCaseBase):
         self.runCmd("platform select host")
         self.runCmd(f"process attach -p {program.pid}")
         self.assertIsNone(self.gpu_target, "lldb added a GPU target")
+        # This breakpoint is an initialization action, so it exists even
+        # though this driver cannot accept a late-attach request.
+        self.expect(
+            "breakpoint list --internal",
+            patterns=[r"name = 'cudbgReportAttachProcedureFinished'"],
+        )
 
         def logged_why():
             if not os.path.exists(log_file):

@@ -49,16 +49,15 @@ namespace lldb_private::lldb_server {
 /// when cuInit is not called again, the driver's attach procedure brings the
 /// debugger API up:
 ///
-/// 1. GetInitializeActions asks lldb for libcuda's symbols, which lldb sends
-///    (SetRequestedSymbols) once it has loaded libcuda: as soon as it loads the
-///    libraries of a process that it attaches to.
+/// 1. GetInitializeActions asks lldb for libcuda's symbols and has it set
+///    breakpoints on CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED. lldb sends the
+///    symbols (SetRequestedSymbols) once it has loaded libcuda: as soon as it
+///    loads the libraries of a process that it attaches to.
 /// 2. The driver publishes its attach procedure descriptor only once the
 ///    application has a CUDA context, so TryLateAttach reads it again each time
 ///    the native process stops. Once it is valid, the plug-in writes who is
 ///    attaching into libcuda and a byte to the descriptor, which asks the
-///    driver to load its debug engine at a point that it knows to be safe, and
-///    has lldb set a breakpoint on CUDBG_REPORT_ATTACH_PROCEDURE_FINISHED
-///    before the application runs again.
+///    driver to load its debug engine at a point that it knows to be safe.
 /// 3. The driver loads its debug engine once the application runs, then calls
 ///    that function, whose breakpoint brings the debugger API up.
 /// 4. The driver replays the contexts and modules that the application already
@@ -114,9 +113,6 @@ public:
   /// application has a CUDA context, which it can create long after cuInit,
   /// which initializes the driver, has run.
   ///
-  /// \return
-  ///     Breakpoints on the function that the driver calls once it has
-  ///     attached, if this asked it to attach.
   std::optional<GPUActions> NativeProcessIsStopping() override;
 
   void NativeProcessDidExit(const WaitStatus &exit_status) override;
@@ -129,9 +125,6 @@ public:
   /// initialization breakpoints bring the GPU up, as on launch, or
   /// NativeProcessIsStopping asks again.
   ///
-  /// \return
-  ///     Breakpoints on the function that the driver calls once it has
-  ///     attached, if this asked it to attach.
   std::optional<GPUActions>
   SetRequestedSymbols(const std::vector<SymbolValue> &symbols) override;
 
@@ -272,10 +265,7 @@ private:
   /// Ask the driver to attach with the symbols in m_late_attach_symbols, if it
   /// can, on the native server's thread while the native process is stopped.
   ///
-  /// \return
-  ///     Breakpoints on the function that the driver calls once it has
-  ///     attached, if this asked it to attach.
-  std::optional<GPUActions> TryLateAttach();
+  void TryLateAttach();
 
   /// Tell the driver, once the debugger API is up at the end of a late attach,
   /// that this debugger serves it, and find out whether it has state to
@@ -310,9 +300,9 @@ private:
   /// brought the debugger API up. See NativeProcessIsStopping.
   std::vector<SymbolValue> m_late_attach_symbols;
 
-  /// Whether TryLateAttach has asked the driver to attach, after which only
-  /// the breakpoint that ends the attach brings the debugger API up. Only used
-  /// on the native server's thread.
+  /// Whether TryLateAttach has asked the driver to attach, after which only a
+  /// pre-armed breakpoint that ends the attach brings the debugger API up.
+  /// Only used on the native server's thread.
   bool m_late_attach_requested = false;
 
   /// A call to cuInit that the initialization breakpoints follow, from its
