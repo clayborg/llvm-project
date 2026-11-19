@@ -31,6 +31,9 @@ public:
 
   llvm::Expected<std::string> FindSMForELFv8OrGreater(lldb::ModuleSP module_sp);
 
+  /// Fallback for ABI v8 cubins without a .note.nv.cuinfo section.
+  llvm::Expected<std::string> FindSMFromELFv8Flags(lldb::ModuleSP module_sp);
+
 private:
   std::string m_cache_key;
   std::optional<std::string> m_cached_sm_arch;

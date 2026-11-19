@@ -75,6 +75,29 @@ ModuleSM::FindSMForELFv7OrLower(lldb::ModuleSP module_sp) {
   return sm_arch;
 }
 
+/// Read the SM from an ABI v8 cubin's e_flags, where it is stored in
+/// EF_CUDA_SM_MASK (the same decoding as ELFObjectFileBase::getNVPTXCPUName).
+llvm::Expected<std::string>
+ModuleSM::FindSMFromELFv8Flags(lldb::ModuleSP module_sp) {
+  ObjectFile *obj_file = module_sp->GetObjectFile();
+  if (!obj_file)
+    return llvm::createStringError("No object file found in module");
+
+  DataExtractor header_data;
+  if (obj_file->GetData(48, 4, header_data) < 4)
+    return llvm::createStringError(
+        "Failed to read the e_flags of the ELF header");
+
+  lldb::offset_t hdr_offset = 0;
+  const uint32_t e_flags = header_data.GetU32(&hdr_offset);
+  const uint32_t sm_ver =
+      (e_flags & llvm::ELF::EF_CUDA_SM_MASK) >> llvm::ELF::EF_CUDA_SM_OFFSET;
+  if (sm_ver == 0)
+    return llvm::createStringError("No SM architecture in e_flags 0x%x",
+                                   e_flags);
+  return llvm::formatv("SM{0}", sm_ver).str();
+}
+
 llvm::Expected<std::string>
 ModuleSM::FindSMForELFv8OrGreater(lldb::ModuleSP module_sp) {
   Log *log = GetLog(LLDBLog::Disassembler);
@@ -90,8 +113,12 @@ ModuleSM::FindSMForELFv8OrGreater(lldb::ModuleSP module_sp) {
 
   SectionSP cuinfo_section_sp =
       section_list->FindSectionByName(ConstString(".note.nv.cuinfo"));
-  if (!cuinfo_section_sp)
-    return llvm::createStringError(".note.nv.cuinfo section not found");
+  if (!cuinfo_section_sp) {
+    // Not every ABI v8 cubin carries the note (for example some CUDA 13
+    // runtime cubins), but this ABI also encodes the SM in e_flags.
+    LLDB_LOG(log, "ModuleSM::findSM: no .note.nv.cuinfo, reading e_flags");
+    return FindSMFromELFv8Flags(module_sp);
+  }
 
   // Read the section data
   DataExtractor section_data;

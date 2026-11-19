@@ -1,3 +1,5 @@
+import os
+import pathlib
 import re
 
 import lldb
@@ -50,6 +52,25 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
             patterns=[
                 "elfv8.cubin\\[0x7fffcf280300\\].*<\\+0>:.*MOV.*R4,R4",
                 "elfv8.cubin\\[0x7fffcf280310\\].*<\\+16>:.*FADD.*R3,-RZ,|R4|",
+            ],
+        )
+
+    def test_disass_elf_v8_without_cuinfo_note(self):
+        """An ELFv8 cubin without a .note.nv.cuinfo section still disassembles:
+        its SM is also encoded in e_flags."""
+        data = pathlib.Path(self.getSourcePath("elfv8.cubin")).read_bytes()
+        # Rename the note (keeping the length) so it is no longer found.
+        stripped = data.replace(b".note.nv.cuinfo\0", b".note.nv.xxxxxx\0")
+        self.assertNotEqual(stripped, data)
+        os.makedirs(self.getBuildDir(), exist_ok=True)
+        cubin = self.getBuildArtifact("elfv8-no-cuinfo.cubin")
+        pathlib.Path(cubin).write_bytes(stripped)
+        self.runCmd("file " + cubin)
+        self.expect(
+            "disassemble -a 0x00007fffcf280300",
+            patterns=[
+                "elfv8-no-cuinfo.cubin\\[0x7fffcf280300\\].*<\\+0>:.*MOV.*R4,R4",
+                "elfv8-no-cuinfo.cubin\\[0x7fffcf280310\\].*<\\+16>:.*FADD.*R3,-RZ,|R4|",
             ],
         )
 
