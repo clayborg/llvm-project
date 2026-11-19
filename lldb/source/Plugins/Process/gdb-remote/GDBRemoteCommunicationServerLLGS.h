@@ -10,6 +10,7 @@
 #define LLDB_SOURCE_PLUGINS_PROCESS_GDB_REMOTE_GDBREMOTECOMMUNICATIONSERVERLLGS_H
 
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -214,16 +215,15 @@ protected:
 
   PacketResult Handle_QListThreadsInStopReply(StringExtractorGDBRemote &packet);
 
-  PacketResult ResumeProcess(NativeProcessProtocol &process,
-                             const ResumeActionList &actions);
+  // If resuming fails, report the error and return the packet send result.
+  std::optional<PacketResult> ResumeProcess(NativeProcessProtocol &process,
+                                            const ResumeActionList &actions);
 
   PacketResult Handle_C(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_c(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_vCont(StringExtractorGDBRemote &packet);
-
-  PacketResult Handle_vContStepUntilActive(StringExtractorGDBRemote &packet);
 
   PacketResult Handle_vCont_actions(StringExtractorGDBRemote &packet);
 

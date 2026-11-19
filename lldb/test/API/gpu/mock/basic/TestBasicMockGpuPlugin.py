@@ -39,9 +39,11 @@ def get_sent_symbols(log_file):
 
 
 class BasicMockGpuTestCase(GpuTestCaseBase):
-    def common_setup(self):
+    def common_setup(self, multi_thread=False):
         """Build the test program and run to the CPU breakpoint."""
         super().setUp()
+        if multi_thread:
+            self.set_plugin_env("LLDB_MOCK_GPU_MULTI_THREAD", "1")
         self.build()
         self.source_spec = lldb.SBFileSpec(SOURCE_FILE, False)
         (cpu_target, cpu_process, cpu_thread, cpu_bkpt) = lldbutil.run_to_source_breakpoint(
@@ -321,10 +323,17 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         tid = thread.GetThreadID()
         self.expect(
             "process plugin packet send 'vCont?'",
-            patterns=[r"response: vCont(?:;[^;\n]+)*;a(?:;|\n)"],
+            patterns=[r"response: vCont(?:;[^;\n]+)*;v(?:;|\n)"],
         )
 
-        for action in ("a", "a:0", "a:-1", f"a:{tid:x}junk", f"a:{tid:x};c"):
+        for action in (
+            "v",
+            "v:0",
+            "v:-1",
+            f"v:{tid:x}junk",
+            f"v:{tid:x};c:{tid:x}junk",
+            f"c:{tid:x};v:0",
+        ):
             self.expect(
                 f"process plugin packet send 'vCont;{action}'",
                 patterns=[r"response: E03(?:;|\n)"],
@@ -333,8 +342,43 @@ class BasicMockGpuTestCase(GpuTestCaseBase):
         pid = self.gpu_process.GetProcessID()
         for thread_id in (f"{tid:x}", f"p{pid:x}.{tid:x}"):
             self.expect(
-                f"process plugin packet send 'vCont;a:{thread_id}'",
+                f"process plugin packet send 'vCont;v:{thread_id}'",
                 patterns=[rf"response: T[0-9a-f]{{2}}thread:{tid:x};.*reason:trace;"],
+            )
+            self.assertNotIn("inactive:1;", self.res.GetOutput())
+
+    def test_mock_gpu_vcont_mixed_actions(self):
+        self.common_setup(multi_thread=True)
+        lldbutil.continue_to_source_breakpoint(
+            self, self.cpu_process, CPU_AFTER_BREAKPOINT_COMMENT, self.source_spec
+        )
+        self.select_gpu()
+
+        self.assertEqual(self.gpu_process.GetNumThreads(), 3)
+        inactive1, inactive2, active = list(self.gpu_process)
+        self.assertFalse(inactive1.IsActive())
+        self.assertFalse(inactive2.IsActive())
+        self.assertTrue(active.IsActive())
+        first_tid = inactive1.GetThreadID()
+        second_tid = inactive2.GetThreadID()
+        active_tid = active.GetThreadID()
+        first_pc = inactive1.GetFrameAtIndex(0).GetPC()
+        second_pc = inactive2.GetFrameAtIndex(0).GetPC()
+        active_pc = active.GetFrameAtIndex(0).GetPC()
+
+        for actions, stop_tid, active_thread_pc in (
+            (f"v:{first_tid:x};v:{active_tid:x}", active_tid, active_pc),
+            (f"v:{first_tid:x};s:{active_tid:x}", active_tid, active_pc + 1),
+            (f"v:{first_tid:x};c:{active_tid:x}", first_tid, active_pc + 1),
+            (f"c:{active_tid:x};v:{second_tid:x}", second_tid, active_pc + 1),
+        ):
+            self.expect(
+                f"process plugin packet send 'vCont;{actions}'",
+                patterns=[
+                    rf"response: T[0-9a-f]{{2}}thread:{stop_tid:x};"
+                    rf".*;thread-pcs:{first_pc:016x},{second_pc:016x},"
+                    rf"{active_thread_pc:016x};.*reason:trace;"
+                ],
             )
             self.assertNotIn("inactive:1;", self.res.GetOutput())
 

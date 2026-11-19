@@ -9,9 +9,9 @@
 #ifndef LLDB_HOST_DEBUG_H
 #define LLDB_HOST_DEBUG_H
 
-#include <vector>
-
 #include "lldb/lldb-private.h"
+#include "llvm/ADT/ArrayRef.h"
+#include <vector>
 
 namespace lldb_private {
 
@@ -27,6 +27,9 @@ struct ResumeAction {
 
   // The resume signal. LLDB_INVALID_SIGNAL_NUMBER leaves it unspecified.
   int signal = LLDB_INVALID_SIGNAL_NUMBER;
+
+  // Applies to a named thread in eStateRunning.
+  bool resume_until_active = false;
 };
 
 // A class that contains instructions for all threads for
@@ -118,6 +121,8 @@ public:
   }
 
   const ResumeAction *GetFirst() const { return m_actions.data(); }
+
+  llvm::ArrayRef<ResumeAction> GetActions() const { return m_actions; }
 
   size_t GetSize() const { return m_actions.size(); }
 

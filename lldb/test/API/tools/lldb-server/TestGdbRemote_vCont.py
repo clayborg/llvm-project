@@ -50,13 +50,15 @@ class TestGdbRemote_vCont(gdbremote_testcase.GdbRemoteTestCaseBase):
         self.add_threadinfo_collection_packets()
 
         context = self.expect_gdbremote_sequence()
-        self.assertNotIn("a", self.parse_vCont_query_response(context))
+        self.assertNotIn("v", self.parse_vCont_query_response(context))
         (tid,) = self.parse_threadinfo_packets(context)
 
         self.reset_test_sequence()
         self.test_sequence.add_log_lines(
             [
-                f"read packet: $vCont;a:{tid:x}#00",
+                f"read packet: $vCont;v:{tid:x}#00",
+                "send packet: $E03#00",
+                f"read packet: $vCont;c:{tid:x};v:{tid:x}#00",
                 "send packet: $E03#00",
             ],
             True,

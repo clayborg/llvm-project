@@ -58,19 +58,11 @@ public:
       llvm::pointee_iterator<thread_collection::const_iterator>>
       ThreadIterable;
 
+  /// A resume-until-active action reports a trace stop on the requested
+  /// thread when it becomes active. If the thread is already active, report
+  /// the stop before executing instructions. An intervening stop keeps its
+  /// normal stop reason.
   virtual Status Resume(const ResumeActionList &resume_actions) = 0;
-
-  /// Return whether the process supports stepping until a thread is active.
-  virtual bool SupportsSteppingUntilActive() const { return false; }
-
-  /// Resume execution until the specified thread is active.
-  ///
-  /// Report a trace stop on that thread when the operation completes. If it
-  /// is already active, report the stop without executing an instruction.
-  /// A breakpoint or exception can interrupt the operation.
-  virtual llvm::Error StepUntilActive(lldb::tid_t) {
-    return llvm::createStringError("stepping until active is not supported");
-  }
 
   virtual Status Halt() = 0;
 
@@ -370,7 +362,10 @@ public:
     gpu_plugins = (1u << 9),
     lldb_settings = (1u << 10),
     address_spaces = (1u << 11),
-    LLVM_MARK_AS_BITMASK_ENUM(address_spaces)
+    /// Resume accepts per-thread resume-until-active actions. This capability
+    /// must be stable for the lifetime of the remote connection.
+    resume_until_active = (1u << 12),
+    LLVM_MARK_AS_BITMASK_ENUM(resume_until_active)
   };
 
   class Manager {

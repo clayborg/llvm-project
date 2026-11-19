@@ -270,6 +270,8 @@ class LldbGdbServerTestCase(gdbremote_testcase.GdbRemoteTestCaseBase):
                 "send packet: $OK#00",
                 "read packet: $vCont;c:{}#00".format(ret["tid2"]),
                 "send packet: $E37#00",
+                "read packet: $qC#00",
+                {"direction": "send", "regex": r"^\$QC[0-9a-fA-F]+#"},
             ],
             True,
         )

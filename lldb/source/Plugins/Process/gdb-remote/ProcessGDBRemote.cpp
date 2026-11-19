@@ -1661,7 +1661,7 @@ Status ProcessGDBRemote::WillResume() {
   m_continue_C_tids.clear();
   m_continue_s_tids.clear();
   m_continue_S_tids.clear();
-  m_step_until_active_tid = LLDB_INVALID_THREAD_ID;
+  m_continue_v_tids.clear();
   m_jstopinfo_sp.reset();
   m_jthreadsinfo_sp.reset();
   return Status();
@@ -1701,26 +1701,29 @@ Status ProcessGDBRemote::DoResume(RunDirection direction) {
     // Number of threads continuing with "S", i.e. single-stepping with a signal
     // to deliver.
     const size_t num_continue_S_tids = m_continue_S_tids.size();
-    if (m_step_until_active_tid != LLDB_INVALID_THREAD_ID) {
-      if (direction != RunDirection::eRunForward || num_continue_c_tids ||
-          num_continue_C_tids || num_continue_s_tids || num_continue_S_tids)
+    const bool resume_until_active = !m_continue_v_tids.empty();
+    if (resume_until_active) {
+      if (direction != RunDirection::eRunForward)
         return Status::FromErrorString(
-            "stepping until active requires a single forward resume with no "
-            "signal");
-      if (m_gdb_comm.GetMultiprocessSupported())
-        continue_packet.Format("vCont;a:p{0:x-}.{1:x-}", GetID(),
-                               m_step_until_active_tid);
-      else
-        continue_packet.Format("vCont;a:{0:x-}", m_step_until_active_tid);
-    } else if (direction == RunDirection::eRunForward &&
-               m_gdb_comm.HasAnyVContSupport()) {
+            "stepping until active requires forward execution");
+      if (llvm::any_of(m_continue_v_tids, [&](const auto &action) {
+            return GetUnixSignals()->SignalIsValid(action.second);
+          }))
+        return Status::FromErrorString(
+            "stepping until active cannot deliver a signal to the same thread");
+      if (!m_gdb_comm.GetVContSupported('v'))
+        return Status::FromErrorString("stepping until active is unsupported");
+    }
+    if (direction == RunDirection::eRunForward &&
+        (resume_until_active || m_gdb_comm.HasAnyVContSupport())) {
       std::string pid_prefix;
       if (m_gdb_comm.GetMultiprocessSupported())
         pid_prefix = llvm::formatv("p{0:x-}.", GetID());
 
-      if (num_continue_c_tids == num_threads ||
-          (m_continue_c_tids.empty() && m_continue_C_tids.empty() &&
-           m_continue_s_tids.empty() && m_continue_S_tids.empty())) {
+      if (!resume_until_active &&
+          (num_continue_c_tids == num_threads ||
+           (m_continue_c_tids.empty() && m_continue_C_tids.empty() &&
+            m_continue_s_tids.empty() && m_continue_S_tids.empty()))) {
         // All threads are continuing
         if (m_gdb_comm.GetMultiprocessSupported())
           continue_packet.Format("vCont;c:{0}-1", pid_prefix);
@@ -1728,6 +1731,8 @@ Status ProcessGDBRemote::DoResume(RunDirection direction) {
           continue_packet.PutCString("c");
       } else {
         continue_packet.PutCString("vCont");
+        for (const auto &action : m_continue_v_tids)
+          continue_packet.Format(";v:{0}{1:x-}", pid_prefix, action.first);
 
         if (!m_continue_c_tids.empty()) {
           if (m_gdb_comm.GetVContSupported('c')) {
@@ -1781,7 +1786,8 @@ Status ProcessGDBRemote::DoResume(RunDirection direction) {
     } else
       continue_packet_error = true;
 
-    if (direction == RunDirection::eRunForward && continue_packet_error) {
+    if (direction == RunDirection::eRunForward && continue_packet_error &&
+        !resume_until_active) {
       // Either no vCont support, or we tried to use part of the vCont packet
       // that wasn't supported by the remote GDB server. We need to try and
       // make a simple packet that can do our continue.

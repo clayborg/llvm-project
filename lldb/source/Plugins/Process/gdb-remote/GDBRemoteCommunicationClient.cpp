@@ -292,10 +292,14 @@ void GDBRemoteCommunicationClient::ResetDiscoverableSettings(bool did_exec) {
     m_supports_not_sending_acks = eLazyBoolCalculate;
     m_supports_thread_suffix = eLazyBoolCalculate;
     m_supports_threads_in_stop_reply = eLazyBoolCalculate;
+    m_supports_vCont_all = eLazyBoolCalculate;
+    m_supports_vCont_any = eLazyBoolCalculate;
     m_supports_vCont_c = eLazyBoolCalculate;
     m_supports_vCont_C = eLazyBoolCalculate;
     m_supports_vCont_s = eLazyBoolCalculate;
     m_supports_vCont_S = eLazyBoolCalculate;
+    m_supports_vCont_t = eLazyBoolCalculate;
+    m_supports_vCont_v = eLazyBoolCalculate;
     m_supports_p = eLazyBoolCalculate;
     m_supports_QSaveRegisterState = eLazyBoolCalculate;
     m_qHostInfo_is_valid = eLazyBoolCalculate;
@@ -500,73 +504,70 @@ bool GDBRemoteCommunicationClient::GetThreadSuffixSupported() {
 }
 bool GDBRemoteCommunicationClient::GetVContSupported(char flavor) {
   if (m_supports_vCont_c == eLazyBoolCalculate) {
-    StringExtractorGDBRemote response;
-    m_supports_vCont_any = eLazyBoolNo;
     m_supports_vCont_all = eLazyBoolNo;
+    m_supports_vCont_any = eLazyBoolNo;
     m_supports_vCont_c = eLazyBoolNo;
     m_supports_vCont_C = eLazyBoolNo;
     m_supports_vCont_s = eLazyBoolNo;
     m_supports_vCont_S = eLazyBoolNo;
+    m_supports_vCont_t = eLazyBoolNo;
+    m_supports_vCont_v = eLazyBoolNo;
+
+    StringExtractorGDBRemote response;
     if (SendPacketAndWaitForResponse("vCont?", response) ==
         PacketResult::Success) {
-      const char *response_cstr = response.GetStringRef().data();
-      if (::strstr(response_cstr, ";c"))
-        m_supports_vCont_c = eLazyBoolYes;
-
-      if (::strstr(response_cstr, ";C"))
-        m_supports_vCont_C = eLazyBoolYes;
-
-      if (::strstr(response_cstr, ";s"))
-        m_supports_vCont_s = eLazyBoolYes;
-
-      if (::strstr(response_cstr, ";S"))
-        m_supports_vCont_S = eLazyBoolYes;
-
-      if (m_supports_vCont_c == eLazyBoolYes &&
-          m_supports_vCont_C == eLazyBoolYes &&
-          m_supports_vCont_s == eLazyBoolYes &&
-          m_supports_vCont_S == eLazyBoolYes) {
-        m_supports_vCont_all = eLazyBoolYes;
-      }
-
-      if (m_supports_vCont_c == eLazyBoolYes ||
-          m_supports_vCont_C == eLazyBoolYes ||
-          m_supports_vCont_s == eLazyBoolYes ||
-          m_supports_vCont_S == eLazyBoolYes) {
-        m_supports_vCont_any = eLazyBoolYes;
+      llvm::StringRef actions = response.GetStringRef();
+      if (actions.consume_front("vCont;")) {
+        for (llvm::StringRef action : llvm::split(actions, ';')) {
+          if (action == "c")
+            m_supports_vCont_c = eLazyBoolYes;
+          else if (action == "C")
+            m_supports_vCont_C = eLazyBoolYes;
+          else if (action == "s")
+            m_supports_vCont_s = eLazyBoolYes;
+          else if (action == "S")
+            m_supports_vCont_S = eLazyBoolYes;
+          else if (action == "t")
+            m_supports_vCont_t = eLazyBoolYes;
+          else if (action == "v")
+            m_supports_vCont_v = eLazyBoolYes;
+        }
       }
     }
+
+    if (m_supports_vCont_c == eLazyBoolYes &&
+        m_supports_vCont_C == eLazyBoolYes &&
+        m_supports_vCont_s == eLazyBoolYes &&
+        m_supports_vCont_S == eLazyBoolYes)
+      m_supports_vCont_all = eLazyBoolYes;
+
+    if (m_supports_vCont_c == eLazyBoolYes ||
+        m_supports_vCont_C == eLazyBoolYes ||
+        m_supports_vCont_s == eLazyBoolYes ||
+        m_supports_vCont_S == eLazyBoolYes)
+      m_supports_vCont_any = eLazyBoolYes;
   }
 
   switch (flavor) {
   case 'a':
-    return m_supports_vCont_any;
+    return m_supports_vCont_any == eLazyBoolYes;
   case 'A':
-    return m_supports_vCont_all;
+    return m_supports_vCont_all == eLazyBoolYes;
   case 'c':
-    return m_supports_vCont_c;
+    return m_supports_vCont_c == eLazyBoolYes;
   case 'C':
-    return m_supports_vCont_C;
+    return m_supports_vCont_C == eLazyBoolYes;
   case 's':
-    return m_supports_vCont_s;
+    return m_supports_vCont_s == eLazyBoolYes;
   case 'S':
-    return m_supports_vCont_S;
+    return m_supports_vCont_S == eLazyBoolYes;
+  case 't':
+    return m_supports_vCont_t == eLazyBoolYes;
+  case 'v':
+    return m_supports_vCont_v == eLazyBoolYes;
   default:
-    break;
+    return false;
   }
-  return false;
-}
-
-bool GDBRemoteCommunicationClient::GetVContStepUntilActiveSupported() {
-  // The server may select a different process after the initial vCont? query.
-  StringExtractorGDBRemote response;
-  if (SendPacketAndWaitForResponse("vCont?", response) != PacketResult::Success)
-    return false;
-
-  llvm::StringRef actions = response.GetStringRef();
-  if (!actions.consume_front("vCont;"))
-    return false;
-  return llvm::is_contained(llvm::split(actions, ';'), "a");
 }
 
 GDBRemoteCommunication::PacketResult

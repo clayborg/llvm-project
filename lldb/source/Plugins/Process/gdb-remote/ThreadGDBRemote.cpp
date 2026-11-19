@@ -306,21 +306,14 @@ void ThreadGDBRemote::WillResume(StateType resume_state) {
       // Don't append anything for threads that should stay stopped.
       break;
 
-    case eStateRunning: {
-      const bool has_signal =
-          gdb_process->GetUnixSignals()->SignalIsValid(signo);
-      if (GetCurrentPlan()->GetKind() == ThreadPlan::eKindStepUntilActive) {
-        gdb_process->m_step_until_active_tid = tid;
-        // Let DoResume reject signals instead of dropping them on this action.
-        if (!has_signal)
-          break;
-      }
-      if (has_signal)
+    case eStateRunning:
+      if (GetCurrentPlan()->GetKind() == ThreadPlan::eKindStepUntilActive)
+        gdb_process->m_continue_v_tids.emplace_back(tid, signo);
+      else if (gdb_process->GetUnixSignals()->SignalIsValid(signo))
         gdb_process->m_continue_C_tids.push_back(std::make_pair(tid, signo));
       else
         gdb_process->m_continue_c_tids.push_back(tid);
       break;
-    }
 
     case eStateStepping:
       if (gdb_process->GetUnixSignals()->SignalIsValid(signo))
@@ -348,7 +341,7 @@ Status ThreadGDBRemote::StepUntilActive() {
     return Status::FromErrorString("thread is suspended");
 
   auto &gdb_process = static_cast<ProcessGDBRemote &>(*process);
-  if (!gdb_process.GetGDBRemote().GetVContStepUntilActiveSupported())
+  if (!gdb_process.GetGDBRemote().GetVContSupported('v'))
     return Thread::StepUntilActive();
   if (!process->GetThreadList().SetSelectedThreadByID(GetID()))
     return Status::FromErrorString("thread is no longer in the process");

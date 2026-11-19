@@ -6,11 +6,69 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
+#include "GDBRemoteTestUtils.h"
+#include "Plugins/Process/gdb-remote/LLDBServerPlugin.h"
 #include "gtest/gtest.h"
 
-#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
-
+using namespace lldb;
+using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
+
+namespace {
+class CapabilityManager : public NativeProcessProtocol::Manager {
+public:
+  CapabilityManager(MainLoop &loop, NativeProcessProtocol::Extension extensions)
+      : Manager(loop), m_extensions(extensions) {}
+
+  llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
+  Launch(ProcessLaunchInfo &,
+         NativeProcessProtocol::NativeDelegate &) override {
+    return llvm::createStringError("unexpected launch");
+  }
+
+  llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
+  Attach(lldb::pid_t, NativeProcessProtocol::NativeDelegate &) override {
+    return llvm::createStringError("unexpected attach");
+  }
+
+  NativeProcessProtocol::Extension GetSupportedExtensions() const override {
+    return m_extensions;
+  }
+
+private:
+  NativeProcessProtocol::Extension m_extensions;
+};
+
+class CapabilityServer : public GDBRemoteCommunicationServerLLGS {
+public:
+  CapabilityServer(MainLoop &loop, CapabilityManager &manager)
+      : GDBRemoteCommunicationServerLLGS(loop, manager, "CapabilityServer") {
+    m_send_acks = false;
+  }
+
+  using GDBRemoteCommunicationServerLLGS::Handle_vCont_actions;
+};
+} // namespace
+
+TEST_F(GDBRemoteTest, AdvertisesVContActionsBeforeInferiorExists) {
+  using Extension = NativeProcessProtocol::Extension;
+  for (const auto &[extensions, expected] :
+       {std::pair(Extension{}, "$vCont;c;C;s;S;t#"),
+        std::pair(Extension::resume_until_active, "$vCont;c;C;s;S;t;v#")}) {
+    MainLoop loop;
+    CapabilityManager manager(loop, extensions);
+    std::vector<std::string> replies;
+    CapabilityServer server(loop, manager);
+    server.SetConnection(std::make_unique<MockConnection>(replies));
+    ASSERT_EQ(server.GetCurrentProcess(), nullptr);
+
+    StringExtractorGDBRemote query("vCont?");
+    EXPECT_EQ(server.Handle_vCont_actions(query),
+              GDBRemoteCommunication::PacketResult::Success);
+    EXPECT_THAT(replies, testing::ElementsAre(testing::StartsWith(expected)));
+  }
+}
 
 TEST(GDBRemoteCommunicationServerLLGSTest, LLGSArgToURL) {
   // LLGS new-style URLs should be passed through (indepenently of

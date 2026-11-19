@@ -12,6 +12,7 @@
 #include "lldb/Host/common/NativeProcessProtocol.h"
 #include "lldb/Utility/ProcessInfo.h"
 #include <memory>
+#include <optional>
 
 namespace lldb_private {
 namespace lldb_server {
@@ -20,11 +21,17 @@ namespace lldb_server {
 /// Abstract class that extends \a NativeProcessProtocol for a mock GPU. This
 /// class is used to unit testing the GPU plugins in lldb-server.
 class ProcessMockGPU : public NativeProcessProtocol {
+  struct ResumeStop {
+    lldb::tid_t tid;
+    std::optional<lldb::addr_t> pc_after_step;
+  };
+
   // TODO: change NativeProcessProtocol::GetArchitecture() to return by value
   mutable ArchSpec m_arch;
   ProcessInstanceInfo m_process_info;
   MainLoop &m_main_loop;
-  std::shared_ptr<lldb::tid_t> m_pending_activation;
+  // Guarded by m_state_mutex.
+  std::shared_ptr<ResumeStop> m_pending_resume_stop;
   bool m_detach_failed = false;
 
 public:
@@ -49,9 +56,6 @@ class Manager : public NativeProcessProtocol::Manager {
                  MainLoop &main_loop);
 
   Status Resume(const ResumeActionList &resume_actions) override;
-
-  bool SupportsSteppingUntilActive() const override { return true; }
-  llvm::Error StepUntilActive(lldb::tid_t tid) override;
 
   Status Halt() override;
 
