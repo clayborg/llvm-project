@@ -1998,9 +1998,6 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
 
     // Build up the thread action.
     ResumeAction thread_action;
-    thread_action.tid = LLDB_INVALID_THREAD_ID;
-    thread_action.state = eStateInvalid;
-    thread_action.signal = LLDB_INVALID_SIGNAL_NUMBER;
 
     const char action = packet.GetChar();
     switch (action) {
