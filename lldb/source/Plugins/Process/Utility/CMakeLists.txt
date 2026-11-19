@@ -89,8 +89,10 @@ if(LLDB_ENABLE_AMDGPU_PLUGIN)
   find_package(amd-dbgapi REQUIRED CONFIG)
   include_directories(${ROCM_PATH}/include)
   
-  # Add AMD GPU source file to the build
-  list(APPEND PROCESS_UTILITY_SOURCES RegisterContextAmdGpuImpl.cpp)
+  # Add AMD GPU source files to the build
+  list(APPEND PROCESS_UTILITY_SOURCES
+    AmdDbgApiRegisterTypeParser.cpp
+    RegisterContextAmdGpuImpl.cpp)
   list(APPEND UTILITY_LINK_LIBS amd-dbgapi)
 endif()
 
