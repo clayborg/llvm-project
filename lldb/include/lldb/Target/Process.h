@@ -901,6 +901,10 @@ public:
 
   void SetShouldDetach(bool b) { m_should_detach = b; }
 
+  /// Set whether a kill detaches from this process instead, like the destroy
+  /// of a process that should detach.
+  void SetKillShouldDetach(bool b) { m_kill_should_detach = b; }
+
   /// Get the image vector for the current process.
   ///
   /// \return
@@ -3438,6 +3442,7 @@ protected:
   AllocatedMemoryCache m_allocated_memory_cache;
   bool m_should_detach; /// Should we detach if the process object goes away
                         /// with an explicit call to Kill or Detach?
+  bool m_kill_should_detach = false; /// Should a kill detach instead?
   LanguageRuntimeCollection m_language_runtimes;
   std::recursive_mutex m_language_runtimes_mutex;
   InstrumentationRuntimeCollection m_instrumentation_runtimes;
