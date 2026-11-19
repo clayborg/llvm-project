@@ -210,9 +210,12 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
     module_spec.SetObjectOffset(cubin_offset);
     module_spec.SetObjectSize(cubin_size);
 
+    // Don't notify per cubin: ModulesDidLoad runs once for every loaded cubin
+    // below, after the load addresses are set. Notifying here would also run
+    // it once per cubin, and each run rescans every module loaded so far.
     Status error;
     ModuleSP module_sp =
-        target.GetOrCreateModule(module_spec, /*notify=*/true, &error);
+        target.GetOrCreateModule(module_spec, /*notify=*/false, &error);
     if (!module_sp) {
       LLDB_LOG(log,
                "  failed to load cubin module {0} ({1}) at offset {2:x} "
