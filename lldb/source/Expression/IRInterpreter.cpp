@@ -622,6 +622,7 @@ bool IRInterpreter::CanInterpret(llvm::Module &module, llvm::Function &function,
       case Instruction::SExt:
       case Instruction::Shl:
       case Instruction::SRem:
+      case Instruction::Select:
       case Instruction::Store:
       case Instruction::Sub:
       case Instruction::Trunc:
@@ -973,6 +974,40 @@ bool IRInterpreter::Interpret(llvm::Module &module, llvm::Function &function,
       lldb_private::Scalar S_signextend(S.SLongLong());
 
       frame.AssignValue(inst, S_signextend, module);
+    } break;
+    case Instruction::Select: {
+      const SelectInst *select_inst = cast<SelectInst>(inst);
+
+      const Value *condition = select_inst->getCondition();
+
+      lldb_private::Scalar C;
+
+      if (!frame.EvaluateValue(C, condition, module)) {
+        LLDB_LOGF(log, "Couldn't evaluate %s", PrintValue(condition).c_str());
+        error = lldb_private::Status::FromErrorString(bad_value_error);
+        return false;
+      }
+
+      const Value *chosen = C.IsZero() ? select_inst->getFalseValue()
+                                       : select_inst->getTrueValue();
+
+      lldb_private::Scalar result;
+
+      if (!frame.EvaluateValue(result, chosen, module)) {
+        LLDB_LOGF(log, "Couldn't evaluate %s", PrintValue(chosen).c_str());
+        error = lldb_private::Status::FromErrorString(bad_value_error);
+        return false;
+      }
+
+      frame.AssignValue(inst, result, module);
+
+      if (log) {
+        LLDB_LOGF(log, "Interpreted a SelectInst");
+        LLDB_LOGF(log, "  cond   : %s",
+                  frame.SummarizeValue(condition).c_str());
+        LLDB_LOGF(log, "  chosen : %s", frame.SummarizeValue(chosen).c_str());
+        LLDB_LOGF(log, "  =      : %s", frame.SummarizeValue(inst).c_str());
+      }
     } break;
     case Instruction::Br: {
       const BranchInst *br_inst = cast<BranchInst>(inst);
