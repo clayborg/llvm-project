@@ -1187,8 +1187,8 @@ static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
 /// Collect per-thread snapshots needed to build groups. Threads without a
 /// register context or PC are dropped here so neither group builder has to
 /// special-case them. Threads with missing, malformed, or incomplete CUDA
-/// metadata are kept with `has_coord == false`: an SM-level fault with no
-/// surviving lane is precisely the thread a user must not miss, and malformed
+/// metadata are kept with `has_coord == false`: an SM-level fault that no lane
+/// carries is precisely the thread a user must not miss, and malformed
 /// metadata must not hide an otherwise valid thread. List-time filters such as
 /// --exceptions are applied later in the group-building phase by routing
 /// non-matching threads to a synthetic FilteredOut group.

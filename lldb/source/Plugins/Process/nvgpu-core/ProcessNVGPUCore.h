@@ -14,8 +14,8 @@
 /// `ObjectFileELF::CreateSections` builds for NVGPU corefiles
 /// (`nvgpucore` root -> `dev0` -> `sm0` -> `cta0` -> `warp0` -> `lane0` ->
 /// per-lane leaves, plus a sibling `dev0` -> `grid0` branch) and creates one
-/// `ThreadNVGPUCore` per valid GPU lane, plus one per faulted SM whose lanes
-/// had all exited before the dump was written.
+/// `ThreadNVGPUCore` per valid GPU lane, plus one per faulted SM whose
+/// exception no lane carries.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -150,8 +150,8 @@ private:
   std::optional<lldb_private::nvgpu_core::ProducerInfo> m_producer;
   /// First lane-backed thread with an attributed CUDA exception.
   lldb::tid_t m_exception_tid = LLDB_INVALID_THREAD_ID;
-  /// First thread standing in for an SM-level exception with no surviving
-  /// lane (see `ThreadNVGPUCore`).
+  /// First thread standing in for an SM-level exception that no lane carries
+  /// (see `ThreadNVGPUCore`).
   lldb::tid_t m_sm_exception_tid = LLDB_INVALID_THREAD_ID;
   /// First thread stopped on an inline `trap;` / `__trap()`.
   lldb::tid_t m_stop_tid = LLDB_INVALID_THREAD_ID;

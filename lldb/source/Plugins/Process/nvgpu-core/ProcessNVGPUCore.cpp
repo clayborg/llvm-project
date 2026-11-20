@@ -304,13 +304,14 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
   uint32_t tid = 0;
   uint32_t sm_exception_threads = 0;
 
-  // Walking SMs (rather than warps directly) keeps track of which SMs
-  // contributed no threads at all, so a fault recorded only at SM level can
-  // still be surfaced below. Warps are descendants of SMs, so the resulting
+  // Walking SMs (rather than warps directly) lets each SM's lanes be checked
+  // for an exception, so a fault recorded only at SM level that no lane carries
+  // can still be surfaced below. Warps are descendants of SMs, so the resulting
   // thread order is unchanged.
   for (const SectionSP &sm :
        nvgpu_core::FindDescendantsByType(*m_root_sp, eSectionTypeNVGPUSm)) {
-    const uint32_t tid_before_sm = tid;
+    // Whether a lane on this SM carries an exception, its own or the SM's.
+    bool sm_has_lane_exception = false;
 
     for (const SectionSP &warp :
          nvgpu_core::FindDescendantsByType(*sm, eSectionTypeNVGPUWarp)) {
@@ -345,10 +346,11 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
             std::make_shared<ThreadNVGPUCore>(*this, tid, lane, lane_idx);
         new_thread_list.AddThread(thread_sp);
 
+        const bool has_exception = thread_sp->GetAttributedException() != 0;
+        sm_has_lane_exception |= has_exception;
         // Remember the first thread of each stop kind so an interesting
         // thread is auto-selected: prefer an exception, fall back to a trap.
-        if (m_exception_tid == LLDB_INVALID_THREAD_ID &&
-            thread_sp->GetAttributedException() != 0) {
+        if (m_exception_tid == LLDB_INVALID_THREAD_ID && has_exception) {
           m_exception_tid = tid;
         } else if (m_stop_tid == LLDB_INVALID_THREAD_ID &&
                    thread_sp->IsAtTrap()) {
@@ -357,19 +359,26 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
       }
     }
 
-    if (tid != tid_before_sm)
+    // A lane carrying any exception, its own or the SM's, is taken to account
+    // for its SM's fault, even if that exception or error PC differs from the
+    // SM row's: a lane's own exception can also be recorded in its SM row, and
+    // a stand-in would then show the same fault twice.
+    if (sm_has_lane_exception)
       continue;
 
-    // No lane on this SM survived to the dump. If the SM row nonetheless
-    // records a fault -- a kernel that faulted but ran to completion before
-    // the coredump was written -- the exception has no lane to be attributed
-    // to and would otherwise be invisible, so stand in for it with a thread
-    // carrying the SM's error PC as its only frame.
+    // No lane on this SM carries an exception. If the SM row nonetheless
+    // records a fault, no lane claimed it and it would otherwise be invisible,
+    // so stand in for it with a thread carrying the SM's error PC as its only
+    // frame. This happens when no lane survived to the dump (a kernel that
+    // faulted but ran to completion before the coredump was written), and
+    // when no surviving lane meets ThreadNVGPUCore's rule for taking its SM's
+    // exception: an active lane on a warp with a valid error PC.
     llvm::Expected<nvgpu_core::SMEntry> sm_or =
         nvgpu_core::ReadAndDecode<nvgpu_core::SMEntry>(sm, core);
     if (!sm_or) {
       LLDB_LOG_ERROR(log, sm_or.takeError(),
-                     "ProcessNVGPUCore: skipping SM at {1}: {0}",
+                     "ProcessNVGPUCore: cannot check SM at {1} for an "
+                     "exception no lane carries: {0}",
                      sm->GetName());
       continue;
     }
@@ -386,7 +395,7 @@ bool ProcessNVGPUCore::DoUpdateThreadList(ThreadList &old_thread_list,
 
   LLDB_LOG(log,
            "ProcessNVGPUCore: created {0} threads ({1} standing in for "
-           "SM-level exceptions with no surviving lane)",
+           "SM-level exceptions no lane carries)",
            tid, sm_exception_threads);
   return tid > 0;
 }
