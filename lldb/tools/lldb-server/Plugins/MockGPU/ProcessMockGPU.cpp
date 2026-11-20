@@ -238,6 +238,17 @@ ProcessMockGPU::GetGPUDynamicLoaderLibraryInfos(const GPUDynamicLoaderArgs &args
   lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "foo"}, 0x80000}); 
   lib5.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "bar"}, 0x80200}); 
   response.library_infos.push_back(lib5);
+
+  // Sixth example of a shared library. This is for cases where a GPU plug-in
+  // asks LLDB to load a section that the object file does not have, which
+  // LLDB skips. No file has this path, and no program has a section named
+  // "missing" within its ".text", so a test can map this path to its program
+  // with the "target.object-map" setting to have LLDB look up a section that
+  // it cannot find.
+  GPUDynamicLoaderLibraryInfo lib6;
+  lib6.pathname = "/usr/lib/lib6.so";
+  lib6.loaded_sections.push_back({{"PT_LOAD[1]", ".text", "missing"}, 0x90000});
+  response.library_infos.push_back(lib6);
   return response;
 }
 

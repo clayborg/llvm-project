@@ -16,6 +16,7 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Base64.h"
 
 #include "DynamicLoaderGDBRemoteGPU.h"
@@ -215,13 +216,13 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
               break;
           }
           if (section_sp) {
-            LLDB_LOG(log, "Loading module \"{0}\" section \"{1} to {2:x}",
+            LLDB_LOG(log, "Loading module \"{0}\" section \"{1}\" to {2:x}",
                      info.pathname, section_sp->GetName(), sect.load_address);
             changed = target.SetSectionLoadAddress(
                 section_sp, sect.load_address, warn_multiple);
           } else {
-            LLDB_LOG(log, "Failed to find section \"{0}\"",
-                     section_sp->GetName());
+            LLDB_LOG(log, "Failed to find section \"{0}\" in module \"{1}\"",
+                     llvm::join(sect.names, "/"), info.pathname);
           }
         }
       } else {
