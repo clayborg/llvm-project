@@ -1956,7 +1956,7 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
       return;
     actions.Append(action);
   };
-  bool has_activation = false;
+  bool has_resume_until_active = false;
 
   while (packet.GetBytesLeft() && *packet.Peek() == ';') {
     // Skip the semi-colon.
@@ -2002,7 +2002,7 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
         return SendIllFormedResponse(packet, "'v' action not supported");
       thread_action.state = eStateRunning;
       thread_action.resume_until_active = true;
-      has_activation = true;
+      has_resume_until_active = true;
       break;
 
     default:
@@ -2070,7 +2070,7 @@ GDBRemoteCommunicationServerLLGS::Handle_vCont(
 
   // Validate all targets before starting any process in a packet with an
   // activation action.
-  if (has_activation) {
+  if (has_resume_until_active) {
     for (const auto &[pid, actions] : thread_actions) {
       auto process_it = m_debugged_processes.find(pid);
       if (process_it == m_debugged_processes.end())
