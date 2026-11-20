@@ -98,6 +98,7 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
     LLDB_LOG(log, "Failed to get dynamic loading info from GDB server");
     return false;
   }
+
   for (const GPUDynamicLoaderLibraryInfo &info : response->library_infos) {
     std::shared_ptr<DataBufferHeap> data_sp;
     // Read the object file from memory if requested.
@@ -105,11 +106,11 @@ bool DynamicLoaderGDBRemoteGPU::LoadModulesFromGDBServer(bool full) {
       LLDB_LOG(log, "Reading \"{0}\" from memory at {1:x}", info.pathname,
                *info.native_memory_address);
       if (cpu_target_sp) {
-        if (cpu_process_sp) {
+        if (send_process) {
           data_sp =
               std::make_shared<DataBufferHeap>(*info.native_memory_size, 0);
           Status error;
-          const size_t bytes_read = cpu_process_sp->ReadMemory(
+          const size_t bytes_read = send_process->ReadMemory(
               *info.native_memory_address, data_sp->GetBytes(),
               data_sp->GetByteSize(), error);
           if (bytes_read != *info.native_memory_size) {
