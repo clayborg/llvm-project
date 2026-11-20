@@ -219,9 +219,9 @@ ThreadNVGPUCore::ThreadNVGPUCore(Process &process, tid_t tid,
   if (sm_entry.errorPCValid)
     m_error_pc = sm_entry.errorPC;
 
-  // The SM row is the only record of this fault, so its exception is the stop
-  // reason outright: there is no lane row that could take precedence, and no
-  // surviving warp whose active-lane mask could gate it.
+  // ProcessNVGPUCore creates this thread only when no lane on the SM carries
+  // an exception, so the SM row is the only record of this fault and its
+  // exception is the stop reason outright.
   m_stop_attribution =
       StopAttribution{sm_entry.exception, /*at_trap=*/false, ""};
 

@@ -1,16 +1,17 @@
 """
-SM-level exceptions with no surviving kernel context.
+SM-level exceptions that no lane carries.
 
+An SM row can record an exception and error PC that no lane on the SM carries.
 When a kernel faults but its warps run to completion before the coredump is
-written, the SM row still records the exception type and error PC while every
-warp is gone, so no lane is left to attribute the fault to. The reader stands
-in for it with a lane-less thread whose single frame is the SM's error PC (see
-`ThreadNVGPUCore`), which is what turns an otherwise threadless core into one
-that names the fault and its location.
+written, every warp is gone. When lanes survive, a lane takes its SM's
+exception only if it is active on a warp with a valid error PC. Either way the
+reader stands in for the fault with a lane-less thread whose single frame is
+the SM's error PC (see `ThreadNVGPUCore`), which is what names the fault and
+its location.
 
-A live program reaches this state by racing cudaDeviceSynchronize() against
-context destruction; an artificial core reproduces it deterministically and
-without a GPU.
+A live program reaches the first state by racing cudaDeviceSynchronize()
+against context destruction; an artificial core reproduces both
+deterministically and without a GPU.
 """
 
 import json
@@ -81,15 +82,64 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
         b.add_global_memory(self.GLOBAL_ADDR, struct.pack("<I", 0xDEADBEEF))
         return b, dev
 
-    def _add_lane(self, b, sm, *, block_idx, exception=0, warp_error_pc=None):
-        """Give `sm` a single-lane CTA, so it has a surviving thread."""
+    def _add_lane(
+        self,
+        b,
+        sm,
+        *,
+        block_idx,
+        exception=0,
+        warp_error_pc=None,
+        active=True,
+        at_trap=False,
+    ):
+        """Give `sm` a single-lane CTA, so it has a surviving thread. `active`
+        and `at_trap` set the lane's state in its warp."""
         cta = b.add_cta(sm, grid_id=self.GRID_ID, block_idx=block_idx)
         warp = b.add_warp(
-            cta, valid_lanes_mask=1, active_lanes_mask=1,
+            cta,
+            valid_lanes_mask=1,
+            active_lanes_mask=1 if active else 0,
             error_pc=warp_error_pc,
+            is_warp_broken=at_trap,
         )
         lane = b.add_lane(warp, lane_id=0, pc=self.LANE_PC, exception=exception)
         b.set_lane_registers(lane, [0] * 32)
+
+    def _load_sm_with_lane(self, name, *, warp_error_pc=None, **lane_state):
+        """Load a core whose SM 0 records a Warp Illegal Instruction at
+        ERROR_PC and has one surviving lane. The warp's error PC and the lane's
+        state (`exception`, `active`, `at_trap`) decide whether the lane
+        claims the SM's exception. Returns the process."""
+        b, dev = self._builder(with_grid=True)
+        sm = b.add_sm(
+            dev,
+            sm_id=0,
+            exception=self.WARP_ILLEGAL_INSTRUCTION,
+            error_pc=self.ERROR_PC,
+        )
+        self._add_lane(
+            b, sm, block_idx=(0, 0, 0), warp_error_pc=warp_error_pc, **lane_state
+        )
+        _, process = self.generate_and_load_artificial_core(b, name=name)
+        return process
+
+    def _assert_stand_in_beside_lane(self, process, lane_stop_reason):
+        """The SM's fault has its own thread after the lane, at the SM's error
+        PC, and that thread is selected."""
+        self.assertEqual(
+            self._thread_names(process),
+            [self._lane_name((0, 0, 0)), self._sm_name(0, 0)],
+        )
+        lane, stand_in = process.GetThreadAtIndex(0), process.GetThreadAtIndex(1)
+        self.assertStopReason(lane.GetStopReason(), lane_stop_reason)
+        self.assertStopReason(stand_in.GetStopReason(), lldb.eStopReasonException)
+        self.assertIn(
+            "CUDA Exception: Warp Illegal Instruction",
+            stand_in.GetStopDescription(256),
+        )
+        self.assertEqual(stand_in.GetFrameAtIndex(0).GetPC(), self.ERROR_PC)
+        self.assertEqual(process.GetSelectedThread().GetName(), self._sm_name(0, 0))
 
     @staticmethod
     def _sm_name(device_idx, sm_id):
@@ -351,29 +401,35 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
 
         self.assertEqual(self._thread_names(process), [self._sm_name(0, 1)])
 
-    def test_surviving_lane_suppresses_stand_in(self):
-        """An SM with both an exception and a surviving lane gets no stand-in:
-        the lane already borrows the SM's exception, so a second thread would
+    def test_claiming_lane_suppresses_stand_in(self):
+        """An SM whose exception a surviving lane claims gets no stand-in: the
+        lane already borrows the SM's exception, so a second thread would
         double-report the same fault."""
-        b, dev = self._builder(with_grid=True)
-        sm = b.add_sm(
-            dev, sm_id=0, exception=self.WARP_ILLEGAL_INSTRUCTION,
-            error_pc=self.ERROR_PC,
-        )
         # A valid warp errorPC is what lets an active lane borrow sm.exception.
-        self._add_lane(b, sm, block_idx=(0, 0, 0), warp_error_pc=self.ERROR_PC)
-        _, process = self.generate_and_load_artificial_core(
-            b, name="survivinglane.nvcudmp"
+        process = self._load_sm_with_lane(
+            "claiminglane.nvcudmp", warp_error_pc=self.ERROR_PC
         )
 
-        self.assertEqual(
-            self._thread_names(process), [self._lane_name((0, 0, 0))]
-        )
+        self.assertEqual(self._thread_names(process), [self._lane_name((0, 0, 0))])
         thread = process.GetThreadAtIndex(0)
-        self.assertEqual(thread.GetStopReason(), lldb.eStopReasonException)
+        self.assertStopReason(thread.GetStopReason(), lldb.eStopReasonException)
         self.assertIn(
             "CUDA Exception: Warp Illegal Instruction",
             thread.GetStopDescription(256),
+        )
+
+    def test_lane_own_exception_suppresses_stand_in(self):
+        """A lane carrying its own exception is taken to account for its SM's
+        fault, even when the two differ, so the SM gets no stand-in."""
+        process = self._load_sm_with_lane(
+            "ownexception.nvcudmp", exception=self.DEVICE_ILLEGAL_ADDRESS
+        )
+
+        self.assertEqual(self._thread_names(process), [self._lane_name((0, 0, 0))])
+        thread = process.GetThreadAtIndex(0)
+        self.assertStopReason(thread.GetStopReason(), lldb.eStopReasonException)
+        self.assertIn(
+            "CUDA Exception: Device Illegal Address", thread.GetStopDescription(256)
         )
 
     def test_unclaimed_sm_exception_stands_in_beside_surviving_lane(self):
@@ -382,32 +438,24 @@ class TestNVGPUArtificialSMException(NVGPUCoreTestCaseBase):
         fault would then be invisible, so it gets a stand-in alongside the
         lane, and the stand-in is selected because it is the only thread that
         carries the fault."""
-        b, dev = self._builder(with_grid=True)
-        sm = b.add_sm(
-            dev, sm_id=0, exception=self.WARP_ILLEGAL_INSTRUCTION,
-            error_pc=self.ERROR_PC,
-        )
-        # No warp errorPC: the lane cannot borrow sm.exception.
-        self._add_lane(b, sm, block_idx=(0, 0, 0))
-        _, process = self.generate_and_load_artificial_core(
-            b, name="unclaimedsmfault.nvcudmp"
-        )
+        process = self._load_sm_with_lane("unclaimedsmfault.nvcudmp")
+        self._assert_stand_in_beside_lane(process, lldb.eStopReasonNone)
 
-        self.assertEqual(
-            self._thread_names(process),
-            [self._lane_name((0, 0, 0)), self._sm_name(0, 0)],
+    def test_inactive_lane_does_not_claim_sm_exception(self):
+        """Only an active lane takes its SM's exception, even on a warp with a
+        valid error PC: an inactive lane may not have run the faulting
+        instruction, so the fault gets a stand-in."""
+        process = self._load_sm_with_lane(
+            "inactivelane.nvcudmp", warp_error_pc=self.ERROR_PC, active=False
         )
-        lane, stand_in = process.GetThreadAtIndex(0), process.GetThreadAtIndex(1)
-        self.assertEqual(lane.GetStopReason(), lldb.eStopReasonNone)
-        self.assertEqual(stand_in.GetStopReason(), lldb.eStopReasonException)
-        self.assertIn(
-            "CUDA Exception: Warp Illegal Instruction",
-            stand_in.GetStopDescription(256),
-        )
-        self.assertEqual(stand_in.GetFrameAtIndex(0).GetPC(), self.ERROR_PC)
-        self.assertEqual(
-            process.GetSelectedThread().GetName(), self._sm_name(0, 0)
-        )
+        self._assert_stand_in_beside_lane(process, lldb.eStopReasonNone)
+
+    def test_stand_in_outranks_trapped_lane(self):
+        """A lane stopped at a trap carries no exception, so its SM's fault
+        still gets a stand-in, which is selected ahead of the trapped lane:
+        an exception outranks a trap."""
+        process = self._load_sm_with_lane("trappedlane.nvcudmp", at_trap=True)
+        self._assert_stand_in_beside_lane(process, lldb.eStopReasonSignal)
 
     def test_lane_exception_outranks_sm_exception(self):
         """Both fault kinds in one core: each gets its own thread, but the
