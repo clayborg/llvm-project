@@ -58,10 +58,7 @@ public:
     return true;
   }
 
-  bool CodeAddressIsValid(lldb::addr_t pc) override {
-    // TODO: Lookup address in cubin module to ensure it is valid.
-    return true;
-  }
+  bool CodeAddressIsValid(lldb::addr_t pc) override;
 
   lldb::addr_t FixCodeAddress(lldb::addr_t pc) override { return pc; }
 

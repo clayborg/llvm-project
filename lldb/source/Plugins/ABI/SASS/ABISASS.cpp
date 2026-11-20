@@ -12,8 +12,12 @@
 
 #include "cudadebugger.h"
 
+#include "lldb/Core/Address.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/Section.h"
 #include "lldb/Symbol/UnwindPlan.h"
+#include "lldb/Target/Process.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
@@ -119,6 +123,20 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   plan_sp->SetReturnAddressRegister(lldb_ra);
 
   return plan_sp;
+}
+
+/// GPU code only runs from loaded cubins, so a caller PC that is not inside an
+/// executable section of a loaded module is not a real return address. A
+/// kernel entry, for example, has no caller and its RA holds unrelated data.
+bool ABISASS::CodeAddressIsValid(lldb::addr_t pc) {
+  ProcessSP process_sp = GetProcessSP();
+  if (!process_sp)
+    return true;
+  Address addr;
+  if (!process_sp->GetTarget().ResolveLoadAddress(pc, addr))
+    return false;
+  SectionSP section_sp = addr.GetSection();
+  return section_sp && (section_sp->GetPermissions() & ePermissionsExecutable);
 }
 
 bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
