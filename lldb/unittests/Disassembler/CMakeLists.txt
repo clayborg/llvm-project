@@ -19,6 +19,12 @@ if("RISCV" IN_LIST LLVM_TARGETS_TO_BUILD)
   )
 endif()
 
+if("AMDGPU" IN_LIST LLVM_TARGETS_TO_BUILD)
+  list(APPEND disas_srcs
+    AMDGPU/TestAMDGPUDisassembly.cpp
+  )
+endif()
+
 if (disas_srcs)
   add_lldb_unittest(DisassemblerTests
     ${disas_srcs}

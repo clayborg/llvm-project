@@ -1301,11 +1301,19 @@ DisassemblerLLVMC::MCDisasmInstance::Create(const char *triple_name,
   if (!rel_info_up)
     return Instance();
 
-  std::unique_ptr<llvm::MCSymbolizer> symbolizer_up(
-      curr_target->createMCSymbolizer(
-          triple, nullptr, DisassemblerLLVMC::SymbolLookupCallback, &owner,
-          context_up.get(), std::move(rel_info_up)));
-  disasm_up->setSymbolizer(std::move(symbolizer_up));
+  // AMDGPU's symbolizer ignores the lookup callback and reads DisInfo as
+  // llvm-objdump's symbol list, so given &owner it reads this object as a
+  // vector on every branch operand, which can crash. Without a symbolizer,
+  // branch targets print as raw immediates, as they do when that read happens
+  // not to crash. Remove this once the AMDGPU symbolizer honors callbacks:
+  // https://github.com/llvm/llvm-project/pull/235870
+  if (!triple.isAMDGPU()) {
+    std::unique_ptr<llvm::MCSymbolizer> symbolizer_up(
+        curr_target->createMCSymbolizer(
+            triple, nullptr, DisassemblerLLVMC::SymbolLookupCallback, &owner,
+            context_up.get(), std::move(rel_info_up)));
+    disasm_up->setSymbolizer(std::move(symbolizer_up));
+  }
 
   unsigned asm_printer_variant =
       flavor == ~0U ? asm_info_up->getAssemblerDialect() : flavor;
