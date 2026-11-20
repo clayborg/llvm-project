@@ -2412,6 +2412,23 @@ of a process by that name to be launched and attach to that.
 **Priority To Implement:** Low. Only needed to support `process attach -w -n`
 which will fail gracefully if the packet is not supported.
 
+## vCont;v:\<tid\>
+
+The `v` action runs until the specified thread becomes active. The server
+advertises this action in its `vCont?` response as `;v` for connections that
+support it. The advertised actions stay fixed for the lifetime of a connection.
+Each `v` action requires an explicit thread ID.
+For example, `vCont;c:2b;v:2a` continues thread `2b` and requests activation of
+thread `2a`. A packet can contain multiple activation actions.
+
+In all-stop mode, the first reportable event ends the resume. The server
+reports activation with a trace stop for the requested thread, with `inactive`
+omitted or set to `0`. This stop consumes zero instruction steps for that
+thread. If a requested thread is already active, the server reports its stop
+without executing an instruction. A breakpoint, exception, interrupt, or exit
+that ends the operation keeps its normal stop reply. The server uses
+`implicitly_resumed_threads` to report any additional threads that ran.
+
 ## vFile Packets
 
 Though some of these may match the ones described in GDB's protocol

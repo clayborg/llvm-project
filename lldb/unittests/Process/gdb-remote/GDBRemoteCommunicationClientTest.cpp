@@ -17,6 +17,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gmock/gmock.h"
+#include <algorithm>
 #include <future>
 #include <limits>
 #include <optional>
@@ -76,6 +77,79 @@ protected:
   TestClient client;
   MockServer server;
 };
+
+class VContCapabilityTest : public GDBRemoteTest {
+protected:
+  void SetUp() override {
+    auto connection_up = std::make_unique<MockConnection>(m_packets);
+    m_connection = connection_up.get();
+    m_client.SetConnection(std::move(connection_up));
+  }
+
+  void ExpectReply(StringRef packet) {
+    EXPECT_CALL(*m_connection, Read(testing::_, testing::_, testing::_,
+                                    testing::_, testing::_))
+        .WillOnce([packet](void *dst, size_t size, const Timeout<std::micro> &,
+                           ConnectionStatus &status, Status *) {
+          EXPECT_GE(size, packet.size());
+          size_t count = std::min(size, packet.size());
+          std::copy_n(packet.begin(), count, static_cast<char *>(dst));
+          status = eConnectionStatusSuccess;
+          return count;
+        });
+  }
+
+  std::vector<std::string> m_packets;
+  TestClient m_client;
+  MockConnection *m_connection = nullptr;
+};
+
+TEST_F(VContCapabilityTest, CachesAllActionsFromOneReply) {
+  ExpectReply("$vCont;c;C;s;S;t;v#00");
+  EXPECT_TRUE(m_client.GetVContSupported('c'));
+  EXPECT_TRUE(m_client.GetVContSupported('v'));
+  EXPECT_TRUE(m_client.GetVContSupported('t'));
+  EXPECT_TRUE(m_client.HasAnyVContSupport());
+  EXPECT_TRUE(m_client.HasFullVContSupport());
+  EXPECT_THAT(m_packets, testing::ElementsAre("$vCont?#49"));
+
+  ExpectReply("$OK#00");
+  EXPECT_TRUE(m_client.SetCurrentThreadForRun(1, 0x10));
+  EXPECT_TRUE(m_client.GetVContSupported('v'));
+  EXPECT_THAT(m_packets, testing::ElementsAre(
+                             "$vCont?#49", testing::StartsWith("$Hcp10.1#")));
+}
+
+TEST_F(VContCapabilityTest, StopSupportIsIndependentOfResumeSupport) {
+  ExpectReply("$vCont;t;vendor#00");
+  EXPECT_TRUE(m_client.GetVContSupported('t'));
+  EXPECT_FALSE(m_client.GetVContSupported('v'));
+  EXPECT_FALSE(m_client.HasAnyVContSupport());
+  EXPECT_FALSE(m_client.HasFullVContSupport());
+  EXPECT_THAT(m_packets, testing::ElementsAre("$vCont?#49"));
+}
+
+TEST_F(VContCapabilityTest, ProbesAgainForANewConnection) {
+  ExpectReply("$vCont;c;t;v#00");
+  EXPECT_TRUE(m_client.GetVContSupported('v'));
+
+  m_client.ResetDiscoverableSettings(/*did_exec=*/true);
+  EXPECT_TRUE(m_client.GetVContSupported('v'));
+
+  m_client.ResetDiscoverableSettings(/*did_exec=*/false);
+  ExpectReply("$vCont;c;t#00");
+  EXPECT_FALSE(m_client.GetVContSupported('v'));
+  EXPECT_TRUE(m_client.GetVContSupported('t'));
+  EXPECT_THAT(m_packets, testing::ElementsAre("$vCont?#49", "$vCont?#49"));
+}
+
+TEST_F(VContCapabilityTest, CachesErrorResponse) {
+  ExpectReply("$E01#00");
+  EXPECT_FALSE(m_client.GetVContSupported('c'));
+  EXPECT_FALSE(m_client.GetVContSupported('t'));
+  EXPECT_FALSE(m_client.GetVContSupported('v'));
+  EXPECT_THAT(m_packets, testing::ElementsAre("$vCont?#49"));
+}
 
 TEST_F(GDBRemoteCommunicationClientTest, WriteRegister) {
   const lldb::tid_t tid = 0x47;

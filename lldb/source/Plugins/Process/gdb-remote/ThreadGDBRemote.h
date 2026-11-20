@@ -33,6 +33,8 @@ public:
 
   void WillResume(lldb::StateType resume_state) override;
 
+  Status StepUntilActive() override;
+
   void RefreshStateAfterStop() override;
 
   const char *GetName() override;

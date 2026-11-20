@@ -9,21 +9,27 @@
 #ifndef LLDB_HOST_DEBUG_H
 #define LLDB_HOST_DEBUG_H
 
-#include <vector>
-
 #include "lldb/lldb-private.h"
+#include "llvm/ADT/ArrayRef.h"
+#include <vector>
 
 namespace lldb_private {
 
 // Tells a thread what it needs to do when the process is resumed.
 struct ResumeAction {
-  lldb::tid_t tid;       // The thread ID that this action applies to,
-                         // LLDB_INVALID_THREAD_ID for the default thread
-                         // action
-  lldb::StateType state; // Valid values are eStateStopped/eStateSuspended,
-                         // eStateRunning, and eStateStepping.
-  int signal; // When resuming this thread, resume it with this signal if this
-              // value is > 0
+  // The thread ID for this action. LLDB_INVALID_THREAD_ID selects the default
+  // action.
+  lldb::tid_t tid = LLDB_INVALID_THREAD_ID;
+
+  // Valid values are eStateStopped, eStateSuspended, eStateRunning, and
+  // eStateStepping.
+  lldb::StateType state = lldb::eStateInvalid;
+
+  // The resume signal. LLDB_INVALID_SIGNAL_NUMBER leaves it unspecified.
+  int signal = LLDB_INVALID_SIGNAL_NUMBER;
+
+  // Applies to a named thread in eStateRunning.
+  bool resume_until_active = false;
 };
 
 // A class that contains instructions for all threads for
@@ -115,6 +121,8 @@ public:
   }
 
   const ResumeAction *GetFirst() const { return m_actions.data(); }
+
+  llvm::ArrayRef<ResumeAction> GetActions() const { return m_actions; }
 
   size_t GetSize() const { return m_actions.size(); }
 

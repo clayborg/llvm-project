@@ -587,6 +587,8 @@ protected:
   LazyBool m_supports_vCont_C = eLazyBoolCalculate;
   LazyBool m_supports_vCont_s = eLazyBoolCalculate;
   LazyBool m_supports_vCont_S = eLazyBoolCalculate;
+  LazyBool m_supports_vCont_t = eLazyBoolCalculate;
+  LazyBool m_supports_vCont_v = eLazyBoolCalculate;
   LazyBool m_qHostInfo_is_valid = eLazyBoolCalculate;
   LazyBool m_curr_pid_is_valid = eLazyBoolCalculate;
   LazyBool m_qProcessInfo_is_valid = eLazyBoolCalculate;

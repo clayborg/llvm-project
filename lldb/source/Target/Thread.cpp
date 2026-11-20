@@ -633,7 +633,10 @@ bool Thread::SetupToStepOverBreakpointIfNeeded(RunDirection direction) {
     // virtual inlined call stack, we just change the inlined call stack index
     // without actually running this thread.  In that case, for this thread we
     // shouldn't push a step over breakpoint plan or do that work.
-    if (GetCurrentPlan()->IsVirtualStep())
+    // The activation plan delegates breakpoint handling to the target.
+    ThreadPlan *current_plan = GetCurrentPlan();
+    if (current_plan->IsVirtualStep() ||
+        current_plan->GetKind() == ThreadPlan::eKindStepUntilActive)
       return false;
 
     // If we're at a breakpoint push the step-over breakpoint plan.  Do this
@@ -2135,6 +2138,10 @@ Status Thread::StepOut(uint32_t frame_idx) {
     error = Status::FromErrorString("process not stopped");
   }
   return error;
+}
+
+Status Thread::StepUntilActive() {
+  return Status::FromErrorString("stepping until active is unsupported");
 }
 
 ValueObjectSP Thread::GetCurrentException() {

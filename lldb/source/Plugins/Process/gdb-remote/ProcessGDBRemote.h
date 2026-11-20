@@ -348,6 +348,7 @@ protected:
   tid_sig_collection m_continue_C_tids;       // 'C' for continue with signal
   tid_collection m_continue_s_tids;           // 's' for step
   tid_sig_collection m_continue_S_tids;       // 'S' for step with signal
+  tid_sig_collection m_continue_v_tids;       // 'v' for resume until active
   uint64_t m_max_memory_size; // The maximum number of bytes to read/write when
                               // reading and writing memory
   uint64_t m_remote_stub_max_memory_size; // The maximum memory size the remote

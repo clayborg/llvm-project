@@ -15,6 +15,7 @@
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Target/SystemRuntime.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Target/ThreadPlan.h"
 #include "lldb/Target/UnixSignals.h"
 #include "lldb/Target/Unwind.h"
 #include "lldb/Utility/DataExtractor.h"
@@ -30,6 +31,61 @@
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
+
+namespace {
+
+/// Runs the remote target until the selected thread is active.
+///
+/// The plan completes when the remote reports an explicit trace stop for the
+/// requested thread and that thread is active.
+class ThreadPlanStepUntilActive final : public ThreadPlan {
+public:
+  explicit ThreadPlanStepUntilActive(Thread &thread)
+      : ThreadPlan(eKindStepUntilActive, "step until active", thread,
+                   eVoteNoOpinion, eVoteNoOpinion) {
+    SetIsControllingPlan(true);
+    SetOkayToDiscard(false);
+  }
+
+  void GetDescription(Stream *stream, DescriptionLevel) override {
+    stream->PutCString("step until active");
+  }
+
+  bool ValidatePlan(Stream *) override { return true; }
+  void DidPush() override {
+    // An inherited tracer would turn this resume into an instruction step.
+    SetThreadPlanTracer(nullptr);
+  }
+  bool StopOthers() override { return true; }
+  bool WillStop() override { return true; }
+  bool IsPlanStale() override { return GetThread().GetIsActive(); }
+
+  bool ShouldStop(Event *event_ptr) override {
+    if (IsPlanComplete())
+      return true;
+    if (!PlanExplainsStop(event_ptr))
+      return false;
+    SetPlanComplete();
+    return true;
+  }
+
+  bool MischiefManaged() override {
+    return IsPlanComplete() && ThreadPlan::MischiefManaged();
+  }
+
+protected:
+  // An untagged SIGTRAP must remain a signal, rather than being inferred to
+  // mean that a single instruction executed.
+  StateType GetPlanRunState() override { return eStateRunning; }
+
+  bool DoPlanExplainsStop(Event *) override {
+    StopInfoSP stop_info = GetPrivateStopInfo();
+    return GetThread().GetIsActive() && stop_info &&
+           stop_info->GetStopReason() == eStopReasonTrace;
+  }
+};
+
+} // namespace
 
 // Thread Registers
 
@@ -251,7 +307,9 @@ void ThreadGDBRemote::WillResume(StateType resume_state) {
       break;
 
     case eStateRunning:
-      if (gdb_process->GetUnixSignals()->SignalIsValid(signo))
+      if (GetCurrentPlan()->GetKind() == ThreadPlan::eKindStepUntilActive)
+        gdb_process->m_continue_v_tids.emplace_back(tid, signo);
+      else if (gdb_process->GetUnixSignals()->SignalIsValid(signo))
         gdb_process->m_continue_C_tids.push_back(std::make_pair(tid, signo));
       else
         gdb_process->m_continue_c_tids.push_back(tid);
@@ -268,6 +326,38 @@ void ThreadGDBRemote::WillResume(StateType resume_state) {
       break;
     }
   }
+}
+
+Status ThreadGDBRemote::StepUntilActive() {
+  ProcessSP process = GetProcess();
+  if (!process || !StateIsStoppedState(process->GetState(), true))
+    return Status::FromErrorString("process not stopped");
+  if (GetIsActive()) {
+    if (GetCurrentPlan()->GetKind() == ThreadPlan::eKindStepUntilActive)
+      DiscardPlan();
+    return Status();
+  }
+  if (GetResumeState() == eStateSuspended)
+    return Status::FromErrorString("thread is suspended");
+
+  auto &gdb_process = static_cast<ProcessGDBRemote &>(*process);
+  if (!gdb_process.GetGDBRemote().GetVContSupported('v'))
+    return Thread::StepUntilActive();
+  if (!process->GetThreadList().SetSelectedThreadByID(GetID()))
+    return Status::FromErrorString("thread is no longer in the process");
+
+  if (GetCurrentPlan()->GetKind() == ThreadPlan::eKindStepUntilActive)
+    return process->Resume();
+
+  ThreadPlanSP plan = std::make_shared<ThreadPlanStepUntilActive>(*this);
+  Status status = QueueThreadPlan(plan, /*abort_other_plans=*/false);
+  if (status.Fail())
+    return status;
+
+  status = process->Resume();
+  if (status.Fail())
+    DiscardThreadPlansUpToPlan(plan);
+  return status;
 }
 
 void ThreadGDBRemote::RefreshStateAfterStop() {
