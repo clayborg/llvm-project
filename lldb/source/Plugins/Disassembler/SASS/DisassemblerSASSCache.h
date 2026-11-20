@@ -27,13 +27,6 @@ public:
   /// Thread-safe SM architecture extraction for this specific module
   llvm::Expected<std::string> FindSM(const lldb_private::Address &base_addr);
 
-  llvm::Expected<std::string> FindSMForELFv7OrLower(lldb::ModuleSP module_sp);
-
-  llvm::Expected<std::string> FindSMForELFv8OrGreater(lldb::ModuleSP module_sp);
-
-  /// Fallback for ABI v8 cubins without a .note.nv.cuinfo section.
-  llvm::Expected<std::string> FindSMFromELFv8Flags(lldb::ModuleSP module_sp);
-
 private:
   std::string m_cache_key;
   std::optional<std::string> m_cached_sm_arch;

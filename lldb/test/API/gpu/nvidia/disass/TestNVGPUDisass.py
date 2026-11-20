@@ -1,4 +1,3 @@
-import os
 import pathlib
 import re
 
@@ -50,28 +49,27 @@ class TestNVGPUDisass(NVGPUTestCaseBase):
         self.expect(
             "disassemble -a 0x00007fffcf280300",
             patterns=[
-                "elfv8.cubin\\[0x7fffcf280300\\].*<\\+0>:.*MOV.*R4,R4",
-                "elfv8.cubin\\[0x7fffcf280310\\].*<\\+16>:.*FADD.*R3,-RZ,|R4|",
+                r"elfv8\.cubin\[0x7fffcf280300\].*<\+0>:.*MOV.*R4,R4",
+                r"elfv8\.cubin\[0x7fffcf280310\].*<\+16>:.*FADD.*R3,-RZ,\|R4\|",
             ],
         )
 
     def test_disass_elf_v8_without_cuinfo_note(self):
         """An ELFv8 cubin without a .note.nv.cuinfo section still disassembles:
-        its SM is also encoded in e_flags."""
+        e_flags records the architecture of its SASS."""
         data = pathlib.Path(self.getSourcePath("elfv8.cubin")).read_bytes()
-        # Rename the note (keeping the length) so it is no longer found.
-        stripped = data.replace(b".note.nv.cuinfo\0", b".note.nv.xxxxxx\0")
-        self.assertNotEqual(stripped, data)
-        os.makedirs(self.getBuildDir(), exist_ok=True)
+        # The section name in .shstrtab and a symbol name in .strtab. Renaming
+        # them (keeping the length) hides the note.
+        self.assertEqual(data.count(b".note.nv.cuinfo\0"), 2)
         cubin = self.getBuildArtifact("elfv8-no-cuinfo.cubin")
-        pathlib.Path(cubin).write_bytes(stripped)
-        self.runCmd("file " + cubin)
-        self.expect(
-            "disassemble -a 0x00007fffcf280300",
-            patterns=[
-                "elfv8-no-cuinfo.cubin\\[0x7fffcf280300\\].*<\\+0>:.*MOV.*R4,R4",
-                "elfv8-no-cuinfo.cubin\\[0x7fffcf280310\\].*<\\+16>:.*FADD.*R3,-RZ,|R4|",
-            ],
+        pathlib.Path(cubin).write_bytes(
+            data.replace(b".note.nv.cuinfo\0", b".note.nv.xxxxxx\0")
+        )
+        target = self.createTestTarget(cubin)
+        insts = target.ReadInstructions(target.ResolveFileAddress(self.ELFV8_ACOSF), 2)
+        self.assertEqual(
+            [(i.GetMnemonic(target), i.GetOperands(target)) for i in insts],
+            [("MOV", "R4,R4"), ("FADD", "R3,-RZ,|R4|")],
         )
 
     def test_disass_predicates(self):

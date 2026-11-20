@@ -88,6 +88,20 @@ class TestNVDisasmDiscovery(NVGPUTestCaseBase):
     def elf_v8(self):
         return (self.getSourcePath("elfv8.cubin"), 0x7FFFCF280300)
 
+    def elf_v8_with(self, name, e_flags_sm, keep_note):
+        """elfv8.cubin, whose note says SM86, with e_flags set to e_flags_sm and,
+        unless keep_note, its .note.nv.cuinfo section renamed away."""
+        data = Path(self.getSourcePath("elfv8.cubin")).read_bytes()
+        if not keep_note:
+            self.assertEqual(data.count(b".note.nv.cuinfo\0"), 2)
+            data = data.replace(b".note.nv.cuinfo\0", b".note.nv.xxxxxx\0")
+        data = bytearray(data)
+        flags = struct.unpack_from("<I", data, 48)[0]
+        struct.pack_into("<I", data, 48, (flags & ~0xFF00) | (e_flags_sm << 8))
+        path = self.tmp / name
+        path.write_bytes(data)
+        return (path, 0x7FFFCF280300)
+
     @skipIfWindows
     def test_selects_compatible_tool_and_caches_it(self):
         old = self.tool("old", "OLD_TOOL", ["SM90"])
@@ -121,6 +135,30 @@ class TestNVDisasmDiscovery(NVGPUTestCaseBase):
         calls = self.calls.read_text().splitlines()
         self.assertEqual(calls.count("OLD_TOOL:help"), 2)
         self.assertEqual(calls.count("NEW_TOOL:help"), 1)
+
+    @skipIfWindows
+    def test_sm_comes_from_e_flags(self):
+        """e_flags records the architecture of the SASS. The note records the
+        PTX architecture, which is older when PTX is compiled for a newer GPU."""
+        sm86 = self.tool("sm86", "OLD_TOOL", ["SM86"])
+        sm90 = self.tool("sm90", "NEW_TOOL", ["SM90"])
+        # The note says SM86 and e_flags SM90.
+        without_note = self.elf_v8_with("without-note.cubin", 90, keep_note=False)
+        with_note = self.elf_v8_with("with-note.cubin", 90, keep_note=True)
+        self.assertEqual(self.disassemble([sm86, sm90], [without_note]), ["NEW_TOOL"])
+        self.assertEqual(self.disassemble([sm86, sm90], [with_note]), ["NEW_TOOL"])
+
+    @skipIfWindows
+    def test_note_is_the_last_resort(self):
+        """Without an SM in e_flags the note's SM is used, and with neither the
+        disassembler reports that it found no SM."""
+        sm86 = self.tool("sm86", "OLD_TOOL", ["SM86"])
+        sm90 = self.tool("sm90", "NEW_TOOL", ["SM90"])
+        note_only = self.elf_v8_with("note-only.cubin", 0, keep_note=True)
+        self.assertEqual(self.disassemble([sm86, sm90], [note_only]), ["OLD_TOOL"])
+        neither = self.elf_v8_with("neither.cubin", 0, keep_note=False)
+        self.disassemble([sm86, sm90], [neither], allow_failure=True)
+        self.assertIn("Failed to extract SM architecture from CUDA module", self.output)
 
     @skipIfWindows
     def test_explicit_path_is_preserved(self):
