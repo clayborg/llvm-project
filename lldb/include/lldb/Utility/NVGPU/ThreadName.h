@@ -27,10 +27,9 @@ std::string FormatThreadName(uint32_t blockIdxX, uint32_t blockIdxY,
                              uint32_t blockIdxZ, uint32_t threadIdxX,
                              uint32_t threadIdxY, uint32_t threadIdxZ);
 
-/// Format the name of a thread standing in for an SM-level exception that
-/// has no surviving kernel context. Every warp on the SM had exited by the
-/// time the state was captured, so there are no block / thread coordinates
-/// to name it by.
+/// Format the name of a thread standing in for an SM-level exception that no
+/// lane on the SM carries. The thread has no lane, so there are no block /
+/// thread coordinates to name it by.
 ///
 /// \param[in] device_idx
 ///     Index of the device the SM belongs to.

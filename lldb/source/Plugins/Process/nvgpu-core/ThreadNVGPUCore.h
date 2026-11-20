@@ -24,8 +24,8 @@ struct SMEntry;
 }
 
 /// One thread per valid GPU lane, plus one stand-in thread per faulted SM
-/// that has no surviving lane. A lane is valid while it holds a CUDA thread
-/// that has not exited, and active while that thread participates in its
+/// whose exception no lane carries. A lane is valid while it holds a CUDA
+/// thread that has not exited, and active while that thread participates in its
 /// warp's current instruction, so a valid lane can be inactive.
 ///
 /// A lane-backed thread identifies its lane via a `lldb::SectionSP` to the
@@ -35,15 +35,16 @@ struct SMEntry;
 /// `CudbgThreadTableEntry` directly. Per-lane register / predicate /
 /// local-memory sections live as named children (`regs`, `preds`, `local`).
 ///
-/// When a kernel faults but its warps run to completion before the coredump
-/// is written, the SM row still records the exception type and error PC while
-/// every warp is gone. No lane is left to attribute the fault to, so the
-/// plugin stands in for it with a lane-less thread built straight from the SM
-/// container: the SM's exception becomes its stop reason and the SM's
-/// `errorPC` its single frame, which is enough to symbolicate the fault site
-/// against the loaded cubin modules. Such a thread has no lane, warp, or CTA
-/// -- those accessors return null, and register reads and address-space reads
-/// that need them fail.
+/// An SM row can record an exception type and error PC that no lane carries:
+/// when a kernel faults but its warps run to completion before the coredump
+/// is written, every warp is gone, and a surviving lane takes its SM's
+/// exception only if it is active on a warp with a valid error PC. The plugin
+/// then stands in for the fault with a lane-less thread built straight from
+/// the SM container: the SM's exception becomes its stop reason and the SM's
+/// `errorPC`, when valid, its single frame, which is enough to symbolicate the
+/// fault site against the loaded cubin modules. Such a thread has no lane,
+/// warp, or CTA -- those accessors return null, and register reads and
+/// address-space reads that need them fail.
 class ThreadNVGPUCore : public Thread {
 public:
   /// Construct a thread for one lane.
@@ -62,8 +63,8 @@ public:
   ThreadNVGPUCore(Process &process, lldb::tid_t tid,
                   lldb::SectionSP lane_section_sp, uint32_t lane_idx);
 
-  /// Construct the stand-in thread for an SM-level exception that has no
-  /// surviving kernel context (see the class documentation).
+  /// Construct the stand-in thread for an SM-level exception that no lane on
+  /// the SM carries (see the class documentation).
   ///
   /// \param[in] process
   ///     The owning process.
