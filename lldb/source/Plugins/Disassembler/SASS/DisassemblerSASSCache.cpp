@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -27,6 +28,7 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/VersionTuple.h"
 #include <array>
+#include <cstddef>
 
 using namespace lldb_private;
 using namespace lldb;
@@ -57,41 +59,40 @@ DisassemblerSASSCache::GetModuleSM(const std::string &cache_key) {
   return module_sm;
 }
 
-llvm::Expected<std::string>
-ModuleSM::FindSMForELFv7OrLower(lldb::ModuleSP module_sp) {
-  ObjectFile *obj_file = module_sp->GetObjectFile();
-  if (!obj_file)
-    return llvm::createStringError("No object file found in module");
-
-  DataExtractor header_data;
-  if (obj_file->GetData(48, 4, header_data) < 4)
-    return llvm::createStringError(
-        "Failed to read the e_flags of the ELF header");
-
-  lldb::offset_t hdr_offset = 0;
-  uint32_t e_flags = header_data.GetU32(&hdr_offset);
-  uint32_t sm_ver = e_flags & 0xFF;
-  std::string sm_arch = llvm::formatv("SM{0}", sm_ver).str();
-  return sm_arch;
+/// Decode the SM that a cubin's e_flags records: the architecture of its
+/// SASS, which is what nvdisasm -b needs. ELF ABI v7 (CUDA_V1) keeps it in
+/// bits 0-7, later versions in bits 8-15. Returns "SM<n>".
+static llvm::Expected<std::string> SMFromCudaELFFlags(uint8_t abi_version,
+                                                      uint32_t e_flags) {
+  const uint32_t sm = abi_version < llvm::ELF::ELFABIVERSION_CUDA_V2
+                          ? e_flags & llvm::ELF::EF_CUDA_SM
+                          : (e_flags & llvm::ELF::EF_CUDA_SM_MASK) >>
+                                llvm::ELF::EF_CUDA_SM_OFFSET;
+  if (sm == 0)
+    return llvm::createStringError("No SM architecture in e_flags 0x%x",
+                                   e_flags);
+  return llvm::formatv("SM{0}", sm).str();
 }
 
-llvm::Expected<std::string>
-ModuleSM::FindSMForELFv8OrGreater(lldb::ModuleSP module_sp) {
+/// Read the SM from a cubin's .note.nv.cuinfo. The note records the PTX
+/// (virtual) architecture the code was compiled from, which is older than the
+/// SASS when PTX is compiled for a newer GPU, so this is only a last resort
+/// for a cubin whose e_flags has no SM.
+static llvm::Expected<std::string> SMFromCuinfoNote(Module &module) {
   Log *log = GetLog(LLDBLog::Disassembler);
 
-  ObjectFile *obj_file = module_sp->GetObjectFile();
+  ObjectFile *obj_file = module.GetObjectFile();
   if (!obj_file)
     return llvm::createStringError("No object file found in module");
 
-  // Find the .note.nv.cuinfo section
-  SectionList *section_list = module_sp->GetSectionList();
+  SectionList *section_list = module.GetSectionList();
   if (!section_list)
     return llvm::createStringError("No section list found in module");
 
   SectionSP cuinfo_section_sp =
       section_list->FindSectionByName(ConstString(".note.nv.cuinfo"));
   if (!cuinfo_section_sp)
-    return llvm::createStringError(".note.nv.cuinfo section not found");
+    return llvm::createStringError("No .note.nv.cuinfo section");
 
   // Read the section data
   DataExtractor section_data;
@@ -157,15 +158,7 @@ ModuleSM::FindSMForELFv8OrGreater(lldb::ModuleSP module_sp) {
   if (cudaVirtSm > 0) {
     LLDB_LOG(log, "ModuleSM::findSM: Extracted SM architecture: SM{0}",
              cudaVirtSm);
-
-    // Cache the successful result
-    std::string sm_arch = llvm::formatv("SM{0}", cudaVirtSm).str();
-    {
-      std::lock_guard<std::mutex> lock(m_mutex);
-      m_cached_sm_arch = sm_arch;
-    }
-
-    return sm_arch;
+    return llvm::formatv("SM{0}", cudaVirtSm).str();
   }
 
   return llvm::createStringError("Invalid cudaVirtSm value %d", cudaVirtSm);
@@ -199,21 +192,33 @@ llvm::Expected<std::string> ModuleSM::FindSM(const Address &base_addr) {
   if (obj_file->GetPluginName() != ObjectFileELF::GetPluginNameStatic())
     return llvm::createStringError("Object file is not ELF format");
 
-  // For ELF files, we need to check the ABI version in the ELF header.
+  // The ELF header holds the ABI version, which picks the e_flags layout, and
+  // e_flags itself.
   DataExtractor header_data;
-  lldb::offset_t hdr_offset = 0;
-  if (obj_file->GetData(0, 64, header_data) < 16)
+  const lldb::offset_t e_flags_offset =
+      offsetof(llvm::ELF::Elf64_Ehdr, e_flags);
+  if (obj_file->GetData(0, sizeof(llvm::ELF::Elf64_Ehdr), header_data) <
+      e_flags_offset + sizeof(uint32_t))
     return llvm::createStringError("Failed to read ELF header");
 
-  hdr_offset = 8; // EI_ABIVERSION offset
-  uint8_t abi_version = header_data.GetU8(&hdr_offset);
+  lldb::offset_t hdr_offset = llvm::ELF::EI_ABIVERSION;
+  const uint8_t abi_version = header_data.GetU8(&hdr_offset);
+  hdr_offset = e_flags_offset;
+  const uint32_t e_flags = header_data.GetU32(&hdr_offset);
 
-  LLDB_LOG(log, "ModuleSM::findSM() ELF ABI version {0} identified",
-           abi_version);
+  LLDB_LOG(log, "ModuleSM::findSM() ELF ABI version {0}, e_flags {1:x}",
+           abi_version, e_flags);
 
-  llvm::Expected<std::string> sm_ver = abi_version >= 8
-                                           ? FindSMForELFv8OrGreater(module_sp)
-                                           : FindSMForELFv7OrLower(module_sp);
+  // e_flags records the architecture of the SASS in this cubin, which
+  // nvdisasm -b needs. .note.nv.cuinfo records the PTX architecture the code
+  // was compiled from, which is older when PTX is compiled for a newer GPU,
+  // as with -gencode arch=compute_80,code=sm_120.
+  llvm::Expected<std::string> sm_ver = SMFromCudaELFFlags(abi_version, e_flags);
+  if (!sm_ver) {
+    LLDB_LOG_ERROR(log, sm_ver.takeError(),
+                   "ModuleSM::findSM: {0}; reading .note.nv.cuinfo");
+    sm_ver = SMFromCuinfoNote(*module_sp);
+  }
   if (sm_ver) {
     {
       std::lock_guard<std::mutex> lock(m_mutex);

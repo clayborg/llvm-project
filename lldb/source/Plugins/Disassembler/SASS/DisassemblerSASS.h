@@ -90,7 +90,8 @@ private:
       const std::string &json_output, const lldb_private::DataExtractor &data,
       const lldb_private::Address &base_addr, size_t max_instructions);
 
-  /// Extract CUDA SM architecture from the module's .note.nv.cuinfo section
+  /// Find the SASS architecture of the module's cubin: from e_flags, or from
+  /// .note.nv.cuinfo when e_flags records none.
   /// \param[in] base_addr Address to get the module from
   /// \return SM architecture string (e.g., "SM86") or error if extraction fails
   llvm::Expected<std::string>
