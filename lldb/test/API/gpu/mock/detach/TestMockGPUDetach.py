@@ -76,17 +76,17 @@ class TestMockGPUDetach(GpuTestCaseBase):
         self.assertState(process.GetState(), lldb.eStateDetached)
 
     def test_kill_detaches_the_gpu_target(self):
-        """Killing the process kills its GPU target first, which detaches it,
-        as the mock GPU plug-in asks in its LLDB settings."""
+        """Killing the process detaches its GPU target first."""
         process, gpu_process = self.run_to_the_gpu_target()
         self.assertSuccess(process.Kill())
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)
         self.assertState(process.GetState(), lldb.eStateExited)
 
     def test_kill_the_gpu_target(self):
-        """Killing the GPU target detaches it instead, as the mock GPU plug-in
-        asks in its LLDB settings, since the process owns the program. Like a
-        detach, it disables the plug-in's breakpoints in the process."""
+        """Killing the GPU target detaches it instead, since the process owns
+        the program and the mock GPU plug-in keeps the default
+        kill_should_detach. Like a detach, it disables the plug-in's
+        breakpoints in the process."""
         process, gpu_process = self.run_to_the_gpu_target()
         self.assertSuccess(gpu_process.Kill())
         self.assertState(gpu_process.GetState(), lldb.eStateDetached)

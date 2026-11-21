@@ -1225,6 +1225,13 @@ Status ProcessGDBRemote::HandleConnectionRequest(const GPUActions &gpu_action) {
   // this plug-in, so it is a ProcessGDBRemote.
   std::static_pointer_cast<ProcessGDBRemote>(process_sp)
       ->SetGPUPluginName(gpu_action.plugin_name);
+  // A kill detaches from the GPU process, unless its GPU plug-in can kill it.
+  // Only the GPU process's connection has the plug-in's settings.
+  if (std::optional<LLDBSettings> settings =
+          static_cast<ProcessGDBRemote &>(*process_sp)
+              .GetGDBRemote()
+              .GetLLDBSettings())
+    process_sp->SetKillShouldDetach(settings->kill_should_detach);
   // Broadcast the target creation event so DAP can create a child session
   auto event_sp = std::make_shared<Event>(
       Target::eBroadcastBitNewTargetCreated,
@@ -3189,25 +3196,16 @@ void ProcessGDBRemote::CleanupGPUState(llvm::StringRef gpu_plugin_name) {
 }
 
 Status ProcessGDBRemote::WillDestroy() {
-  // A GPU plug-in can ask lldb to detach from its GPU process when the user
-  // kills it. A kill turns off ShouldDetach, so Process::DestroyImpl() did not
-  // detach.
-  if (GetTarget().IsGPUTarget() && !GetShouldDetach() && IsAlive()) {
-    std::optional<LLDBSettings> settings = m_gdb_comm.GetLLDBSettings();
-    if (settings && settings->kill_should_detach)
-      return Detach(/*keep_stopped=*/false);
-  }
-
-  // Kill the GPU processes first. Their GPU plug-ins may detach from them
-  // instead.
+  // Destroy the GPU processes first. lldb connected to them, so they should
+  // detach, and Process::DestroyImpl() detaches from them.
   for (const TargetSP &gpu_target_sp : GetTarget().GetGPUPluginTargets()) {
     ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
     if (!gpu_process_sp || !gpu_process_sp->IsAlive())
       continue;
-    Status error = gpu_process_sp->Destroy(/*force_kill=*/true);
+    Status error = gpu_process_sp->Destroy(/*force_kill=*/false);
     if (error.Fail())
       LLDB_LOG(GetLog(GDBRLog::Process),
-               "ProcessGDBRemote::WillDestroy(): could not kill GPU process "
+               "ProcessGDBRemote::WillDestroy(): could not destroy GPU process "
                "{0}: {1}",
                gpu_process_sp->GetID(), error);
   }
@@ -3218,8 +3216,8 @@ Status ProcessGDBRemote::DoDestroy() {
   Log *log = GetLog(GDBRLog::Process);
   LLDB_LOGF(log, "ProcessGDBRemote::DoDestroy()");
 
-  // A detached GPU process has nothing left to kill, and stays detached
-  // instead of getting an exit status below.
+  // A GPU process that Process::DestroyImpl() detached has nothing left to
+  // kill, and stays detached instead of getting an exit status below.
   if (GetTarget().IsGPUTarget() && GetPrivateState() == eStateDetached)
     return Status();
 

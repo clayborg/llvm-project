@@ -92,8 +92,6 @@ public:
   std::optional<GPUActions>
   SetRequestedSymbols(const std::vector<SymbolValue> &symbols) override;
 
-  std::optional<LLDBSettings> GetLLDBSettings() override;
-
 private:
   ProcessMockGPU *GetGPUProcess() const;
   std::optional<GPUPluginConnectionInfo> CreateConnection();

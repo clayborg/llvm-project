@@ -45,9 +45,9 @@ class AmdGpuLifecycleTestCase(AmdGpuTestCaseBase):
         self.continue_cpu_to_exit(listener)
 
     def test_gpu_kill_detaches(self):
-        """Test that killing the GPU process detaches from it instead, as the
-        AMD GPU plug-in asks, since the CPU process owns the program. The detach
-        resumes the stopped waves."""
+        """Test that killing the GPU process detaches from it instead, since
+        the CPU process owns the program and the AMD GPU plug-in keeps the
+        default kill_should_detach. The detach resumes the stopped waves."""
         listener = self.stop_at_gpu_breakpoint()
 
         gpu_process = self.gpu_process
