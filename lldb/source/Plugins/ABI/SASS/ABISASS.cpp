@@ -125,18 +125,28 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   return plan_sp;
 }
 
-/// GPU code only runs from loaded cubins, so a caller PC that is not inside an
-/// executable section of a loaded module is not a real return address. A
-/// kernel entry, for example, has no caller and its RA holds unrelated data.
+// GPU code only runs from loaded cubins, so a caller PC that is not in a code
+// section of a loaded module is not a real return address. This catches, for
+// example, a kernel's RA when it holds unrelated data that points outside
+// loaded code.
 bool ABISASS::CodeAddressIsValid(lldb::addr_t pc) {
   ProcessSP process_sp = GetProcessSP();
   if (!process_sp)
     return true;
+  // Resolve as RegisterContextUnwind does, so that a return address at the end
+  // of a section is accepted by both.
   Address addr;
-  if (!process_sp->GetTarget().ResolveLoadAddress(pc, addr))
+  if (!process_sp->GetTarget().ResolveLoadAddress(
+          pc, addr, SectionLoadHistory::eStopIDNow, /*allow_section_end=*/true))
     return false;
+  // A core loads each cubin at its file addresses, so a relocated cubin's
+  // first PT_LOAD segment becomes a container at address 0, executable if the
+  // segment is, while its code sections sit at their device addresses. An
+  // address that no section inside the container covers resolves to the
+  // container itself, which holds no code.
   SectionSP section_sp = addr.GetSection();
-  return section_sp && (section_sp->GetPermissions() & ePermissionsExecutable);
+  return section_sp && section_sp->GetType() != eSectionTypeContainer &&
+         (section_sp->GetPermissions() & ePermissionsExecutable);
 }
 
 bool ABISASS::RegisterIsVolatile(const RegisterInfo *reg_info) {
