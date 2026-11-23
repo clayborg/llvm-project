@@ -106,7 +106,7 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   UnwindPlan::Row row;
   const uint32_t lldb_sp = sass::regnum::LLDB_SP;
   const uint32_t lldb_pc = sass::regnum::LLDB_PC;
-  // This is our composite R21/R21 register
+  // This is our composite R20:R21 register
   const uint32_t lldb_ra = sass::regnum::LLDB_RA;
 
   // CFA is the stack pointer
@@ -116,8 +116,11 @@ UnwindPlanSP ABISASS::CreateDefaultUnwindPlan() {
   // Set PC to be in the return address register
   row.SetRegisterLocationToRegister(lldb_pc, lldb_ra, /*can_replace*/ true);
 
-  // Mark return address as "same" - it's preserved across calls
-  row.SetRegisterLocationToSame(lldb_ra, /*can_replace*/ true);
+  // The row has no rule for the caller's RA. To call this function, the
+  // caller loaded this function's return address into R20:R21, so its own
+  // return address is no longer there, and this plan cannot know where the
+  // caller saved it. Marking RA "same" would give a caller unwound with this
+  // plan its own PC as its caller's PC.
 
   plan_sp->AppendRow(row);
   plan_sp->SetReturnAddressRegister(lldb_ra);
