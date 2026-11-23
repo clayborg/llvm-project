@@ -168,9 +168,9 @@ struct LLDBSettings {
   /// forward it to the GPU plug-in via a call to the
   /// LLDBServerPlugin::GetGPUDynamicLoaderLibraryInfos().
   bool send_dyld_packet_to_gpu = true;
-  /// If this is true, LLDB detaches from the GPU process when the user tries to
-  /// kill it, since the native process owns the program. A GPU plug-in that
-  /// can kill its GPU process sets this to false.
+  /// If this is true, LLDB will detach from this process when the user tries
+  /// to kill it. This is useful for any targets where kill doesn't make sense.
+  /// This is currently used for GPU targets.
   bool kill_should_detach = true;
 };
 

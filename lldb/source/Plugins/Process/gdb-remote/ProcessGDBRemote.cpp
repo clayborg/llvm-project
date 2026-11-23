@@ -3196,8 +3196,8 @@ void ProcessGDBRemote::CleanupGPUState(llvm::StringRef gpu_plugin_name) {
 }
 
 Status ProcessGDBRemote::WillDestroy() {
-  // Destroy the GPU processes first. lldb connected to them, so they should
-  // detach, and Process::DestroyImpl() detaches from them.
+  // If we are killing a process that has accelerator targets, kill them as well
+  // before we kill the controlling process.
   for (const TargetSP &gpu_target_sp : GetTarget().GetGPUPluginTargets()) {
     ProcessSP gpu_process_sp = gpu_target_sp->GetProcessSP();
     if (!gpu_process_sp || !gpu_process_sp->IsAlive())
