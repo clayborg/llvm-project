@@ -35,16 +35,16 @@ void RegisterContextNVGPU::InvalidateAllRegisters() {
   m_predicate_registers.reset();
 }
 
-ThreadNVGPU &RegisterContextNVGPU::GetGPUThread() {
-  return static_cast<ThreadNVGPU &>(GetThread());
+const ThreadNVGPU &RegisterContextNVGPU::GetGPUThread() const {
+  return static_cast<const ThreadNVGPU &>(m_thread);
 }
 
-CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() {
+CUDBGAPI RegisterContextNVGPU::GetDebuggerAPI() const {
   return GetGPUThread().GetGPU().GetDebuggerAPI();
 }
 
 static llvm::Error
-ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
+ReadRegularRegistersFromDevice(CUDBGAPI api, const WarpState &warp_state,
                                const nvgpu::PhysicalCoords &coords,
                                llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
@@ -78,7 +78,7 @@ ReadRegularRegistersFromDevice(CUDBGAPI api, WarpState &warp_state,
 }
 
 static llvm::Error
-ReadPredicateRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+ReadPredicateRegistersFromDevice(const DeviceState &device_info, CUDBGAPI api,
                                  const nvgpu::PhysicalCoords &coords,
                                  llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!coords.device || !coords.sm || !coords.warp || !coords.lane)
@@ -138,8 +138,8 @@ static llvm::Error SetValueAt(const RegisterInfo &reg_info,
   return SetValue(reg_info, &registers[index], value);
 }
 
-llvm::ArrayRef<uint32_t>
-RegisterContextNVGPU::GetRegularRegisters(const ThreadState &thread_state) {
+llvm::ArrayRef<uint32_t> RegisterContextNVGPU::GetRegularRegisters(
+    const ThreadState &thread_state) const {
   if (m_regular_registers)
     return *m_regular_registers;
   llvm::SmallVectorImpl<uint32_t> &registers = m_regular_registers.emplace();
@@ -153,12 +153,12 @@ RegisterContextNVGPU::GetRegularRegisters(const ThreadState &thread_state) {
   return registers;
 }
 
-llvm::ArrayRef<uint32_t>
-RegisterContextNVGPU::GetPredicateRegisters(const ThreadState &thread_state) {
+llvm::ArrayRef<uint32_t> RegisterContextNVGPU::GetPredicateRegisters(
+    const ThreadState &thread_state) const {
   if (m_predicate_registers)
     return *m_predicate_registers;
   llvm::SmallVectorImpl<uint32_t> &registers = m_predicate_registers.emplace();
-  DeviceState &device_state =
+  const DeviceState &device_state =
       thread_state.GetWarpState().GetSMState().GetDeviceState();
   if (llvm::Error err = ReadPredicateRegistersFromDevice(
           device_state, GetDebuggerAPI(), thread_state.GetPhysicalCoords(),
@@ -230,8 +230,8 @@ RegisterContextNVGPU::ReadRegisterValue(const RegisterInfo &reg_info,
         "{0} register is unavailable while the GPU is running", reg_info.name);
 
   // Read snapshot and cached grid values without fetching registers.
-  WarpState &warp_state = thread_state->GetWarpState();
-  DeviceState &device_state = warp_state.GetSMState().GetDeviceState();
+  const WarpState &warp_state = thread_state->GetWarpState();
+  const DeviceState &device_state = warp_state.GetSMState().GetDeviceState();
   const nvgpu::LogicalCoords &logical = warp_state.GetLogicalCoords();
   switch (reg_num) {
   case LLDB_ERROR_PC: {

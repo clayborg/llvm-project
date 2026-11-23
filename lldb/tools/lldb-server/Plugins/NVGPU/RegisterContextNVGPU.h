@@ -60,22 +60,23 @@ private:
 
   /// \return
   ///     Cached R0-based values; empty on failure.
-  llvm::ArrayRef<uint32_t> GetRegularRegisters(const ThreadState &thread_state);
+  llvm::ArrayRef<uint32_t>
+  GetRegularRegisters(const ThreadState &thread_state) const;
 
   /// \return
   ///     Cached P0-based values; empty on failure.
   llvm::ArrayRef<uint32_t>
-  GetPredicateRegisters(const ThreadState &thread_state);
+  GetPredicateRegisters(const ThreadState &thread_state) const;
 
-  CUDBGAPI GetDebuggerAPI();
+  CUDBGAPI GetDebuggerAPI() const;
 
-  ThreadNVGPU &GetGPUThread();
+  const ThreadNVGPU &GetGPUThread() const;
 
   /// Unset until read; empty after failure or unavailability.
   /// Reset on lane decode, allowing failed reads to be retried.
   /// Allocate on demand: unused lane slots also have register contexts.
-  std::optional<llvm::SmallVector<uint32_t, 0>> m_regular_registers;
-  std::optional<llvm::SmallVector<uint32_t, 0>> m_predicate_registers;
+  mutable std::optional<llvm::SmallVector<uint32_t, 0>> m_regular_registers;
+  mutable std::optional<llvm::SmallVector<uint32_t, 0>> m_predicate_registers;
 };
 
 } // namespace lldb_private::lldb_server

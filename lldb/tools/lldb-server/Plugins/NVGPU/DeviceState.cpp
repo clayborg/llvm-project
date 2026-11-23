@@ -96,7 +96,7 @@ static bool HasRequiredWarpCoords(const nvgpu::PhysicalCoords &physical) {
   return physical.device && physical.sm && physical.warp;
 }
 
-llvm::Expected<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
+llvm::Expected<uint32_t> WarpState::GetCurrentNumRegularRegisters() const {
   if (m_current_num_regular_registers)
     return *m_current_num_regular_registers;
 
@@ -117,7 +117,7 @@ llvm::Expected<uint32_t> WarpState::GetCurrentNumRegularRegisters() {
 }
 
 static llvm::Error
-ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
+ReadUniformRegistersFromDevice(const DeviceState &device_info, CUDBGAPI api,
                                const nvgpu::PhysicalCoords &physical,
                                llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!HasRequiredWarpCoords(physical))
@@ -148,7 +148,7 @@ ReadUniformRegistersFromDevice(DeviceState &device_info, CUDBGAPI api,
 }
 
 static llvm::Error ReadUniformPredicateRegistersFromDevice(
-    DeviceState &device_info, CUDBGAPI api,
+    const DeviceState &device_info, CUDBGAPI api,
     const nvgpu::PhysicalCoords &physical,
     llvm::SmallVectorImpl<uint32_t> &registers) {
   if (!HasRequiredWarpCoords(physical))
@@ -182,11 +182,11 @@ static llvm::Error ReadUniformPredicateRegistersFromDevice(
   return llvm::Error::success();
 }
 
-llvm::ArrayRef<uint32_t> WarpState::GetUniformRegisters() {
+llvm::ArrayRef<uint32_t> WarpState::GetUniformRegisters() const {
   if (m_uniform_registers)
     return *m_uniform_registers;
   llvm::SmallVectorImpl<uint32_t> &registers = m_uniform_registers.emplace();
-  DeviceState &device_info = GetSMState().GetDeviceState();
+  const DeviceState &device_info = GetSMState().GetDeviceState();
   const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
   // Missing coordinates skip the read, so the error log can dereference them.
   if (llvm::Error err = ReadUniformRegistersFromDevice(
@@ -198,12 +198,12 @@ llvm::ArrayRef<uint32_t> WarpState::GetUniformRegisters() {
   return registers;
 }
 
-llvm::ArrayRef<uint32_t> WarpState::GetUniformPredicateRegisters() {
+llvm::ArrayRef<uint32_t> WarpState::GetUniformPredicateRegisters() const {
   if (m_uniform_predicate_registers)
     return *m_uniform_predicate_registers;
   llvm::SmallVectorImpl<uint32_t> &registers =
       m_uniform_predicate_registers.emplace();
-  DeviceState &device_info = GetSMState().GetDeviceState();
+  const DeviceState &device_info = GetSMState().GetDeviceState();
   const nvgpu::PhysicalCoords &physical = GetPhysicalCoords();
   if (llvm::Error err = ReadUniformPredicateRegistersFromDevice(
           device_info, device_info.GetAPI(), physical, registers))
@@ -283,7 +283,7 @@ llvm::Error DeviceState::Initialize(ProcessNVGPU &gpu) {
   return llvm::Error::success();
 }
 
-llvm::Expected<size_t> DeviceState::GetNumPredicateRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumPredicateRegisters() const {
   if (m_num_predicate_registers)
     return *m_num_predicate_registers;
 
@@ -298,7 +298,7 @@ llvm::Expected<size_t> DeviceState::GetNumPredicateRegisters() {
   return num_predicate_registers;
 }
 
-llvm::Expected<size_t> DeviceState::GetNumUniformPredicateRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumUniformPredicateRegisters() const {
   if (m_num_uniform_predicate_registers)
     return *m_num_uniform_predicate_registers;
 
@@ -314,7 +314,7 @@ llvm::Expected<size_t> DeviceState::GetNumUniformPredicateRegisters() {
   return num_uniform_predicate_registers;
 }
 
-llvm::Expected<size_t> DeviceState::GetNumUniformRegisters() {
+llvm::Expected<size_t> DeviceState::GetNumUniformRegisters() const {
   if (m_num_uniform_registers)
     return *m_num_uniform_registers;
 
@@ -329,7 +329,7 @@ llvm::Expected<size_t> DeviceState::GetNumUniformRegisters() {
   return num_uniform_registers;
 }
 
-llvm::Expected<size_t> DeviceState::GetMaxNumSupportedRegularRegister() {
+llvm::Expected<size_t> DeviceState::GetMaxNumSupportedRegularRegister() const {
   if (m_num_r_registers)
     return *m_num_r_registers;
 
@@ -362,7 +362,7 @@ void DeviceState::Dump(Stream &s) {
 }
 
 llvm::Expected<const CUDBGGridInfo &>
-DeviceState::GetGridInfo(uint64_t grid_id) {
+DeviceState::GetGridInfo(uint64_t grid_id) const {
   auto it = m_grid_info.find(grid_id);
   if (it != m_grid_info.end())
     return it->second;

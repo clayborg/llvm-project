@@ -130,7 +130,7 @@ public:
 
   /// \return
   ///     The warp state associated with this thread.
-  WarpState &GetWarpState() const { return *m_warp_state; }
+  const WarpState &GetWarpState() const { return *m_warp_state; }
 
 private:
   /// Whether this thread is valid in the GPU.
@@ -238,15 +238,15 @@ public:
   /// \return
   ///     The number of regular registers currently used by this warp, or an
   ///     error if the debugger API cannot read it.
-  llvm::Expected<uint32_t> GetCurrentNumRegularRegisters();
+  llvm::Expected<uint32_t> GetCurrentNumRegularRegisters() const;
 
   /// \return
   ///     Cached UR0-based values; empty on failure.
-  llvm::ArrayRef<uint32_t> GetUniformRegisters();
+  llvm::ArrayRef<uint32_t> GetUniformRegisters() const;
 
   /// \return
   ///     Cached UP0-based values; empty on failure.
-  llvm::ArrayRef<uint32_t> GetUniformPredicateRegisters();
+  llvm::ArrayRef<uint32_t> GetUniformPredicateRegisters() const;
 
   const std::optional<BlockIdx> &GetBlockIdx() const {
     return m_logical_coords.block_idx;
@@ -262,7 +262,7 @@ public:
   /// \return
   ///     A reference to the streaming multiprocessor state that this warp
   ///     belongs to.
-  SMState &GetSMState() const { return *m_sm_state; }
+  const SMState &GetSMState() const { return *m_sm_state; }
 
   /// \return
   ///     The immutable physical coordinates of this warp. The lane is always
@@ -289,12 +289,13 @@ private:
 
   /// The number of regular registers currently available for each thread of
   /// this warp.
-  std::optional<uint32_t> m_current_num_regular_registers;
+  mutable std::optional<uint32_t> m_current_num_regular_registers;
 
   /// Unset until read; empty after failure or unavailability.
   /// Clear these caches when processing updated warp state.
-  std::optional<llvm::SmallVector<uint32_t, 0>> m_uniform_registers;
-  std::optional<llvm::SmallVector<uint32_t, 0>> m_uniform_predicate_registers;
+  mutable std::optional<llvm::SmallVector<uint32_t, 0>> m_uniform_registers;
+  mutable std::optional<llvm::SmallVector<uint32_t, 0>>
+      m_uniform_predicate_registers;
 
   /// Logical coordinates shared by threads in this warp. The thread index is
   /// always disengaged.
@@ -370,7 +371,7 @@ public:
 
   /// \return
   ///     A reference to the device state that this SM belongs to.
-  DeviceState &GetDeviceState() const { return *m_device_state; }
+  const DeviceState &GetDeviceState() const { return *m_device_state; }
 
 private:
   /// Whether this SM is currently active in the GPU.
@@ -417,7 +418,7 @@ public:
   /// \return
   ///     The number of R registers for the device, or an error if the debugger
   ///     API cannot report it.
-  llvm::Expected<size_t> GetMaxNumSupportedRegularRegister();
+  llvm::Expected<size_t> GetMaxNumSupportedRegularRegister() const;
 
   /// Get the number of predicate registers available on this device. This is
   /// cached for the lifetime of the device.
@@ -425,7 +426,7 @@ public:
   /// \return
   ///     The number of predicate registers for the device, or an error if the
   ///     debugger API cannot report it.
-  llvm::Expected<size_t> GetNumPredicateRegisters();
+  llvm::Expected<size_t> GetNumPredicateRegisters() const;
 
   /// Get the number of uniform registers available on this device. This is
   /// cached for the lifetime of the device.
@@ -433,7 +434,7 @@ public:
   /// \return
   ///     The number of uniform registers for the device, or an error if the
   ///     debugger API cannot report it.
-  llvm::Expected<size_t> GetNumUniformRegisters();
+  llvm::Expected<size_t> GetNumUniformRegisters() const;
 
   /// Get the number of uniform predicate registers available on this device.
   /// This is cached for the lifetime of the device.
@@ -441,7 +442,7 @@ public:
   /// \return
   ///     The number of uniform predicate registers for the device, or an error
   ///     if the debugger API cannot report it.
-  llvm::Expected<size_t> GetNumUniformPredicateRegisters();
+  llvm::Expected<size_t> GetNumUniformPredicateRegisters() const;
 
   /// Update all device state information from the CUDA debugger API.
   ///
@@ -466,7 +467,7 @@ public:
   /// \return
   ///     A reference to the grid information structure, or an error if the
   ///     debugger API cannot report it.
-  llvm::Expected<const CUDBGGridInfo &> GetGridInfo(uint64_t grid_id);
+  llvm::Expected<const CUDBGGridInfo &> GetGridInfo(uint64_t grid_id) const;
 
   /// \return
   ///     A reference to the collection of SM states.
@@ -484,8 +485,8 @@ public:
   size_t GetMaxNumSupportedThreads() const;
 
   /// \return
-  ///     A reference to the CUDA debugger API.
-  CUDBGAPI &GetAPI() { return m_api; }
+  ///     The CUDA debugger API.
+  CUDBGAPI GetAPI() const { return m_api; }
 
   /// \return
   ///     The number of threads per warp on this device.
@@ -512,13 +513,13 @@ private:
   uint32_t m_device_id;
 
   /// The number of R registers available on this device (cached).
-  std::optional<size_t> m_num_r_registers;
+  mutable std::optional<size_t> m_num_r_registers;
 
-  std::optional<size_t> m_num_predicate_registers;
+  mutable std::optional<size_t> m_num_predicate_registers;
 
-  std::optional<size_t> m_num_uniform_registers;
+  mutable std::optional<size_t> m_num_uniform_registers;
 
-  std::optional<size_t> m_num_uniform_predicate_registers;
+  mutable std::optional<size_t> m_num_uniform_predicate_registers;
 
   /// The total number of streaming multiprocessors on this device.
   uint32_t m_num_sms = 0;
@@ -542,7 +543,7 @@ private:
   std::vector<SMState> m_sms;
 
   /// Cached grid information indexed by grid ID.
-  std::unordered_map<uint64_t, CUDBGGridInfo> m_grid_info;
+  mutable std::unordered_map<uint64_t, CUDBGGridInfo> m_grid_info;
   /// @}
 
   /// Fields that are used to decode the device information from the batch API.
