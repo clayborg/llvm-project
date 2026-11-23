@@ -29,6 +29,11 @@ class TestNVGPUArtificialUnwind(NVGPUCoreTestCaseBase):
     # address.
     RETURN_ADDRESS = 0x00007FFFCF27F710
     GARBAGE_RETURN_ADDRESS = 0xBAD17CD7BAD17CD7
+    # Inside the cubin's PT_LOAD segment, [0, 0x15b8), but past
+    # .nv.constant0, [0, 0x178), so it resolves to the segment itself.
+    SEGMENT_RETURN_ADDRESS = 0x400
+    # Inside .nv.constant0, a read-only section in the same segment.
+    CONSTANT_RETURN_ADDRESS = 0x40
     # Any non-zero, 8-byte aligned value is a valid call frame address. The
     # core maps memory there, so that the unwinder's own checks of the frame
     # pass and only the check of the caller PC can end the walk.
@@ -90,10 +95,35 @@ class TestNVGPUArtificialUnwind(NVGPUCoreTestCaseBase):
         )
 
     def test_return_address_in_segment_outside_code_is_not_a_caller(self):
-        """A core loads each cubin's PT_LOAD segment at address 0 as an
-        executable container, so a small RA falls inside it. With no code
-        section there, it does not become a caller frame either."""
-        self._assert_kernel_has_no_caller(0x400, "segment-ra.nvcudmp")
+        """A core loads a relocated cubin's first PT_LOAD segment as a
+        container at address 0, executable if the segment is, as in this
+        fixture. An RA that no section inside the container covers resolves
+        to the container, which holds no code, so it does not become a caller
+        frame either."""
+        self._assert_kernel_has_no_caller(
+            self.SEGMENT_RETURN_ADDRESS, "segment-ra.nvcudmp"
+        )
+
+    def test_return_address_in_read_only_section_is_not_a_caller(self):
+        """An RA in a section that is not executable does not become a caller
+        frame."""
+        self._assert_kernel_has_no_caller(
+            self.CONSTANT_RETURN_ADDRESS, "constant-ra.nvcudmp"
+        )
+
+    def test_default_plan_unwinds_to_a_caller(self):
+        """With the CFI hidden, a lane at acosf's entry unwinds to acos_main
+        through the default plan."""
+        thread = self._load_lane(
+            "default-plan-ra.nvcudmp",
+            lane_pc=self.ACOSF,
+            return_address=self.RETURN_ADDRESS,
+            hide_cfi=True,
+        )
+        self.assertEqual(thread.GetNumFrames(), 2)
+        self.assertEqual(thread.GetFrameAtIndex(0).GetFunctionName(), "acosf")
+        self.assertEqual(thread.GetFrameAtIndex(1).GetPC(), self.RETURN_ADDRESS)
+        self.assertIn("acos_main", thread.GetFrameAtIndex(1).GetFunctionName())
 
     def test_return_address_into_code_is_a_caller(self):
         """An RA that points into loaded code is unwound to. The walk then ends

@@ -139,9 +139,11 @@ bool ABISASS::CodeAddressIsValid(lldb::addr_t pc) {
   if (!process_sp->GetTarget().ResolveLoadAddress(
           pc, addr, SectionLoadHistory::eStopIDNow, /*allow_section_end=*/true))
     return false;
-  // A core loads each cubin's PT_LOAD segment at address 0 as an executable
-  // container, and an address that no section inside it covers resolves to
-  // the container itself. Only the code sections in it hold return addresses.
+  // A core loads each cubin at its file addresses, so a relocated cubin's
+  // first PT_LOAD segment becomes a container at address 0, executable if the
+  // segment is, while its code sections sit at their device addresses. An
+  // address that no section inside the container covers resolves to the
+  // container itself, which holds no code.
   SectionSP section_sp = addr.GetSection();
   return section_sp && section_sp->GetType() != eSectionTypeContainer &&
          (section_sp->GetPermissions() & ePermissionsExecutable);
