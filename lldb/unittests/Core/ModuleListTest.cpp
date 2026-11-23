@@ -18,6 +18,7 @@
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 
+#include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
 
 using namespace lldb;
@@ -242,4 +243,160 @@ Sections:
   EXPECT_EQ(module_list.GetModuleAtIndex(0), dummy_module);
   EXPECT_EQ(module_list.GetModuleAtIndex(1), first_module);
   EXPECT_EQ(module_list.GetModuleAtIndex(2), second_module);
+}
+
+static constexpr llvm::StringLiteral kSliceYaml = R"(
+--- !ELF
+FileHeader:
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_DYN
+  Machine:         EM_X86_64
+Sections:
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign:    0x0000000000000010
+...
+)";
+
+/// The offsets of the two ELF images in the file WriteTwoSliceFile writes.
+/// Neither is at offset 0: a spec at offset 0 that covers its whole data
+/// buffer selects no slice.
+static constexpr uint64_t kFirstSliceOffset = 0x1000;
+static constexpr uint64_t kSecondSliceOffset = 0x2000;
+
+/// Write two copies of \p image into one temporary file, at kFirstSliceOffset
+/// and kSecondSliceOffset, and set \p first_spec and \p second_spec to the
+/// specs that select each copy, the way ProcessNVGPUCore selects the cubins
+/// embedded in a GPU core file.
+static llvm::Expected<llvm::sys::fs::TempFile>
+WriteTwoSliceFile(TestFile &image, ModuleSpec &first_spec,
+                  ModuleSpec &second_spec) {
+  llvm::Expected<llvm::sys::fs::TempFile> temp =
+      llvm::sys::fs::TempFile::create("slices%%%%%%%%%%%%%%%%");
+  if (!temp)
+    return temp.takeError();
+  DataBufferSP data = image.moduleSpec().GetData();
+  const uint64_t size = data->GetByteSize();
+  {
+    llvm::raw_fd_ostream os(temp->FD, /*shouldClose=*/false);
+    os.write_zeros(kFirstSliceOffset);
+    os.write(reinterpret_cast<const char *>(data->GetBytes()), size);
+    os.write_zeros(kSecondSliceOffset - kFirstSliceOffset - size);
+    os.write(reinterpret_cast<const char *>(data->GetBytes()), size);
+  }
+  FileSpec file(temp->TmpName);
+  first_spec = ModuleSpec(file, UUID(), data);
+  first_spec.SetObjectOffset(kFirstSliceOffset);
+  first_spec.SetObjectSize(size);
+  second_spec = ModuleSpec(file, UUID(), data);
+  second_spec.SetObjectOffset(kSecondSliceOffset);
+  second_spec.SetObjectSize(size);
+  return std::move(*temp);
+}
+
+// Slices of one file are separate shared modules, and a lookup of either one
+// returns its own module.
+TEST(ModuleListTest, GetSharedModuleKeepsSlicesOfOneFileApart) {
+  SubsystemRAII<FileSystem, ObjectFileELF> subsystems;
+  auto image = TestFile::fromYaml(kSliceYaml);
+  ASSERT_THAT_EXPECTED(image, llvm::Succeeded());
+  ModuleSpec first_spec, second_spec;
+  auto file = WriteTwoSliceFile(*image, first_spec, second_spec);
+  ASSERT_THAT_EXPECTED(file, llvm::Succeeded());
+
+  ModuleSP first_module, second_module, module;
+  bool did_create = false;
+  Status error = ModuleList::GetSharedModule(first_spec, first_module, nullptr,
+                                             &did_create);
+  ASSERT_TRUE(error.Success()) << error.AsCString();
+  EXPECT_TRUE(did_create);
+  ASSERT_TRUE(ModuleList::GetSharedModule(second_spec, second_module, nullptr,
+                                          &did_create)
+                  .Success());
+  EXPECT_TRUE(did_create);
+  ASSERT_NE(first_module, nullptr);
+  ASSERT_NE(second_module, nullptr);
+  EXPECT_NE(first_module, second_module);
+  EXPECT_EQ(second_module->GetObjectOffset(), kSecondSliceOffset);
+
+  // A second lookup of each slice reuses its module.
+  ASSERT_TRUE(
+      ModuleList::GetSharedModule(first_spec, module, nullptr, &did_create)
+          .Success());
+  EXPECT_FALSE(did_create);
+  EXPECT_EQ(module, first_module);
+  ASSERT_TRUE(
+      ModuleList::GetSharedModule(second_spec, module, nullptr, &did_create)
+          .Success());
+  EXPECT_FALSE(did_create);
+  EXPECT_EQ(module, second_module);
+
+  ModuleList found;
+  ModuleList::FindSharedModules(second_spec, found);
+  ASSERT_EQ(found.GetSize(), 1u);
+  EXPECT_EQ(found.GetModuleAtIndex(0), second_module);
+
+  // A slice with no module yet matches nothing.
+  ModuleSpec missing_spec = second_spec;
+  missing_spec.SetObjectOffset(kSecondSliceOffset + kFirstSliceOffset);
+  found.Clear();
+  ModuleList::FindSharedModules(missing_spec, found);
+  EXPECT_EQ(found.GetSize(), 0u);
+
+  llvm::consumeError(file->discard());
+}
+
+// Creating a slice again replaces the older copy of that slice, and only that
+// one, and reports it as an old module. Once released, both slices are
+// removed as orphans.
+TEST(ModuleListTest, GetSharedModuleReplacesOlderCopyOfSlice) {
+  SubsystemRAII<FileSystem, ObjectFileELF> subsystems;
+  auto image = TestFile::fromYaml(kSliceYaml);
+  ASSERT_THAT_EXPECTED(image, llvm::Succeeded());
+  ModuleSpec first_spec, second_spec;
+  auto file = WriteTwoSliceFile(*image, first_spec, second_spec);
+  ASSERT_THAT_EXPECTED(file, llvm::Succeeded());
+
+  ModuleSP first_module, old_second_module, new_second_module;
+  ASSERT_TRUE(
+      ModuleList::GetSharedModule(first_spec, first_module, nullptr, nullptr)
+          .Success());
+  ASSERT_TRUE(ModuleList::GetSharedModule(second_spec, old_second_module,
+                                          nullptr, nullptr)
+                  .Success());
+
+  llvm::SmallVector<ModuleSP, 1> old_modules;
+  bool did_create = false;
+  ASSERT_TRUE(ModuleList::GetSharedModule(second_spec, new_second_module,
+                                          &old_modules, &did_create,
+                                          /*always_create=*/true)
+                  .Success());
+  EXPECT_TRUE(did_create);
+  ASSERT_NE(new_second_module, nullptr);
+  EXPECT_NE(new_second_module, old_second_module);
+  ASSERT_EQ(old_modules.size(), 1u);
+  EXPECT_EQ(old_modules[0], old_second_module);
+
+  ModuleList found;
+  ModuleList::FindSharedModules(second_spec, found);
+  ASSERT_EQ(found.GetSize(), 1u);
+  EXPECT_EQ(found.GetModuleAtIndex(0), new_second_module);
+  found.Clear();
+  ModuleList::FindSharedModules(first_spec, found);
+  ASSERT_EQ(found.GetSize(), 1u);
+  EXPECT_EQ(found.GetModuleAtIndex(0), first_module);
+  found.Clear();
+
+  old_modules.clear();
+  first_module.reset();
+  old_second_module.reset();
+  new_second_module.reset();
+  ModuleList::RemoveOrphanSharedModules(/*mandatory=*/true);
+  ModuleList::FindSharedModules(first_spec, found);
+  ModuleList::FindSharedModules(second_spec, found);
+  EXPECT_EQ(found.GetSize(), 0u);
+
+  llvm::consumeError(file->discard());
 }
