@@ -130,13 +130,11 @@ int main(void) {
   // Initialize CUDA device to ensure GPU target is created for debugging
   cudaDeviceReset();
 
-  const int N = 1024;
-  int threadsPerBlock = 256;
-  int blocksPerGrid =
-      (N + threadsPerBlock - 1) / threadsPerBlock; // cpu breakpoint
-
-  // Run single aggregator kernel that executes all test pathways
-  unwind_test_kernel<<<blocksPerGrid, threadsPerBlock>>>();
+  // One warp. The test checks thread 0 at each stop, and the threads of a
+  // warp reach each scenario together. Separate warps do not: another warp
+  // can stop the GPU while thread 0 is still at an earlier scenario's
+  // breakpoint, or end the kernel with its fault before thread 0 faults.
+  unwind_test_kernel<<<1, 32>>>(); // cpu breakpoint
   cudaDeviceSynchronize();
 
   return 0; // breakpoint before exit
