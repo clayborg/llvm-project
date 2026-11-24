@@ -36,12 +36,14 @@
 #endif
 
 #include "clang/Driver/Driver.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -779,6 +781,15 @@ public:
     FindModulesInMap(module_spec, matching_module_list);
     if (!matching_module_list.IsEmpty())
       return;
+    // A slice lookup only matches modules at its own offset, and
+    // FindModulesInMap checked those filed under its file name. Skipping the
+    // full scan assumes a sliced module is filed under every name a slice
+    // lookup will use. The scan would also find a module whose platform file
+    // has the requested name while its own file has another, and, for
+    // Windows-style paths, a module whose name differs only in case; slice
+    // lookups give those up. They also skip the consistency check below.
+    if (IsSliceLookup(module_spec))
+      return;
     m_list.FindModules(module_spec, matching_module_list);
     // Assert that modules were found in the list but not the map, it's
     // because the module_spec has no filename or the found module has a
@@ -846,11 +857,38 @@ public:
     return m_list.Remove(module_sp, use_notifier);
   }
 
+  /// Add \p module_sp, removing the modules equivalent to it (the same path,
+  /// platform path, architecture and object slice) and returning them in
+  /// \p old_modules.
   void ReplaceEquivalent(const ModuleSP &module_sp,
                          llvm::SmallVectorImpl<lldb::ModuleSP> *old_modules) {
     std::lock_guard<std::recursive_mutex> guard(GetMutex());
-    m_list.ReplaceEquivalent(module_sp, old_modules);
-    ReplaceEquivalentInMap(module_sp);
+    // Take a sliced module's equivalents from its map entry instead of
+    // scanning the whole list, on the same assumption as FindModules. Every
+    // module with an object name or a nonzero offset takes this path: GPU
+    // code objects in core files, universal Mach-O slices, archive members,
+    // fileset entries and offload bundles.
+    if (IsSliceLookup(EquivalentModuleSpec(*module_sp))) {
+      for (const ModuleSP &old_module_sp :
+           TakeEquivalentModulesFromMap(module_sp)) {
+        m_list.Remove(old_module_sp);
+        if (old_modules)
+          old_modules->push_back(old_module_sp);
+      }
+      m_list.Append(module_sp);
+      AddToMap(module_sp);
+      return;
+    }
+    // The list also removes equivalents filed under another name, such as a
+    // module whose platform file matches, so take each removed module out of
+    // its own map entry; otherwise the map would keep it alive.
+    llvm::SmallVector<ModuleSP, 1> removed;
+    m_list.ReplaceEquivalent(module_sp, &removed);
+    for (const ModuleSP &old_module_sp : removed)
+      RemoveFromMap(old_module_sp);
+    AddToMap(module_sp);
+    if (old_modules)
+      old_modules->append(removed.begin(), removed.end());
   }
 
   bool RemoveIfOrphaned(const ModuleWP module_wp) {
@@ -862,6 +900,64 @@ public:
   std::recursive_mutex &GetMutex() const { return m_list.GetMutex(); }
 
 private:
+  /// The modules that share a file name, by object offset, in the order the
+  /// offsets were first added. Several modules can share an offset, such as
+  /// an old and a rebuilt copy of the same file. The offsets are indexed with
+  /// a std::map rather than MapVector's default DenseMap, which reserves two
+  /// offset values as keys and allocates 64 buckets for the first offset.
+  using ModulesByOffset =
+      llvm::MapVector<uint64_t, llvm::SmallVector<ModuleSP, 1>,
+                      std::map<uint64_t, unsigned>>;
+
+  /// True if \p spec can only match modules at its own object offset: it
+  /// names a file, has an object name or a nonzero object offset, and has no
+  /// UUID (a UUID match ignores the name and the slice). Such a spec selects
+  /// a slice, and ModuleSpec::MatchesObjectFileSlice rejects a module at any
+  /// other offset for it; the index's lookups by offset depend on that rule.
+  /// A slice at offset 0 without an object name, which only the file's size
+  /// tells apart, is not treated as one, so this needs no stat of the file.
+  static bool IsSliceLookup(const ModuleSpec &spec) {
+    return !spec.GetFileSpec().GetFilename().IsEmpty() &&
+           !spec.GetUUID().IsValid() &&
+           (spec.GetObjectName() || spec.GetObjectOffset() != 0);
+  }
+
+  /// The spec that a module equivalent to \p module matches: the same path,
+  /// platform path, architecture and object slice.
+  static ModuleSpec EquivalentModuleSpec(const Module &module) {
+    // ModuleSpec(FileSpec, ArchSpec) would stat the file for an object size
+    // that is replaced below.
+    ModuleSpec spec;
+    spec.GetFileSpec() = module.GetFileSpec();
+    spec.GetArchitecture() = module.GetArchitecture();
+    spec.GetPlatformFileSpec() = module.GetPlatformFileSpec();
+    spec.GetObjectName() = module.GetObjectName();
+    spec.SetObjectOffset(module.GetObjectOffset());
+    spec.SetObjectSize(module.GetObjectSize());
+    return spec;
+  }
+
+  /// Call \p fn on each list of indexed modules that can match \p spec: the
+  /// one at its offset for a slice lookup (see IsSliceLookup), otherwise all
+  /// of them in the order their offsets were first added. The modules then
+  /// come grouped by offset, not in the order they were added, so a spec
+  /// that matches several modules may not get the earliest-added one first.
+  /// An offset left without modules keeps its place until
+  /// RemoveOrphansFromMapAndList drops it.
+  template <typename Map, typename Fn>
+  static void ForEachCandidateList(Map &by_offset, const ModuleSpec &spec,
+                                   Fn fn) {
+    if (IsSliceLookup(spec)) {
+      auto slot = by_offset.find(spec.GetObjectOffset());
+      if (slot != by_offset.end())
+        fn(slot->second);
+      return;
+    }
+    for (auto &entry : by_offset)
+      fn(entry.second);
+  }
+
+  /// The indexed module that is \p module, if any.
   ModuleSP FindModuleInMap(const Module &module) const {
     if (!module.GetFileSpec().GetFilename())
       return ModuleSP();
@@ -869,47 +965,60 @@ private:
     auto it = m_name_to_modules.find(name);
     if (it == m_name_to_modules.end())
       return ModuleSP();
-    const llvm::SmallVectorImpl<ModuleSP> &vector = it->second;
-    for (const ModuleSP &module_sp : vector) {
+    auto slot = it->second.find(module.GetObjectOffset());
+    if (slot == it->second.end())
+      return ModuleSP();
+    for (const ModuleSP &module_sp : slot->second) {
       if (module_sp.get() == &module)
         return module_sp;
     }
     return ModuleSP();
   }
 
+  /// Add the indexed modules that match \p module_spec to
+  /// \p matching_module_list.
   void FindModulesInMap(const ModuleSpec &module_spec,
                         ModuleList &matching_module_list) const {
     auto it = m_name_to_modules.find(module_spec.GetFileSpec().GetFilename());
     if (it == m_name_to_modules.end())
       return;
-    const llvm::SmallVectorImpl<ModuleSP> &vector = it->second;
-    for (const ModuleSP &module_sp : vector) {
-      if (module_sp->MatchesModuleSpec(module_spec))
-        matching_module_list.Append(module_sp);
-    }
+    ForEachCandidateList(it->second, module_spec,
+                         [&](const llvm::SmallVectorImpl<ModuleSP> &modules) {
+                           for (const ModuleSP &module_sp : modules) {
+                             if (module_sp->MatchesModuleSpec(module_spec))
+                               matching_module_list.Append(module_sp);
+                           }
+                         });
   }
 
+  /// Index \p module_sp under its file name and object offset.
   void AddToMap(const ModuleSP &module_sp) {
     ConstString name = module_sp->GetFileSpec().GetFilename();
     if (name.IsEmpty())
       return;
-    m_name_to_modules[name].push_back(module_sp);
+    m_name_to_modules[name][module_sp->GetObjectOffset()].push_back(module_sp);
   }
 
+  /// Remove \p module_wp from the index, only if it is orphaned when
+  /// \p if_orphaned is set.
   void RemoveFromMap(const ModuleWP module_wp, bool if_orphaned = false) {
     if (auto module_sp = module_wp.lock()) {
       ConstString name = module_sp->GetFileSpec().GetFilename();
-      if (!m_name_to_modules.contains(name))
+      auto it = m_name_to_modules.find(name);
+      if (it == m_name_to_modules.end())
         return;
-      llvm::SmallVectorImpl<ModuleSP> &vec = m_name_to_modules[name];
-      for (auto *it = vec.begin(); it != vec.end(); ++it) {
-        if (it->get() == module_sp.get()) {
+      auto slot = it->second.find(module_sp->GetObjectOffset());
+      if (slot == it->second.end())
+        return;
+      llvm::SmallVectorImpl<ModuleSP> &vec = slot->second;
+      for (auto *pos = vec.begin(); pos != vec.end(); ++pos) {
+        if (pos->get() == module_sp.get()) {
           // Since module_sp increases the refcount by 1, the use count should
           // be the regular use count + 1.
           constexpr long kUseCountOrphaned =
               kUseCountSharedModuleListOrphaned + 1;
-          if (!if_orphaned || it->use_count() == kUseCountOrphaned) {
-            vec.erase(it);
+          if (!if_orphaned || pos->use_count() == kUseCountOrphaned) {
+            vec.erase(pos);
             break;
           }
         }
@@ -917,34 +1026,31 @@ private:
     }
   }
 
-  void ReplaceEquivalentInMap(const ModuleSP &module_sp) {
-    RemoveEquivalentModulesFromMap(module_sp);
-    AddToMap(module_sp);
-  }
-
-  void RemoveEquivalentModulesFromMap(const ModuleSP &module_sp) {
+  /// Remove the modules equivalent to \p module_sp from the map and return
+  /// them.
+  llvm::SmallVector<ModuleSP, 1>
+  TakeEquivalentModulesFromMap(const ModuleSP &module_sp) {
+    llvm::SmallVector<ModuleSP, 1> removed;
     ConstString name = module_sp->GetFileSpec().GetFilename();
     if (name.IsEmpty())
-      return;
+      return removed;
 
     auto it = m_name_to_modules.find(name);
     if (it == m_name_to_modules.end())
-      return;
+      return removed;
 
-    // First remove any equivalent modules. Equivalent modules are modules
-    // whose path, platform path, architecture and object slice match.
-    ModuleSpec equivalent_module_spec(module_sp->GetFileSpec(),
-                                      module_sp->GetArchitecture());
-    equivalent_module_spec.GetPlatformFileSpec() =
-        module_sp->GetPlatformFileSpec();
-    equivalent_module_spec.GetObjectName() = module_sp->GetObjectName();
-    equivalent_module_spec.SetObjectOffset(module_sp->GetObjectOffset());
-    equivalent_module_spec.SetObjectSize(module_sp->GetObjectSize());
-
-    llvm::SmallVectorImpl<ModuleSP> &vec = it->second;
-    llvm::erase_if(vec, [&equivalent_module_spec](ModuleSP &element) {
-      return element->MatchesModuleSpec(equivalent_module_spec);
-    });
+    const ModuleSpec equivalent_module_spec = EquivalentModuleSpec(*module_sp);
+    ForEachCandidateList(
+        it->second, equivalent_module_spec,
+        [&](llvm::SmallVectorImpl<ModuleSP> &vec) {
+          llvm::erase_if(vec, [&](ModuleSP &element) {
+            if (!element->MatchesModuleSpec(equivalent_module_spec))
+              return false;
+            removed.push_back(element);
+            return true;
+          });
+        });
+    return removed;
   }
 
   /// Remove orphans from the vector and return the removed modules.
@@ -975,12 +1081,17 @@ private:
     int previous_remove_count;
     do {
       previous_remove_count = remove_count;
-      for (auto &[name, vec] : m_name_to_modules) {
-        if (vec.empty())
-          continue;
-        ModuleList to_remove = RemoveOrphansFromVector(vec);
-        remove_count += to_remove.GetSize();
-        m_list.Remove(to_remove);
+      for (auto &[name, by_offset] : m_name_to_modules) {
+        for (auto &[offset, vec] : by_offset) {
+          if (vec.empty())
+            continue;
+          ModuleList to_remove = RemoveOrphansFromVector(vec);
+          remove_count += to_remove.GetSize();
+          m_list.Remove(to_remove);
+        }
+        // Drop the offsets left without modules.
+        by_offset.remove_if(
+            [](const auto &entry) { return entry.second.empty(); });
       }
       // Break when fixed-point is reached.
     } while (previous_remove_count != remove_count);
@@ -991,8 +1102,9 @@ private:
   ModuleList m_list;
 
   /// A hash map from a module's filename to all the modules that share that
-  /// filename, for fast module lookups by name.
-  llvm::DenseMap<ConstString, llvm::SmallVector<ModuleSP, 1>> m_name_to_modules;
+  /// filename, by object offset, for fast module lookups by name and by slice
+  /// (for example the many cubins embedded in one GPU core file).
+  llvm::DenseMap<ConstString, ModulesByOffset> m_name_to_modules;
 
   /// The use count of a module held only by m_list and m_name_to_modules.
   static constexpr long kUseCountSharedModuleListOrphaned = 2;

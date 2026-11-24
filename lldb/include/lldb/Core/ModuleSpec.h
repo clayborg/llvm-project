@@ -138,7 +138,9 @@ public:
   }
 
   /// Checks whether this spec's requested object offset and size match a
-  /// candidate object range.
+  /// candidate object range. A spec that selects a slice never matches an
+  /// object at another offset; the shared module list's index relies on this
+  /// to look a slice up only among the modules at its offset.
   bool MatchesObjectFileSlice(uint64_t object_offset,
                               uint64_t object_size) const {
     if (!HasObjectFileSlice())
