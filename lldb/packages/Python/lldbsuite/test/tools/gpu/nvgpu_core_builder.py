@@ -384,9 +384,9 @@ def pack_metadata_row(
 @dataclass
 class _Section:
     """A single ELF section to emit. ``link`` is a section name (resolved to
-    an index by yaml2obj) or None for ``sh_link == 0``. ``shsize`` overrides
-    the recorded sh_size (ELFYAML ShSize), e.g. to claim a section extends
-    beyond its actual content / the file for truncation tests."""
+    an index by yaml2obj) or None for ``sh_link == 0``. ``shsize`` and
+    ``shoffset`` override the recorded sh_size / sh_offset (ELFYAML ShSize /
+    ShOffset), e.g. for truncation and overlap tests."""
 
     name: str
     sh_type: int
@@ -396,6 +396,7 @@ class _Section:
     address: Optional[int] = None
     entsize: Optional[int] = None
     shsize: Optional[int] = None
+    shoffset: Optional[int] = None
 
 
 @dataclass
@@ -866,17 +867,37 @@ class NVGPUCoreBuilder:
 
     # -- escape hatch ------------------------------------------------------
 
-    def add_raw_section(self, *, name, sh_type, content, link=None, info=0,
-                        address=None, entsize=None, shsize=None):
+    def add_raw_section(
+        self,
+        *,
+        name,
+        sh_type,
+        content,
+        link=None,
+        info=0,
+        address=None,
+        entsize=None,
+        shsize=None,
+        shoffset=None,
+    ):
         """Append an arbitrary section verbatim. ``content`` may be bytes or a
-        hex string. ``shsize`` overrides the recorded sh_size (e.g. to claim
-        the section extends past the file for truncation tests). Useful for
-        negative / truncation / unsupported-section tests."""
+        hex string. ``shsize`` and ``shoffset`` override the recorded sh_size /
+        sh_offset (e.g. for truncation and overlap tests). Useful for negative /
+        truncation / unsupported-section tests."""
         if isinstance(content, bytes):
             content = _hex(content)
         self.raw_sections.append(
-            _Section(name, sh_type, content, link=link, info=info,
-                     address=address, entsize=entsize, shsize=shsize)
+            _Section(
+                name,
+                sh_type,
+                content,
+                link=link,
+                info=info,
+                address=address,
+                entsize=entsize,
+                shsize=shsize,
+                shoffset=shoffset,
+            )
         )
 
     # -- serialization -----------------------------------------------------
@@ -1066,7 +1087,11 @@ class NVGPUCoreBuilder:
         emit(".cudbg.bt" + suffix, CUDBG_SHT_BT, lane.backtrace,
              link=lntbl, info=lane_id, entsize=BT_ROW_SIZE)
 
-    def write_yaml(self, path):
+    def write_yaml(self, path, headers_first=False):
+        """Write the ELF YAML document to ``path``. With ``headers_first`` the
+        section header table and the section name table come before the
+        sections, as in a core that the driver writes, so that a file cut
+        short at its end keeps both."""
         sections = self._build_sections()
         lines = [
             "--- !ELF",
@@ -1079,6 +1104,10 @@ class NVGPUCoreBuilder:
             f"  ABIVersion: {CUDA_ELF_ABIVERSION:#x}",
             "Sections:",
         ]
+        if headers_first:
+            lines.append("  - Type:    SectionHeaderTable")
+            lines.append("  - Name:    .shstrtab")
+            lines.append("    Type:    SHT_STRTAB")
         for sec in sections:
             lines.append(f"  - Name:    {sec.name}")
             lines.append(f"    Type:    {sec.sh_type:#x}")
@@ -1092,6 +1121,8 @@ class NVGPUCoreBuilder:
             lines.append(f'    Content: "{sec.content}"')
             if sec.shsize is not None:
                 lines.append(f"    ShSize:  {sec.shsize}")
+            if sec.shoffset is not None:
+                lines.append(f"    ShOffset: {sec.shoffset:#x}")
         lines.append("...")
         lines.append("")
         with open(path, "w") as f:

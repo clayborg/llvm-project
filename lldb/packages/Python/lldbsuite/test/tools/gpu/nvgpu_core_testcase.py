@@ -151,14 +151,17 @@ class NVGPUCoreTestCaseBase(NVGPUTestCaseBase):
         """Generate a core file (if needed) and load it in LLDB."""
         return self.load_core(self.generate_core(flags, args))
 
-    def generate_artificial_core(self, builder, name="artificial.nvcudmp"):
+    def generate_artificial_core(
+        self, builder, name="artificial.nvcudmp", headers_first=False
+    ):
         """Serialize an NVGPUCoreBuilder to a .nvcudmp via yaml2obj.
+        ``headers_first`` is NVGPUCoreBuilder.write_yaml's.
 
         Returns the generated core file path.
         """
         yaml_path = self.getBuildArtifact(name + ".yaml")
         core_path = self.getBuildArtifact(name)
-        builder.write_yaml(yaml_path)
+        builder.write_yaml(yaml_path, headers_first=headers_first)
         self.yaml2obj(yaml_path, core_path)
         return core_path
 

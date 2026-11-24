@@ -1806,6 +1806,67 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
 
   llvm::SmallVector<std::string> truncated_sections;
 
+  // File byte spans of every non-null section, the ELF header, and the
+  // section header table, sorted by `(start, non_empty)`. Each entry also
+  // records `max_end`, the running maximum of `end` up to and including that
+  // entry. Truncated sections keep `end = start` so a truncated leaf cannot
+  // cause a later valid table to look like it starts inside the leaf.
+  struct SectionSpan {
+    uint64_t start;
+    uint64_t end;
+    bool non_empty;
+    uint64_t max_end;
+  };
+  std::vector<SectionSpan> section_spans;
+  section_spans.reserve(m_section_headers.size() + 1);
+  // The ELF header and section header table were already parsed within the
+  // file, so neither overflows `file_size`.
+  section_spans.push_back(
+      {0, static_cast<uint64_t>(m_header.e_ehsize), m_header.e_ehsize > 0, 0});
+  const uint64_t sh_table_size =
+      static_cast<uint64_t>(m_header.e_shnum) * m_header.e_shentsize;
+  section_spans.push_back({m_header.e_shoff, m_header.e_shoff + sh_table_size,
+                           sh_table_size > 0, 0});
+  for (size_t i = 1; i < m_section_headers.size(); ++i) {
+    const ELFSectionHeaderInfo &header = m_section_headers[i];
+    const bool non_empty =
+        header.sh_size > 0 && header.sh_type != llvm::ELF::SHT_NOBITS;
+    const uint64_t end = non_empty && !header.IsTruncated(file_size)
+                             ? header.sh_offset + header.sh_size
+                             : header.sh_offset;
+    section_spans.push_back({header.sh_offset, end, non_empty, 0});
+  }
+  llvm::sort(section_spans, [](const SectionSpan &a, const SectionSpan &b) {
+    return a.start != b.start ? a.start < b.start : a.non_empty < b.non_empty;
+  });
+  uint64_t running_max_end = 0;
+  for (SectionSpan &span : section_spans) {
+    running_max_end = std::max(running_max_end, span.end);
+    span.max_end = running_max_end;
+  }
+
+  // True if non-empty section `h` overlaps any other section, the ELF header,
+  // or the section header table. Zero-sized sections at `h.sh_offset` precede
+  // `h` and do not overlap it.
+  auto OverlapsAnotherSection = [&](const ELFSectionHeaderInfo &h) -> bool {
+    assert(h.sh_size > 0);
+    auto it = llvm::lower_bound(
+        section_spans, std::make_pair(h.sh_offset, true),
+        [](const SectionSpan &span, const std::pair<uint64_t, bool> &key) {
+          return span.start != key.first ? span.start < key.first
+                                         : span.non_empty < key.second;
+        });
+    assert(it != section_spans.end() && it->start == h.sh_offset &&
+           it->non_empty);
+    // An earlier non-truncated section extends past where `h` begins.
+    if (it != section_spans.begin() && std::prev(it)->max_end > h.sh_offset)
+      return true;
+    // Another non-empty section starts at `h.sh_offset`, or any section
+    // starts strictly inside `[h.sh_offset, h.sh_offset + h.sh_size)`.
+    auto next = std::next(it);
+    return next != section_spans.end() && next->start - h.sh_offset < h.sh_size;
+  };
+
   // Sequence counters: each kind gets its own monotonically-increasing
   // sequence packed into `Section::user_id` by `nvgpu::MakeID`. They never
   // restart, so user_ids stay globally unique even if the same row index
@@ -2077,10 +2138,25 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
   //     table is consulted lazily by `GetOrCreateAncestor` when SM-table and
   //     grid-table fan-out walk up the parent chain.
   for (size_t i = 1; i < m_section_headers.size(); ++i) {
+    // Stop at the first malformed section. The check after the loop tells
+    // the user that the core was refused.
     if (malformed)
-      return;
+      break;
     const ELFSectionHeaderInfo &h = m_section_headers[i];
     switch (GetSectionType(h)) {
+    case eSectionTypeNVGPUDeviceTable:
+    case eSectionTypeNVGPULaneTable:
+      // Consulted lazily via `GetOrCreateAncestor` rather than fanned out
+      // here, but still reject a table whose range overlaps another section.
+      if (h.sh_size > 0 && OverlapsAnotherSection(h)) {
+        LLDB_LOG(log,
+                 "BuildNVGPUSectionList: container table {0} at offset {1:x} "
+                 "claiming {2:x} bytes overlaps another section, rejecting "
+                 "corefile",
+                 i, h.sh_offset, h.sh_size);
+        malformed = true;
+      }
+      break;
     case eSectionTypeNVGPUContextTable:
     case eSectionTypeNVGPUSmTable:
     case eSectionTypeNVGPUGridTable:
@@ -2096,7 +2172,38 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
         malformed = true;
         break;
       }
-      const uint64_t num_rows = h.sh_size / h.sh_entsize;
+      if (h.sh_size == 0)
+        break;
+      // A table that overlaps another section has a corrupted offset or
+      // `sh_size`, whether or not that size ends inside the file. Such a
+      // size can be any 64-bit value, and a container for each row that it
+      // claims exhausts memory. A smaller one makes rows out of the bytes of
+      // adjacent sections.
+      if (OverlapsAnotherSection(h)) {
+        LLDB_LOG(log,
+                 "BuildNVGPUSectionList: container table {0} at offset {1:x} "
+                 "claiming {2:x} bytes overlaps another section, rejecting "
+                 "corefile",
+                 i, h.sh_offset, h.sh_size);
+        malformed = true;
+        break;
+      }
+      uint64_t num_rows = h.sh_size / h.sh_entsize;
+      if (h.IsTruncated(file_size)) {
+        // No section overlaps this table, and it ends past the end of the
+        // file, so the dump was cut off before the end of this table.
+        // Walk only the rows that the file holds. A row past the end of the
+        // file still gets its container when a section names it as its
+        // parent.
+        const uint64_t bytes_in_file =
+            h.sh_offset < file_size ? file_size - h.sh_offset : 0;
+        num_rows = bytes_in_file / h.sh_entsize;
+        truncated_sections.push_back(h.section_name.GetStringRef().str());
+        LLDB_LOG(log,
+                 "BuildNVGPUSectionList: container table {0} extends beyond "
+                 "file size {1:x}, walking only the {2} rows inside the file",
+                 i, file_size, num_rows);
+      }
       for (uint64_t row_idx = 0; row_idx < num_rows; ++row_idx) {
         if (malformed)
           break;
@@ -2176,10 +2283,8 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
       metadata_section_idx = i;
       break;
     default:
-      // Device table, lane table, and unrelated context / module sections
-      // fall through. The device and lane tables are consulted lazily via
-      // `GetOrCreateAncestor` for row data windows; everything else is
-      // intentionally not surfaced in the synthetic tree.
+      // Unrelated sections (module table, string tables, etc.) fall through
+      // and are intentionally not surfaced in the synthetic tree.
       break;
     }
   }
@@ -2234,9 +2339,9 @@ void ObjectFileELF::BuildNVGPUSectionList(SectionList &unified_section_list) {
     std::string names = llvm::join(truncated_sections, ", ");
     Debugger::ReportWarning(
         llvm::formatv("GPU corefile appears truncated: {0} section(s) extend "
-                      "beyond file size and were skipped ({1}). Some GPU "
-                      "state -- memory regions, cubin images, or per-thread "
-                      "data -- will be unavailable.",
+                      "beyond file size and were skipped or read in part "
+                      "({1}). Some GPU state -- memory regions, cubin images, "
+                      "or per-thread data -- will be unavailable.",
                       truncated_sections.size(), names)
             .str());
   }

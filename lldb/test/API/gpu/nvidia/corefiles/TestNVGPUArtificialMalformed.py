@@ -5,9 +5,13 @@ Procedural generation makes structurally broken cores easy to construct.
 These exercise the rejection and recovery paths in
 ObjectFileELF::BuildNVGPUSectionList and ProcessNVGPUCore::DoLoadCore:
 bad parent links, wrong parent kinds, out-of-range row indices, zero entry
-sizes, missing device hierarchy, leaf truncation, and leaf-driven lane
+sizes, table sizes that cover later sections, tables cut off by the end of the
+file, missing device hierarchy, leaf truncation, and leaf-driven lane
 sparseness.
 """
+
+
+import os
 
 import lldb
 
@@ -16,16 +20,30 @@ from lldbsuite.test.tools.gpu.nvgpu_core_builder import (
     NVGPUCoreBuilder,
     CUDBG_SHT_SM_TABLE,
     CUDBG_SHT_CTA_TABLE,
+    CUDBG_SHT_LN_TABLE,
     CUDBG_SHT_DEV_REGS,
     CUDBG_SHT_GLOBAL_MEM,
     cudbg_exception,
     SM_ROW_SIZE,
     CTA_ROW_SIZE,
+    LANE_ROW_SIZE,
 )
+
+# A section size that ends past the end of every core these tests build. It is
+# small on purpose. A reader that walks every row that such a table claims
+# still finishes, and the test then fails because the core loads. With a size
+# near 2^63 that reader would allocate until memory runs out.
+PAST_END_OF_FILE = 0x100000
 
 # Substring of the load error every "malformed/no-hierarchy" core surfaces:
 # BuildNVGPUSectionList installs no nvgpucore root, so DoLoadCore bails.
 NO_ROOT_ERROR = "did not produce a nvgpucore root section"
+
+# The load error names no cause. These are the warnings in which
+# BuildNVGPUSectionList tells the user why it refused the core. The first is
+# for a malformed section, the second for a core with no SM under any device.
+MALFORMED_WARNING = "GPU corefile appears malformed"
+NO_HIERARCHY_WARNING = "GPU corefile contains no device hierarchy"
 
 # Any real fault will do for these scaffolds; take the code from the SDK
 # header rather than writing the number down.
@@ -57,15 +75,19 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
         )
         self.assertEqual(gpu_process.GetNumThreads(), 1)
 
-    def _assert_rejected_with_log(self, builder, name, log_substrs):
-        """Load a core expecting failure; assert NO_ROOT_ERROR plus the
-        condition-specific reject reason on the Modules log channel."""
+    def _assert_rejected_with_log(
+        self, builder, name, log_substrs, warning=MALFORMED_WARNING
+    ):
+        """Load a core that lldb should refuse. Assert NO_ROOT_ERROR, the
+        warning that tells the user why, and the condition-specific reject
+        reason on the Modules log channel."""
         core_path = self.generate_artificial_core(builder, name)
         for target in list(self.dbg):
             self.dbg.DeleteTarget(target)
         target = self.dbg.CreateTarget(None)
         self.assertTrue(target.IsValid())
 
+        warnings = self.collect_warnings()
         log_file = self.getBuildArtifact(name + ".module.log")
         self.runCmd("log enable lldb module -f '%s'" % log_file)
         error = lldb.SBError()
@@ -74,8 +96,13 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
         finally:
             self.runCmd("log disable lldb module")
 
-        self.assertFalse(process.IsValid())
+        self.assertFalse(process.IsValid(), f"{name} should not load")
         self.assertIn(NO_ROOT_ERROR, error.GetCString())
+        self.assertIn(
+            warning,
+            "\n".join(warnings()),
+            f"the warning that tells the user why lldb refused {name}",
+        )
 
         with open(log_file) as f:
             log_text = f.read()
@@ -92,6 +119,7 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
         self._assert_rejected_with_log(
             b, "nohier.nvcudmp",
             ["no NVGPU device hierarchy found", "rejecting corefile"],
+            warning=NO_HIERARCHY_WARNING,
         )
 
     def test_invalid_parent_link(self):
@@ -156,6 +184,220 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
         self._assert_rejected_with_log(
             b, "badentsize.nvcudmp", ["zero sh_entsize", "rejecting corefile"]
         )
+
+    def test_table_size_that_covers_later_sections_is_rejected(self):
+        """A container table whose sh_size covers the start of the section
+        after it has a corrupted size. lldb refuses the core and creates no
+        container for the rows that the size claims. This size also ends past
+        the end of the file."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.smtbl.bad",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"\x00" * SM_ROW_SIZE,
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+            shsize=PAST_END_OF_FILE,
+        )
+        self._assert_rejected_with_log(
+            b,
+            "bigtable.nvcudmp",
+            ["overlaps another section", "rejecting corefile"],
+        )
+
+    def test_table_size_that_ends_inside_the_file_is_rejected(self):
+        """A corrupted sh_size that covers the start of the section after the
+        table is refused even when it ends inside the file. The file holds
+        every byte that such a size claims, but the rows past the table's own
+        are the bytes of the sections after it."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.smtbl.bad",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"\x00" * SM_ROW_SIZE,
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+            shsize=2 * SM_ROW_SIZE,
+        )
+        # The section after the table is longer than the one extra row that
+        # the table's size claims, so the size ends inside the file.
+        b.add_raw_section(
+            name=".cudbg.global.after",
+            sh_type=CUDBG_SHT_GLOBAL_MEM,
+            content=b"\x00" * (2 * SM_ROW_SIZE),
+            address=0x100000000,
+        )
+        self._assert_rejected_with_log(
+            b,
+            "widetable.nvcudmp",
+            ["overlaps another section", "rejecting corefile"],
+        )
+
+    def test_table_sharing_offset_with_later_section_is_rejected(self):
+        """An empty-content table shares its sh_offset with the non-empty
+        section that follows it, just as real cores place empty CTA or
+        backtrace tables at the start of the next section. A corrupted sh_size
+        that covers that following section must be refused even though both
+        begin at the same offset."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.smtbl.bad",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"",
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+            shsize=2 * SM_ROW_SIZE,
+        )
+        # Same size as the corrupted table, so the table ends right where
+        # yaml2obj's .strtab starts and only the shared-offset section sits
+        # inside it.
+        b.add_raw_section(
+            name=".cudbg.global.after",
+            sh_type=CUDBG_SHT_GLOBAL_MEM,
+            content=b"\x00" * (2 * SM_ROW_SIZE),
+            address=0x100000000,
+        )
+        self._assert_rejected_with_log(
+            b,
+            "sameoffset.nvcudmp",
+            ["overlaps another section", "rejecting corefile"],
+        )
+
+    def test_zero_sized_table_sharing_offset_with_next_table_loads(self):
+        """A valid zero-sized table shares its sh_offset with the non-empty
+        table that follows it, as the driver writes for idle SMs and empty
+        backtraces. It does not overlap that table and the core loads cleanly."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.smtbl.empty",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"",
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+            shsize=0,
+        )
+        b.add_raw_section(
+            name=".cudbg.smtbl.valid",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"\x00" * SM_ROW_SIZE,
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+        )
+        warnings = self.collect_warnings()
+        gpu_target, gpu_process = self.generate_and_load_artificial_core(
+            b, "zerotable.nvcudmp"
+        )
+        self.assertEqual(warnings(), [], "no warning for a valid empty table")
+        device = (
+            gpu_target.FindModule(
+                lldb.SBFileSpec(self.getBuildArtifact("zerotable.nvcudmp"))
+            )
+            .FindSection("nvgpucore")
+            .FindSubSection("dev0")
+        )
+        self.assertTrue(device.IsValid(), "the device's section")
+        self.assertEqual(
+            device.GetNumSubSections(),
+            2,
+            "the scaffold SM and the non-empty table after the zero-sized one",
+        )
+        self.assertEqual(gpu_process.GetNumThreads(), 1)
+
+    def test_table_starting_inside_another_section_is_rejected(self):
+        """A table whose sh_offset starts inside an earlier region (here the
+        64-byte ELF header, ending right where the first section begins) has a
+        corrupted offset and is refused even when no section starts after it
+        within its sh_size."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.smtbl.bad",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"\x00" * SM_ROW_SIZE,
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+            shoffset=0x10,
+        )
+        self._assert_rejected_with_log(
+            b,
+            "badoffset.nvcudmp",
+            ["overlaps another section", "rejecting corefile"],
+        )
+
+    def test_lane_table_covering_later_sections_is_rejected(self):
+        """A lazily-consulted container table (device or lane table) whose
+        sh_size covers later sections is also refused."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        b.add_raw_section(
+            name=".cudbg.lntbl.bad",
+            sh_type=CUDBG_SHT_LN_TABLE,
+            content=b"\x00" * LANE_ROW_SIZE,
+            link=".cudbg.wptbl.dev0.sm0.cta0",
+            info=0,
+            entsize=LANE_ROW_SIZE,
+            shsize=PAST_END_OF_FILE,
+        )
+        self._assert_rejected_with_log(
+            b,
+            "biglanetable.nvcudmp",
+            ["overlaps another section", "rejecting corefile"],
+        )
+
+    def test_table_cut_off_by_the_end_of_the_file(self):
+        """A dump that was cut off inside a container table still loads. The
+        table gets a container for each row that the file holds, and lldb
+        warns that the core is incomplete."""
+        b = NVGPUCoreBuilder()
+        self._minimal(b)
+        rows_written = 3
+        rows_kept = 1
+        b.add_raw_section(
+            name=".cudbg.smtbl.cut",
+            sh_type=CUDBG_SHT_SM_TABLE,
+            content=b"\x00" * (rows_written * SM_ROW_SIZE),
+            link=".cudbg.devtbl",
+            info=0,
+            entsize=SM_ROW_SIZE,
+        )
+        core_path = self.generate_artificial_core(b, "cut.nvcudmp", headers_first=True)
+        # Only the one-byte .strtab that yaml2obj adds follows the table in
+        # the file. Cut the file inside the row that follows the rows to keep.
+        rows_cut = rows_written - rows_kept
+        os.truncate(
+            core_path,
+            os.path.getsize(core_path) - rows_cut * SM_ROW_SIZE + SM_ROW_SIZE // 2,
+        )
+        warnings = self.collect_warnings()
+        gpu_target, gpu_process = self.load_core(core_path)
+        self.assertIn(
+            ".cudbg.smtbl.cut",
+            "\n".join(warnings()),
+            "a warning that names the table that the file does not hold",
+        )
+        device = (
+            gpu_target.FindModule(lldb.SBFileSpec(core_path))
+            .FindSection("nvgpucore")
+            .FindSubSection("dev0")
+        )
+        self.assertTrue(device.IsValid(), "the device's section")
+        self.assertEqual(
+            device.GetNumSubSections(),
+            1 + rows_kept,
+            "SM sections of the device, which are the scaffold's SM and the "
+            "rows of the second table that the file holds",
+        )
+        self.assertEqual(gpu_process.GetNumThreads(), 1, "the scaffold's one thread")
 
     def test_truncated_leaf_is_skipped(self):
         """A leaf claiming to extend past EOF is dropped, but the core still

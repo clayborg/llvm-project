@@ -1327,11 +1327,29 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         condition that fails in every thread of a kernel prints an error for
         each thread at each stop: thousands of lines, which bury the failure
         when lit shows the output."""
-        broadcaster = self.dbg.GetBroadcaster()
-        listener = lldbutil.start_listening_from(
-            broadcaster, lldb.SBDebugger.eBroadcastBitError
+        return self._collect_diagnostics(lldb.SBDebugger.eBroadcastBitError, "errors")
+
+    def collect_warnings(self) -> Callable[[], List[str]]:
+        """Collect the warnings that lldb reports from now on, such as the one
+        for a core file that was cut off, and return a function that returns
+        them, oldest first. As with collect_errors, lldb prints none of these
+        warnings from now on, and the ones the test never asked for are
+        printed when it ends."""
+        return self._collect_diagnostics(
+            lldb.SBDebugger.eBroadcastBitWarning, "warnings"
         )
-        errors: List[str] = []
+
+    def _collect_diagnostics(
+        self, event_bit: int, kind: str
+    ) -> Callable[[], List[str]]:
+        """Collect the messages of the diagnostics that the debugger
+        broadcasts with `event_bit` from now on, and return a function that
+        returns them, oldest first. lldb prints a diagnostic only while
+        nothing listens for it, so the messages that the test never asked for
+        are printed when it ends. `kind` names them there."""
+        broadcaster = self.dbg.GetBroadcaster()
+        listener = lldbutil.start_listening_from(broadcaster, event_bit)
+        messages: List[str] = []
         checked = 0
 
         def collected() -> List[str]:
@@ -1339,9 +1357,11 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             event = lldb.SBEvent()
             while listener.GetNextEventForBroadcaster(broadcaster, event):
                 diagnostic = lldb.SBDebugger.GetDiagnosticFromEvent(event)
-                errors.append(diagnostic.GetValueForKey("message").GetStringValue(4096))
-            checked = len(errors)
-            return errors
+                messages.append(
+                    diagnostic.GetValueForKey("message").GetStringValue(4096)
+                )
+            checked = len(messages)
+            return messages
 
         def print_unchecked() -> None:
             first = checked
@@ -1349,7 +1369,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             if unchecked:
                 limit = 20
                 print(
-                    f"{len(unchecked)} errors lldb reported that the test did not "
+                    f"{len(unchecked)} {kind} lldb reported that the test did not "
                     f"check, the first {min(limit, len(unchecked))}:\n"
                     + "\n".join(unchecked[:limit])
                 )
