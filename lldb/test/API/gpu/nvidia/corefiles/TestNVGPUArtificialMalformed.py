@@ -206,18 +206,13 @@ class TestNVGPUArtificialMalformed(NVGPUCoreTestCaseBase):
         thread = gpu_process.GetThreadAtIndex(0)
         frame = thread.GetFrameAtIndex(0)
 
-        def reg(name):
-            value = frame.FindRegister(name)
-            self.assertTrue(value.IsValid(), f"{name} should be readable")
-            return value.GetValueAsUnsigned()
-
-        self.assertEqual(reg("PC"), 0x100000)
-        self.assertEqual(reg("errorPC"), 0x100040)
+        self.assertEqual(self.read_register(frame, "PC"), 0x100000)
+        self.assertEqual(self.read_register(frame, "errorPC"), 0x100040)
         self.assertEqual(
-            [reg(f"R{i}") for i in range(4)],
+            [self.read_register(frame, f"R{i}") for i in range(4)],
             [0xAA00, 0xAA01, 0xAA02, 0xAA03],
         )
-        self.assertEqual(reg("warpSize"), 32)
+        self.assertEqual(self.read_register(frame, "warpSize"), 32)
         self.assertEqual(
             thread.GetName(),
             "blockIdx(x=3 y=0 z=0) threadIdx(x=2 y=0 z=0)",

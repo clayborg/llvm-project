@@ -228,3 +228,19 @@ class TestNVGPUUnwind(NVGPUTestCaseBase):
         self.assertEqual(
             thread.GetNumFrames(), 1, "A kernel's first instruction has no caller"
         )
+
+    def test_thread_return_is_refused(self):
+        """Test that popping a frame fails and changes no register, because a
+        lane's PC cannot be written."""
+        self.build()
+        breakpoint = self.run_to_gpu_line("unwind.cu", "// gpu breakpoint")
+        thread = self.assert_gpu_stop_at_breakpoint(breakpoint)[0]
+
+        def registers():
+            frame = thread.GetFrameAtIndex(0)
+            return [self.read_register(frame, name) for name in ("pc", "SP", "RA")]
+
+        before = registers()
+        error = thread.ReturnFromFrame(thread.GetFrameAtIndex(0), lldb.SBValue())
+        self.assertFailure(error, "Could not reset register values.")
+        self.assertEqual(registers(), before)

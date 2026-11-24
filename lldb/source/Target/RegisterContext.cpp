@@ -239,6 +239,15 @@ bool RegisterContext::CopyFromRegisterContext(lldb::RegisterContextSP context) {
 
   RegisterContextSP frame_zero_context = m_thread.GetRegisterContext();
 
+  // Write the PC first, and change nothing if that fails: a frame whose PC
+  // stays put has not been popped, and must keep its stack pointer.
+  const RegisterInfo *pc_info =
+      GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_PC);
+  RegisterValue pc_value;
+  if (pc_info && !(context->ReadRegister(pc_info, pc_value) &&
+                   WriteRegister(pc_info, pc_value)))
+    return false;
+
   for (uint32_t set_idx = 0; set_idx < num_register_sets; ++set_idx) {
     const RegisterSet *const reg_set = GetRegisterSet(set_idx);
 
@@ -246,7 +255,7 @@ bool RegisterContext::CopyFromRegisterContext(lldb::RegisterContextSP context) {
     for (uint32_t reg_idx = 0; reg_idx < num_registers; ++reg_idx) {
       const uint32_t reg = reg_set->registers[reg_idx];
       const RegisterInfo *reg_info = GetRegisterInfoAtIndex(reg);
-      if (!reg_info || reg_info->value_regs)
+      if (!reg_info || reg_info == pc_info || reg_info->value_regs)
         continue;
       RegisterValue reg_value;
 

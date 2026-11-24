@@ -286,6 +286,28 @@ entire block index when it is available. When only ``--blockidx`` is supplied,
 it similarly uses the selected thread's entire thread index. If the selected
 thread does not have the inherited group, that group stays unconstrained.
 
+Writing registers
+^^^^^^^^^^^^^^^^^
+
+``register write`` changes a register of one lane of a stopped GPU thread: the
+``R`` registers, with their aliases ``SP``, ``FP`` and ``RA``, and the ``P``
+registers. All other registers are read-only: ``PC``, ``errorPC``, ``RZ``,
+``URZ``, the CUDA built-ins such as ``threadIdx``, and, for now, the ``UR`` and
+``UP`` registers. Because ``PC`` cannot be written, ``thread return`` fails on a
+GPU thread. At a simulated module-load stop (see `GPU thread coordinates`_), no
+register can be written.
+
+LLDB writes ``RA`` as ``R20`` and then ``R21``, so a write that fails part way
+leaves ``RA`` half changed.
+
+An expression can assign a variable that lives in one register, such as an
+``int``, with two limits:
+
+- ``frame variable`` and ``print`` show the variable's old value until the GPU
+  next stops. ``expr <variable>`` shows the new one.
+- A variable that lives in two registers, such as a pointer, a ``long``, or a
+  ``double``, keeps its value, although the assignment reports no error.
+
 GPU modules
 ^^^^^^^^^^^
 

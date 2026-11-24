@@ -303,7 +303,103 @@ RegisterContextNVGPU::ReadRegisterValue(const RegisterInfo &reg_info,
 
 Status RegisterContextNVGPU::WriteRegister(const RegisterInfo *reg_info,
                                            const RegisterValue &reg_value) {
-  return Status("WriteRegister unimplemented");
+  return Status::FromError(WriteRegisterValue(*reg_info, reg_value));
+}
+
+llvm::Error
+RegisterContextNVGPU::WriteRegisterValue(const RegisterInfo &reg_info,
+                                         const RegisterValue &value) {
+  const uint32_t reg_num = reg_info.kinds[eRegisterKindLLDB];
+  if (reg_num >= LLDB_REG_COUNT)
+    return createStringErrorFmt("unknown register #{0}", reg_num);
+
+  const ThreadState *thread_state = GetGPUThread().GetThreadState();
+  if (!thread_state)
+    return InvalidRegister(reg_info);
+
+  if (!GetGPUThread().GetGPU().IsDeviceStateCurrent())
+    return createStringErrorFmt(
+        "{0} register is unavailable while the GPU is running", reg_info.name);
+
+  const bool is_predicate = IsPredicateLLDB(reg_num);
+
+  const nvgpu::PhysicalCoords &physical = thread_state->GetPhysicalCoords();
+  if (!physical.device || !physical.sm || !physical.warp)
+    return createStringErrorFmt("cannot write register: CUDA device, SM, or "
+                                "warp coordinate is unknown");
+  if (!physical.lane)
+    return createStringErrorFmt(
+        "cannot write register: CUDA lane coordinate is unknown");
+
+  CUDBGAPI api = GetDebuggerAPI();
+  if (!api)
+    return createStringErrorFmt("The CUDA debugger API is not available");
+
+  // The driver writes one 32-bit slot at a time: RA requires two.
+  llvm::SmallVector<uint32_t, 2> words(
+      llvm::divideCeil(reg_info.byte_size, sizeof(uint32_t)));
+  Status error;
+  if (!value.GetAsMemoryData(reg_info, words.data(),
+                             words.size() * sizeof(uint32_t),
+                             lldb::eByteOrderLittle, error))
+    return error.ToError();
+
+  // Find the register's slot among the cached registers of its class.
+  llvm::ArrayRef<uint32_t> registers;
+  uint32_t index;
+  if (IsPredicateLLDB(reg_num)) {
+    registers = GetPredicateRegisters(*thread_state);
+    index = reg_num - LLDB_P_BASE;
+  } else {
+    switch (reg_num) {
+    case LLDB_SP:
+      index = SASS_SP;
+      break;
+    case LLDB_FP:
+      index = SASS_FP;
+      break;
+    case LLDB_RA:
+      index = SASS_RA_LO;
+      break;
+    default:
+      // TODO: Write the UR and UP registers. The lanes of a warp share them,
+      // so lldb has to drop what it cached for the other lanes.
+      if (!IsRegularLLDB(reg_num))
+        return createStringErrorFmt("register {0} is not writable",
+                                    reg_info.name);
+      index = reg_num - LLDB_R_BASE;
+      break;
+    }
+    registers = GetRegularRegisters(*thread_state);
+  }
+  if (index + words.size() > registers.size())
+    return InvalidRegister(reg_info);
+
+  CUDBGResult res = CUDBG_SUCCESS;
+  if (is_predicate) {
+    // The driver writes a predicate set whole, and accepts only 0 and 1.
+    llvm::SmallVector<uint32_t, sass::kNumPRegs> predicates;
+    for (uint32_t predicate : registers)
+      predicates.push_back(predicate & 0x1);
+    predicates[index] = words[0] ? 1 : 0;
+    res = api->writePredicates(*physical.device, *physical.sm, *physical.warp,
+                               *physical.lane, predicates.size(),
+                               predicates.data());
+  } else {
+    // More than one word only when RA arrives in one P packet. lldb does not
+    // send that: it writes R20 and then R21. The write is not atomic: if the
+    // driver refuses the second word, the first stays written.
+    for (size_t i = words.size(); i > 0 && res == CUDBG_SUCCESS; --i)
+      res = api->writeRegister(*physical.device, *physical.sm, *physical.warp,
+                               *physical.lane, index + i - 1, words[i - 1]);
+  }
+
+  InvalidateAllRegisters();
+
+  if (res != CUDBG_SUCCESS)
+    return createStringErrorFmt("Failed to write the {0} register. {1}",
+                                reg_info.name, cudbgGetErrorString(res));
+  return llvm::Error::success();
 }
 
 Status RegisterContextNVGPU::ReadAllRegisterValues(

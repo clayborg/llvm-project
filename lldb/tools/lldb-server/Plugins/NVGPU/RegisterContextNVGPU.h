@@ -55,6 +55,9 @@ private:
   llvm::Error ReadRegisterValue(const RegisterInfo &reg_info,
                                 RegisterValue &value);
 
+  llvm::Error WriteRegisterValue(const RegisterInfo &reg_info,
+                                 const RegisterValue &value);
+
   /// \return
   ///     Cached R0-based values; empty on failure.
   llvm::ArrayRef<uint32_t> GetRegularRegisters(const ThreadState &thread_state);

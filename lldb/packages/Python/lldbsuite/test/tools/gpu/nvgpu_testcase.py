@@ -1199,6 +1199,28 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             )
         return vals
 
+    def read_register(self, frame: lldb.SBFrame, name: str) -> int:
+        """Return the value of the register `name` in `frame`; fail if there
+        is no such register or lldb cannot read it."""
+        what = f"{name} in {self._describe_frame(frame)}"
+        register = frame.FindRegister(name)
+        self.assertTrue(register.IsValid(), f"no register {what}")
+        self.assertSuccess(register.GetError(), f"reading {what}")
+        return register.GetValueAsUnsigned()
+
+    def write_register(self, thread: lldb.SBThread, name: str, value: int) -> None:
+        """Set the register `name` of a GPU thread to `value` with `register
+        write`, and check that lldb reads `value` back. The command needs the
+        GPU target and the thread selected, and they stay selected."""
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        self.gpu_process.SetSelectedThread(thread)
+        self.runCmd(f"register write {name} {value:#x}")
+        self.assertEqual(
+            self.read_register(thread.GetFrameAtIndex(0), name),
+            value,
+            f"{name} of {thread.GetName()} after writing it",
+        )
+
     @staticmethod
     def _describe_frame(frame: lldb.SBFrame) -> str:
         """Name `frame` for a failure message: its index, its function, and its
@@ -1281,6 +1303,18 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         )
         return value
 
+    def expr_roundtrip(self, frame: lldb.SBFrame, name: str, new_value: int) -> None:
+        """Assign `new_value` to the integer variable `name` in `frame` with an
+        expression, and check with another expression that the variable holds
+        it. The variable must hold another value before."""
+        before = self.evaluate_expression(frame, name).GetValueAsUnsigned()
+        self.assertNotEqual(
+            before, new_value, f"{name} already holds {new_value:#x} before the write"
+        )
+        self.evaluate_expression(frame, f"{name} = {new_value:#x}")
+        after = self.evaluate_expression(frame, name).GetValueAsUnsigned()
+        self.assertEqual(after, new_value, f"{name} after assigning it")
+
     def collect_errors(self) -> Callable[[], List[str]]:
         """Collect the errors that lldb reports outside a command from now
         on, such as a breakpoint condition that it cannot evaluate, and return
@@ -1339,6 +1373,61 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         finally:
             self.dbg.SetSelectedTarget(selected)
         return self.res.GetOutput().splitlines()
+
+    def send_gpu_packet(self, packet: str) -> str:
+        """Send the GDB remote packet `packet` to the GPU's lldb-server, as
+        `process plugin packet send` does, and return the response. lldb does
+        not interpret a packet sent this way, so it learns nothing from what
+        the packet changes on the device. There is no SB API for this; the
+        command needs the GPU target selected, and the selection is
+        restored."""
+        selected = self.dbg.GetSelectedTarget()
+        self.dbg.SetSelectedTarget(self.gpu_target)
+        try:
+            self.runCmd(f"process plugin packet send '{packet}'")
+        finally:
+            self.dbg.SetSelectedTarget(selected)
+        prefix = "response: "
+        for line in self.res.GetOutput().splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix) :]
+        self.fail(f"no response to {packet!r} in:\n{self.res.GetOutput()}")
+
+    def write_register_behind_lldb(
+        self, thread: lldb.SBThread, name: str, value: int
+    ) -> None:
+        """Set the register `name` of a GPU thread to `value` on the device
+        with a raw P packet, and check with a raw p packet that the device
+        holds it. lldb interprets neither: its register cache and the values
+        it computed from the register keep what they held. Use it to check
+        what makes lldb read them again."""
+        number = 0
+        while True:
+            info = self.send_gpu_packet(f"qRegisterInfo{number:x}")
+            # No reply at all comes back empty: lldb-server is gone.
+            self.assertTrue(
+                info and not info.startswith("E"),
+                f"lldb-server lists no register {name}: {info!r} for register {number}",
+            )
+            fields = dict(field.split(":", 1) for field in info.split(";") if field)
+            if fields.get("name") == name:
+                break
+            number += 1
+        little_endian = self.gpu_process.GetByteOrder() == lldb.eByteOrderLittle
+        data = value.to_bytes(
+            int(fields["bitsize"]) // 8, "little" if little_endian else "big"
+        )
+        suffix = f";thread:{thread.GetThreadID():x};"
+        self.assertEqual(
+            self.send_gpu_packet(f"P{number:x}={data.hex()}{suffix}"),
+            "OK",
+            f"writing {name} of {thread.GetName()} with a P packet",
+        )
+        self.assertEqual(
+            self.send_gpu_packet(f"p{number:x}{suffix}"),
+            data.hex(),
+            f"{name} of {thread.GetName()} after writing it with a P packet",
+        )
 
     def read_gpu_memory(
         self,

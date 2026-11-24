@@ -328,11 +328,6 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
     def _frame_for(self, name):
         return self._thread_by_name(name).GetFrameAtIndex(0)
 
-    def _reg(self, frame, name):
-        reg = frame.FindRegister(name)
-        self.assertTrue(reg.IsValid(), f"{name} should be valid")
-        return reg.GetValueAsUnsigned()
-
     def _select(self, name):
         self.core_process.SetSelectedThread(self._thread_by_name(name))
 
@@ -359,11 +354,11 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
             t = spec["t"]
             for i in range(self.NUM_R):
                 self.assertEqual(
-                    self._reg(frame, f"R{i}"),
+                    self.read_register(frame, f"R{i}"),
                     self.reg_value(t, i),
                     f"R{i} in thread t={t}",
                 )
-            self.assertEqual(self._reg(frame, "RZ"), 0, f"RZ in thread t={t}")
+            self.assertEqual(self.read_register(frame, "RZ"), 0, f"RZ in thread t={t}")
 
     def test_register_aliases_and_composite(self):
         """SP/FP alias R1/R2, RA is the R20:R21 composite, PC/errorPC come from
@@ -371,14 +366,14 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
         for spec in self.reg_threads:
             frame = self._frame_for(spec["name"])
             t = spec["t"]
-            self.assertEqual(self._reg(frame, "SP"), self.reg_value(t, 1))
-            self.assertEqual(self._reg(frame, "FP"), self.reg_value(t, 2))
+            self.assertEqual(self.read_register(frame, "SP"), self.reg_value(t, 1))
+            self.assertEqual(self.read_register(frame, "FP"), self.reg_value(t, 2))
             self.assertEqual(
-                self._reg(frame, "RA"),
+                self.read_register(frame, "RA"),
                 self.reg_value(t, 20) | (self.reg_value(t, 21) << 32),
             )
-            self.assertEqual(self._reg(frame, "PC"), spec["pc"])
-            self.assertEqual(self._reg(frame, "errorPC"), spec["error_pc"])
+            self.assertEqual(self.read_register(frame, "PC"), spec["pc"])
+            self.assertEqual(self.read_register(frame, "errorPC"), spec["error_pc"])
 
     def test_all_uniform_registers(self):
         """UR0-UR254 read back per-thread formula values; URZ reads 0."""
@@ -387,11 +382,13 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
             t = spec["t"]
             for i in range(self.NUM_UR):
                 self.assertEqual(
-                    self._reg(frame, f"UR{i}"),
+                    self.read_register(frame, f"UR{i}"),
                     self.ureg_value(t, i),
                     f"UR{i} in thread t={t}",
                 )
-            self.assertEqual(self._reg(frame, "URZ"), 0, f"URZ in thread t={t}")
+            self.assertEqual(
+                self.read_register(frame, "URZ"), 0, f"URZ in thread t={t}"
+            )
 
     def test_all_predicates(self):
         """P0-P6 follow the per-thread pattern; P7 (PT) is always 1."""
@@ -400,11 +397,11 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
             t = spec["t"]
             for i in range(self.NUM_P):
                 self.assertEqual(
-                    self._reg(frame, f"P{i}"),
+                    self.read_register(frame, f"P{i}"),
                     self.pred_value(t, i),
                     f"P{i} in thread t={t}",
                 )
-            self.assertEqual(self._reg(frame, "P7"), 1, "P7 (PT) is always 1")
+            self.assertEqual(self.read_register(frame, "P7"), 1, "P7 (PT) is always 1")
 
     def test_all_uniform_predicates(self):
         """UP0-UP6 follow the per-thread pattern; UP7 (UPT) is always 1."""
@@ -413,11 +410,13 @@ class TestNVGPUArtificialCore(NVGPUCoreTestCaseBase):
             t = spec["t"]
             for i in range(self.NUM_UP):
                 self.assertEqual(
-                    self._reg(frame, f"UP{i}"),
+                    self.read_register(frame, f"UP{i}"),
                     self.upred_value(t, i),
                     f"UP{i} in thread t={t}",
                 )
-            self.assertEqual(self._reg(frame, "UP7"), 1, "UP7 (UPT) is always 1")
+            self.assertEqual(
+                self.read_register(frame, "UP7"), 1, "UP7 (UPT) is always 1"
+            )
 
     def test_all_stop_reasons(self):
         """Per-lane exceptions over every code, the SM-borrow path, an inline
