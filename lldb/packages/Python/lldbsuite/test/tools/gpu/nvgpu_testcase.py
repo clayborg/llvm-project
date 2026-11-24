@@ -1,12 +1,14 @@
+import itertools
 import json
 import math
 import os
+import re
 import shutil
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import lldb
-from lldbsuite.test import configuration, lldbplatformutil, lldbutil
+from lldbsuite.test import configuration, lldbplatformutil, lldbtest_config, lldbutil
 from lldbsuite.test.lldbtest import builder_module, line_number
 from lldbsuite.test.tools.gpu import nvgpu_decorators
 from lldbsuite.test.tools.gpu.gpu_testcase import GpuTestCaseBase
@@ -1413,6 +1415,23 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
                 return line[len(prefix) :]
         self.fail(f"no response to {packet!r} in:\n{self.res.GetOutput()}")
 
+    def register_info(self, name: str) -> Tuple[int, Dict[str, str]]:
+        """Return what the GPU's lldb-server says of the register `name`: its
+        number, which is the one in `p` and `P` packets and in the registers
+        of a jThreadsInfo reply, and the fields of its qRegisterInfo reply,
+        such as `bitsize`."""
+        for number in itertools.count():
+            info = self.send_gpu_packet(f"qRegisterInfo{number:x}")
+            # Past its last register lldb-server replies with an error. No
+            # reply at all comes back empty: lldb-server is gone.
+            self.assertTrue(
+                info and not info.startswith("E"),
+                f"lldb-server lists no register {name}: {info!r} for register {number}",
+            )
+            fields = dict(field.split(":", 1) for field in info.split(";") if field)
+            if fields.get("name") == name:
+                return number, fields
+
     def write_register_behind_lldb(
         self, thread: lldb.SBThread, name: str, value: int
     ) -> None:
@@ -1421,18 +1440,7 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
         holds it. lldb interprets neither: its register cache and the values
         it computed from the register keep what they held. Use it to check
         what makes lldb read them again."""
-        number = 0
-        while True:
-            info = self.send_gpu_packet(f"qRegisterInfo{number:x}")
-            # No reply at all comes back empty: lldb-server is gone.
-            self.assertTrue(
-                info and not info.startswith("E"),
-                f"lldb-server lists no register {name}: {info!r} for register {number}",
-            )
-            fields = dict(field.split(":", 1) for field in info.split(";") if field)
-            if fields.get("name") == name:
-                break
-            number += 1
+        number, fields = self.register_info(name)
         little_endian = self.gpu_process.GetByteOrder() == lldb.eByteOrderLittle
         data = value.to_bytes(
             int(fields["bitsize"]) // 8, "little" if little_endian else "big"
@@ -1447,6 +1455,73 @@ class NVGPUTestCaseBase(GpuTestCaseBase):
             self.send_gpu_packet(f"p{number:x}{suffix}"),
             data.hex(),
             f"{name} of {thread.GetName()} after writing it with a P packet",
+        )
+
+    def packets_sent(self, command: str, name: str) -> List[str]:
+        """Run `command` and return the payloads of the gdb-remote packets
+        that lldb sent while it ran, to the CPU's lldb-server and the GPU's
+        alike, oldest first. Their log stays in the test's build directory as
+        `<name>.packets.log`.
+
+        A log channel writes to one file. When dotest's --channel option logs
+        gdb-remote, the packets `command` sends go to this log instead of
+        dotest's, which gets the channel back afterwards."""
+        log_path = self.getBuildArtifact(f"{name}.packets.log")
+        self.runCmd(f'log enable -f "{log_path}" gdb-remote packets')
+        try:
+            self.runCmd(command)
+        finally:
+            self.runCmd("log disable gdb-remote packets")
+            # Enable what dotest did (enableLogChannelsForCurrentTest), but
+            # append to its log.
+            host_log = f"{self.getLogBasenameForCurrentTest()}-host.log"
+            for channel in lldbtest_config.channels:
+                if channel.split(" ", 1)[0] == "gdb-remote":
+                    self.runCmd(f'log enable -Tpn -a -f "{host_log}" {channel}')
+        with open(log_path, errors="replace") as log:
+            # Logging the first packet also dumps the packet history, as
+            # "history[N]" rows; those packets were sent earlier.
+            return [
+                match[1]
+                for line in log
+                if "history[" not in line
+                and (match := re.search(r"send packet: \$([^#]*)#", line))
+            ]
+
+    def assert_asks_only_about(
+        self,
+        command: str,
+        packets: Sequence[str],
+        threads: Set[int],
+        register: Optional[str] = None,
+    ) -> None:
+        """Fail if a command asked lldb-server about threads it should not
+        have. `packets` are the packets the command sent, as `packets_sent`
+        returns them; `command` only names it in the failure message.
+
+        No packet may request a thread's extended info. A register read is
+        allowed only for a thread whose ID is in `threads` and, if `register`
+        is given, only of the register with that name."""
+        extended_info = [
+            packet for packet in packets if packet.startswith("jThreadExtendedInfo")
+        ]
+        self.assertEqual(
+            len(extended_info),
+            0,
+            f"`{command}` sent jThreadExtendedInfo, such as {extended_info[:2]}",
+        )
+        number = None if register is None else self.register_info(register)[0]
+        others = [
+            packet
+            for packet in packets
+            if (match := re.match(r"p([0-9a-f]+);thread:([0-9a-f]+);", packet))
+            and (
+                int(match[2], 16) not in threads
+                or (number is not None and int(match[1], 16) != number)
+            )
+        ]
+        self.assertEqual(
+            len(others), 0, f"`{command}` sent register reads such as {others[:2]}"
         )
 
     def read_gpu_memory(

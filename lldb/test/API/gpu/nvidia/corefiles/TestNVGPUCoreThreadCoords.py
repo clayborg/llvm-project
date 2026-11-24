@@ -152,9 +152,19 @@ class TestNVGPUCoreThreadCoords(NVGPUCoreTestCaseBase):
             self.assertEqual(cuda["context_id"], self.CONTEXT_ID)
             self.assertEqual(cuda["grid_id"], self.GRID_ID)
             self.assertNotIn("block_idx", cuda)
-            actual_thread_indices.add(tuple(cuda["thread_idx"][axis] for axis in "xyz"))
+            thread_idx = tuple(cuda["thread_idx"][axis] for axis in "xyz")
+            actual_thread_indices.add(thread_idx)
             actual_lanes.add(cuda["lane"])
-            self.assertEqual(thread.GetFrameAtIndex(0).GetPC(), self.PC)
+            frame = thread.GetFrameAtIndex(0)
+            self.assertEqual(frame.GetPC(), self.PC)
+
+            # `thread list` reads the coordinates from these registers. The
+            # truncated row never recorded blockIdx, so its register is
+            # unreadable rather than zero.
+            self.assertTrue(frame.FindRegister("blockIdx").GetError().Fail())
+            self.assertEqual(
+                tuple(self.read_vec3_register(frame, "threadIdx")), thread_idx
+            )
 
         self.assertEqual(actual_thread_indices, set(self.THREAD_IDX))
         self.assertEqual(actual_lanes, set(self.LANE_IDS))

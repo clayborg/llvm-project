@@ -34,6 +34,25 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
             cuda,
         )
 
+    def _run_to_fault(self):
+        """Run threads.cu to its kernel's fault. Return the IDs of the GPU
+        threads that the exception stopped."""
+        self.build()
+        source = "threads.cu"
+        self.run_to_cpu_line(source, "// before kernel launch")
+        # Without this the program can exit while the GPU is at the fault.
+        self.cpu_target.BreakpointCreateByLocation(
+            lldb.SBFileSpec(source), line_number(source, "// breakpoint before exit")
+        )
+        self.continue_cpu_and_wait_for_gpu_to_stop()
+        faulting = {
+            thread.GetThreadID()
+            for thread in self.gpu_process
+            if thread.GetStopReason() == lldb.eStopReasonException
+        }
+        self.assertTrue(faulting)
+        return faulting
+
     def test_thread_in_a_single_block(self):
         """Test that we can read all threads in a single block, and one of them has excepted."""
         self.killCPUOnTeardown()
@@ -168,11 +187,10 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
             ],
             matching=True,
         )
-        # Non-faulting warps report errorPC == 0; those threads must fall back
-        # to their per-thread PC and aggregate by source line. They must never
-        # collapse onto a synthetic "pc=0x" or "errorPC=0x0" location (the
-        # latter would mean a backend errorPC of 0 was mistaken for a real
-        # fault address).
+        # Threads that no exception stopped are listed at their own PC and
+        # aggregate by source line. They must never collapse onto a raw
+        # "pc=0x" location, and no row may show "errorPC=0x0", which would
+        # mean an errorPC of 0 was taken for a fault address.
         self.expect(
             "thread list", substrs=["pc=0x", "errorPC=0x0"], matching=False
         )
@@ -220,6 +238,43 @@ class TestNVGPUThreads(NVGPUTestCaseBase):
             "thread list -v -s exception",
             substrs=["thread #"],
             matching=True,
+        )
+
+    def test_listing_and_selecting_send_no_per_thread_requests(self):
+        """`thread list` and `thread select --blockidx --threadidx` read each
+        thread's coordinates, and the errorPC of a thread stopped by an
+        exception, from the values lldb-server sends with the stop, instead of
+        asking lldb-server about each thread."""
+        faulting = self._run_to_fault()
+        self.select_gpu()
+
+        # Only a faulting thread's errorPC may need a read, when lldb-server
+        # could not send it.
+        command = "thread list"
+        self.assert_asks_only_about(
+            command, self.packets_sent(command, "thread-list"), faulting, "errorPC"
+        )
+
+        # Announcing the new selection reads the selected thread's frame.
+        # Check which thread that is only after the command: thread_coords
+        # asks lldb-server about the thread.
+        command = "thread select --blockidx 0,0,0 --threadidx 511,0,0"
+        packets = self.packets_sent(command, "thread-select")
+        selected = self.gpu_process.GetSelectedThread()
+        self.assertEqual(self.thread_coords(selected), ((0, 0, 0), (511, 0, 0)))
+        self.assert_asks_only_about(command, packets, {selected.GetThreadID()})
+
+    def test_error_pc_sent_only_for_threads_with_an_exception(self):
+        """lldb-server sends errorPC with a stop only for the threads stopped
+        by an exception. Most threads are not, and a value for each of them
+        would grow the reply at every stop."""
+        faulting = self._run_to_fault()
+        # The reply names each thread's registers by number.
+        error_pc = str(self.register_info("errorPC")[0])
+        threads_info = json.loads(self.send_gpu_packet("jThreadsInfo"))
+        self.assertEqual(
+            {info["tid"] for info in threads_info if error_pc in info["registers"]},
+            faulting,
         )
 
     def test_thread_list_aggregation_row_format(self):

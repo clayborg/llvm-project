@@ -120,6 +120,13 @@ public:
   /// instead.
   std::optional<lldb::addr_t> GetErrorPC() const { return m_error_pc; }
 
+  /// The CUDA coordinates decoded from this thread's rows, which `thread info`
+  /// reports. Each is set only when the row that holds it decoded and recorded
+  /// it in full.
+  const nvgpu::ThreadCoords &GetCUDAThreadCoords() const {
+    return m_cuda_thread_coords;
+  }
+
   /// True if this lane stopped at an inline `trap;` / `__trap()`.
   bool IsAtTrap() const {
     return m_stop_attribution && m_stop_attribution->at_trap;

@@ -109,6 +109,27 @@ class TestNVGPUCompactLanes(NVGPUCoreTestCaseBase):
             quiet.GetFrameAtIndex(0).FindRegister("R0").GetValueAsUnsigned(), 0xAA10
         )
 
+    def test_only_the_faulting_lane_is_listed_at_the_error_pc(self):
+        """The core gives every lane of the faulting warp the warp's errorPC,
+        but it locates the fault only for the lane that raised the exception.
+        The quiescent lane is listed at its own PC, as in a live session."""
+        b = self._compact_core([29, 0], (1 << 29) | 1, 1 << 29)
+        _, process = self.generate_and_load_artificial_core(b, "errorpc.nvcudmp")
+        for thread in process:
+            self.assertEqual(
+                thread.GetFrameAtIndex(0).FindRegister("errorPC").GetValueAsUnsigned(),
+                0x100040,
+            )
+        self.expect(
+            "thread list",
+            substrs=[
+                "1 thread(s) at errorPC=0x100040: "
+                "blockIdx(x=43 y=0 z=0) threadIdx(x=29 y=0 z=0), stop reason = ",
+                "1 thread(s) at pc=0x100010: "
+                "blockIdx(x=43 y=0 z=0) threadIdx(x=0 y=0 z=0)\n",
+            ],
+        )
+
     def test_out_of_range_hardware_lane_is_skipped(self):
         """Reject lane IDs outside the 32-bit masks without shifting by 32."""
         b = self._compact_core([0, 32], 1, 0, fault=False)

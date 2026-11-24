@@ -16,7 +16,6 @@
 
 #include "lldb/Utility/StructuredData.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
@@ -83,12 +82,6 @@ llvm::json::Value toJSON(const ThreadCoords &coords);
 
 /// Serialize the available fields as the contents of a "cuda" dictionary.
 StructuredData::ObjectSP toStructuredData(const ThreadCoords &coords);
-
-/// Decode a CUDA coordinate object; missing fields are unknown.
-/// Returns an error for a non-dictionary, or an error that names every
-/// malformed field.
-llvm::Expected<ThreadCoords>
-FromStructuredData(const StructuredData::Object &cuda);
 
 } // namespace lldb_private::nvgpu
 

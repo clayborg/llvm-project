@@ -19,6 +19,7 @@
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/NVGPU/SASSRegisterInfo.h"
 #include "lldb/Utility/NVGPU/SASSRegisterNumbers.h"
+#include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -28,6 +29,14 @@
 
 using namespace lldb;
 using namespace lldb_private;
+
+/// Copy a CUDA coordinate triple into its slot of the register buffer.
+static void CopyDim3(const nvgpu::Dim3u &dim,
+                     uint32_t (&slot)[sass::kNumXYZComponents]) {
+  slot[0] = dim.x;
+  slot[1] = dim.y;
+  slot[2] = dim.z;
+}
 
 RegisterContextNVGPUCore::RegisterContextNVGPUCore(
     Thread &thread, ObjectFile *core, uint32_t concrete_frame_idx,
@@ -44,6 +53,22 @@ RegisterContextNVGPUCore::RegisterContextNVGPUCore(
 
 void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
                                             ObjectFile *core) {
+  // Take the coordinates the thread decoded when it was created, instead of
+  // decoding the lane and CTA rows again. The thread keeps each coordinate
+  // whose own row it could read, so these registers report what `thread info`
+  // does, even when a row below fails to decode and the other registers are
+  // left unloaded.
+  const nvgpu::LogicalCoords &logical =
+      gpu_thread.GetCUDAThreadCoords().logical;
+  if (logical.thread_idx) {
+    CopyDim3(*logical.thread_idx, m_register_data.thread_idx);
+    m_has_thread_idx = true;
+  }
+  if (logical.block_idx) {
+    CopyDim3(*logical.block_idx, m_register_data.block_idx);
+    m_has_block_idx = true;
+  }
+
   if (!core)
     return;
 
@@ -127,10 +152,6 @@ void RegisterContextNVGPUCore::LoadFromCore(ThreadNVGPUCore &gpu_thread,
              nvgpu_core::FindChildByType(*warp_sp,
                                          eSectionTypeNVGPUUniformPredicates));
 
-  llvm::copy(llvm::ArrayRef(&lane_or->threadIdxX, sass::kNumXYZComponents),
-             m_register_data.thread_idx);
-  llvm::copy(llvm::ArrayRef(&cta_or->blockIdxX, sass::kNumXYZComponents),
-             m_register_data.block_idx);
   // cudacoredump.h reports warp size as uint32_t instead of int32_t
   m_register_data.warp_size = dev_or->numLanesPerWarp;
 
@@ -189,18 +210,24 @@ bool RegisterContextNVGPUCore::ReadRegister(const RegisterInfo *reg_info,
     return false;
   }
 
+  const uint32_t reg_num = reg_info->kinds[eRegisterKindLLDB];
+
   // Caller frames only recover a PC; other registers hold stale frame 0 values.
-  if (!BehavesLikeZerothFrame() &&
-      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_PC)
+  if (!BehavesLikeZerothFrame() && reg_num != sass::regnum::LLDB_PC)
     return false;
 
   // The SM-exception stand-in knows only where the fault happened. Refuse
   // every other register instead of handing back the zero it would read out
   // of the unfilled buffer, so a register-backed expression fails loudly
   // rather than quietly computing on a value the corefile never recorded.
-  if (m_pc_only &&
-      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_PC &&
-      reg_info->kinds[eRegisterKindLLDB] != sass::regnum::LLDB_ERROR_PC)
+  if (m_pc_only && reg_num != sass::regnum::LLDB_PC &&
+      reg_num != sass::regnum::LLDB_ERROR_PC)
+    return false;
+
+  // For the same reason, refuse coordinates that the lane or CTA row did not
+  // record. `thread list` then shows the thread without a coordinate range.
+  if ((reg_num == sass::regnum::LLDB_VREG_THREAD_IDX && !m_has_thread_idx) ||
+      (reg_num == sass::regnum::LLDB_VREG_BLOCK_IDX && !m_has_block_idx))
     return false;
 
   // Every RegisterInfo from `sass::GetRegisterInfos()` has its `byte_offset`

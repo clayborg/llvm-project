@@ -261,12 +261,13 @@ channel.
 GPU thread coordinates
 ^^^^^^^^^^^^^^^^^^^^^^
 
-LLDB reads a GPU thread's block and thread indices from its structured CUDA
-metadata. Thread names are display labels and are not parsed for coordinates.
-Threads whose metadata is absent, incomplete, or malformed remain visible in
-the aggregated ``thread list`` output, but without a coordinate range. A row
+``thread list`` shows GPU threads' block and thread indices. Threads with
+unavailable coordinates remain visible without a coordinate range. A row
 containing multiple such threads is labeled ``CUDA thread coordinates
 unavailable``; a single thread keeps its display name when available.
+
+For threads stopped by a CUDA exception, ``thread list`` shows the faulting
+instruction when available. Other threads are shown at their own PCs.
 
 Simulated module-load stops have no current GPU coordinate snapshot. Threads
 retained from an earlier real GPU stop are labeled ``CUDA thread coordinates
@@ -275,8 +276,8 @@ to the user when ``target.process.stop-on-sharedlibrary-events`` is ``true``.
 Only ``RZ``, ``URZ``, and PC remain readable. PC retains its previous
 value, or zero if no previous value is available.
 
-``thread select --blockidx`` and ``thread select --threadidx`` match that same
-metadata. A supplied coordinate axis matches only when the candidate thread
+``thread select --blockidx`` and ``thread select --threadidx`` match the same
+coordinates. A supplied coordinate axis matches only when the candidate thread
 has that axis and its value is equal. When an entire block or thread-index
 group is unconstrained, a thread may match even if that group is unavailable.
 The first matching thread in process order is selected.

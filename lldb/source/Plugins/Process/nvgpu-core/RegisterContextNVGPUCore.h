@@ -79,9 +79,11 @@ public:
   bool WriteAllRegisterValues(const lldb::DataBufferSP &data_sp) override;
 
 private:
-  /// Decode the lane / warp / device rows and copy the lane's per-class
-  /// register slices (R/P/UR/UP) into `m_register_data`. Leaves the buffer
-  /// zero-initialized when `core` is null or any row fails to decode.
+  /// Copy the thread's CUDA coordinates into `m_register_data`, then decode
+  /// the lane / warp / device / CTA rows and copy the PC, errorPC and the
+  /// lane's per-class register slices (R/P/UR/UP). Leaves all but the
+  /// coordinates zero-initialized when `core` is null or any row fails to
+  /// decode.
   void LoadFromCore(ThreadNVGPUCore &thread, ObjectFile *core);
 
   /// Packed register buffer matching `sass::RegisterLayout`. The constructor
@@ -97,6 +99,12 @@ private:
   /// rest of the buffer is zero because the corefile never recorded it, not
   /// because the lane held zero, so reads of it are refused.
   bool m_pc_only = false;
+
+  /// True when the lane row recorded threadIdx, and the CTA row blockIdx. A
+  /// row that predates a field or failed to decode leaves it unrecorded, and
+  /// reads of the register are refused.
+  bool m_has_thread_idx = false;
+  bool m_has_block_idx = false;
 };
 
 } // namespace lldb_private

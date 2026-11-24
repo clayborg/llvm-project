@@ -416,16 +416,30 @@ std::vector<uint32_t>
 RegisterContextNVGPU::GetExpeditedRegisters(ExpeditedRegs expType) const {
   // Keep per-thread jThreadsInfo updates free of device register reads.
   // The reporting thread's full stop reply includes regular registers
-  // for unwinding.
-  if (expType == ExpeditedRegs::Minimal)
-    return {LLDB_PC, LLDB_ERROR_PC, LLDB_VREG_THREAD_IDX, LLDB_VREG_BLOCK_IDX};
+  // for unwinding. The client's aggregated `thread list` and
+  // `thread select --blockidx/--threadidx` read every thread's threadIdx and
+  // blockIdx, and errorPC for threads stopped by an exception, from these
+  // values. Leaving one out costs them a `p` packet per thread.
+  std::vector<uint32_t> expedited;
+  if (expType == ExpeditedRegs::Minimal) {
+    expedited = {LLDB_PC, LLDB_VREG_THREAD_IDX, LLDB_VREG_BLOCK_IDX};
+  } else {
+    static const std::vector<uint32_t> g_full_regs = [] {
+      std::vector<uint32_t> regs = {LLDB_PC, LLDB_SP, LLDB_FP, LLDB_RA};
+      for (uint32_t i = 0; i < sass::kNumRRegs; ++i)
+        regs.push_back(GetRegularLLDB(i));
+      return regs;
+    }();
+    expedited = g_full_regs;
+  }
 
-  static const std::vector<uint32_t> g_full_regs = [] {
-    std::vector<uint32_t> regs = {LLDB_PC, LLDB_ERROR_PC, LLDB_SP, LLDB_FP,
-                                  LLDB_RA};
-    for (uint32_t i = 0; i < sass::kNumRRegs; ++i)
-      regs.push_back(GetRegularLLDB(i));
-    return regs;
-  }();
-  return g_full_regs;
+  // The client reads errorPC only for a thread with an exception. For any
+  // other thread the read fails today, which leaves errorPC out of the reply.
+  // Listing it only here keeps the reply from growing if that read ever
+  // returns a value, such as 0.
+  const ThreadState *thread_state =
+      static_cast<const ThreadNVGPU &>(m_thread).GetThreadState();
+  if (thread_state && thread_state->HasException())
+    expedited.push_back(LLDB_ERROR_PC);
+  return expedited;
 }

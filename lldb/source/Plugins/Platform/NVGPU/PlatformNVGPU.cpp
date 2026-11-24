@@ -31,6 +31,7 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadList.h"
+#include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/NVGPU/ThreadCoords.h"
 #include "lldb/Utility/RegisterValue.h"
@@ -925,38 +926,82 @@ uint64_t PlatformNVGPU::FindRegisterLocations(const lldb::ModuleSP &module_sp,
   return 0;
 }
 
-/// Return the typed CUDA coordinate snapshot carried in thread extended info.
-/// Missing or malformed metadata is represented by an entirely unknown
-/// snapshot so callers can retain the thread while treating every field as
-/// unavailable.
-static nvgpu::ThreadCoords GetThreadCoords(Thread &thread) {
-  StructuredData::ObjectSP extended_info_sp = thread.GetExtendedInfo();
-  if (!extended_info_sp)
-    return {};
-
-  StructuredData::Dictionary *extended_info =
-      extended_info_sp->GetAsDictionary();
-  if (!extended_info) {
-    LLDB_LOG(GetLog(LLDBLog::Thread),
-             "CUDA thread {0} extended info is not a dictionary",
-             thread.GetID());
-    return {};
+namespace {
+/// Reads the registers that hold a GPU thread's CUDA coordinates and the fault
+/// address of its warp. When the GPU stops, lldb-server sends threadIdx and
+/// blockIdx for every thread, and errorPC for a thread whose exception has
+/// one, so reading them sends no packet. A core file records them in its lane,
+/// CTA and warp rows. A register that a thread does not have, such as errorPC
+/// without a fault, is unavailable.
+class CUDARegisterReader {
+public:
+  std::optional<nvgpu::Dim3u> ReadThreadIdx(RegisterContext &reg_ctx) const {
+    return ReadDim3(reg_ctx, GetRegisterInfos(reg_ctx).thread_idx);
   }
 
-  StructuredData::ObjectSP cuda_sp =
-      extended_info->GetValueForKey(nvgpu::g_thread_coords_key);
-  if (!cuda_sp)
-    return {};
-
-  llvm::Expected<nvgpu::ThreadCoords> coords =
-      nvgpu::FromStructuredData(*cuda_sp);
-  if (!coords) {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::Thread), coords.takeError(),
-                   "Failed to decode CUDA metadata for thread {1}: {0}",
-                   thread.GetID());
-    return {};
+  std::optional<nvgpu::Dim3u> ReadBlockIdx(RegisterContext &reg_ctx) const {
+    return ReadDim3(reg_ctx, GetRegisterInfos(reg_ctx).block_idx);
   }
-  return std::move(*coords);
+
+  /// \return
+  ///     The errorPC of the thread's warp, or LLDB_INVALID_ADDRESS when it has
+  ///     none.
+  lldb::addr_t ReadErrorPC(RegisterContext &reg_ctx) const;
+
+private:
+  struct RegisterInfos {
+    const RegisterInfo *thread_idx;
+    const RegisterInfo *block_idx;
+    const RegisterInfo *error_pc;
+  };
+
+  /// Every thread of a process has the same register layout, so the registers
+  /// are looked up by name once, in the first register context read.
+  const RegisterInfos &GetRegisterInfos(RegisterContext &reg_ctx) const;
+
+  /// Read a CUDA uint3 register, or return std::nullopt when it is
+  /// unavailable.
+  static std::optional<nvgpu::Dim3u> ReadDim3(RegisterContext &reg_ctx,
+                                              const RegisterInfo *reg_info);
+
+  mutable std::optional<RegisterInfos> m_reg_infos;
+};
+} // namespace
+
+const CUDARegisterReader::RegisterInfos &
+CUDARegisterReader::GetRegisterInfos(RegisterContext &reg_ctx) const {
+  if (!m_reg_infos)
+    m_reg_infos = RegisterInfos{reg_ctx.GetRegisterInfoByName("threadIdx"),
+                                reg_ctx.GetRegisterInfoByName("blockIdx"),
+                                reg_ctx.GetRegisterInfoByName("errorPC")};
+  return *m_reg_infos;
+}
+
+std::optional<nvgpu::Dim3u>
+CUDARegisterReader::ReadDim3(RegisterContext &reg_ctx,
+                             const RegisterInfo *reg_info) {
+  RegisterValue value;
+  if (!reg_info || !reg_ctx.ReadRegister(reg_info, value) ||
+      value.GetByteSize() != 3 * sizeof(uint32_t))
+    return std::nullopt;
+  DataExtractor data(value.GetBytes(), value.GetByteSize(),
+                     value.GetByteOrder(), sizeof(uint32_t));
+  lldb::offset_t offset = 0;
+  nvgpu::Dim3u dim;
+  dim.x = data.GetU32(&offset);
+  dim.y = data.GetU32(&offset);
+  dim.z = data.GetU32(&offset);
+  return dim;
+}
+
+lldb::addr_t CUDARegisterReader::ReadErrorPC(RegisterContext &reg_ctx) const {
+  const RegisterInfo *reg_info = GetRegisterInfos(reg_ctx).error_pc;
+  RegisterValue value;
+  if (!reg_info || !reg_ctx.ReadRegister(reg_info, value))
+    return LLDB_INVALID_ADDRESS;
+  // A core file records 0 for a warp without a valid errorPC.
+  const lldb::addr_t error_pc = value.GetAsUInt64(/*fail_value=*/0);
+  return error_pc == 0 ? LLDB_INVALID_ADDRESS : error_pc;
 }
 
 /// Per-dimension value tracker for the aggregated thread-list path.
@@ -1017,8 +1062,8 @@ struct GroupKey {
   lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
   uint64_t stop_value = 0;
   /// False unless both block and thread coordinates are available. Part of
-  /// the identity so incomplete metadata never shares a row with complete
-  /// coordinates at the same location.
+  /// the identity so a thread without them never shares a row with threads
+  /// that have them at the same location.
   bool has_coord = true;
 
   bool operator==(const GroupKey &other) const {
@@ -1148,20 +1193,22 @@ static void FormatDim3Set(Stream &strm, const char *prefix, const DimSet &x,
 /// not hold the thread-list lock while iterating frames and symbols.
 struct ThreadSnapshot {
   ThreadSP thread_sp;
-  nvgpu::ThreadCoords coord;
-  /// True only when both logical coordinate groups are available. See
-  /// `GroupKey::has_coord`.
-  bool has_coord = false;
+  std::optional<nvgpu::Dim3u> block_idx;
+  std::optional<nvgpu::Dim3u> thread_idx;
   lldb::addr_t pc = LLDB_INVALID_ADDRESS;
   /// Per-warp errorPC reported by the NVIDIA debugger backend, or
-  /// LLDB_INVALID_ADDRESS when no valid errorPC is available. The backend
-  /// reports 0 for warps that are not at a fault. When a warp hits an
-  /// exception, the per-lane PC may have advanced past the actual fault site
-  /// due to instruction slippage; errorPC pinpoints the real fault address and
-  /// lets us aggregate threads from different warps that hit the same fault.
+  /// LLDB_INVALID_ADDRESS when no valid errorPC is available. It is read only
+  /// for threads stopped by an exception. When a warp hits an exception, the
+  /// per-lane PC may have advanced past the actual fault site due to
+  /// instruction slippage; errorPC pinpoints the real fault address and lets
+  /// us aggregate threads from different warps that hit the same fault.
   lldb::addr_t error_pc = LLDB_INVALID_ADDRESS;
   lldb::StopReason stop_reason = lldb::eStopReasonInvalid;
   uint64_t stop_value = 0;
+
+  /// True only when both logical coordinate groups are available. See
+  /// `GroupKey::has_coord`.
+  bool HasCoord() const { return block_idx && thread_idx; }
 };
 
 /// Accumulate one snapshot into a group: its thread count and per-dim DimSets.
@@ -1172,10 +1219,10 @@ static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
   ++group.thread_count;
   // Threads without complete block/thread coordinates still count towards the
   // row's thread total, but contribute no dimension values.
-  if (!snap.has_coord)
+  if (!snap.HasCoord())
     return;
-  const nvgpu::Dim3u &block_idx = *snap.coord.logical.block_idx;
-  const nvgpu::Dim3u &thread_idx = *snap.coord.logical.thread_idx;
+  const nvgpu::Dim3u &block_idx = *snap.block_idx;
+  const nvgpu::Dim3u &thread_idx = *snap.thread_idx;
   group.bx.Insert(block_idx.x);
   group.by.Insert(block_idx.y);
   group.bz.Insert(block_idx.z);
@@ -1186,12 +1233,11 @@ static void AccumulateSnapshotIntoGroup(AggregatedThreadGroup &group,
 
 /// Collect per-thread snapshots needed to build groups. Threads without a
 /// register context or PC are dropped here so neither group builder has to
-/// special-case them. Threads with missing, malformed, or incomplete CUDA
-/// metadata are kept with `has_coord == false`: an SM-level fault that no lane
-/// carries is precisely the thread a user must not miss, and malformed
-/// metadata must not hide an otherwise valid thread. List-time filters such as
-/// --exceptions are applied later in the group-building phase by routing
-/// non-matching threads to a synthetic FilteredOut group.
+/// special-case them. Threads without a blockIdx or threadIdx are kept
+/// without coordinates: an SM-level fault that no lane carries is precisely
+/// the thread a user must not miss. List-time filters such as --exceptions
+/// are applied later in the group-building phase by routing non-matching
+/// threads to a synthetic FilteredOut group.
 static llvm::SmallVector<ThreadSnapshot, 64>
 CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
   // Snapshot the list of threads under the list lock, then iterate them
@@ -1210,13 +1256,7 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
       threads.push_back(thread_list.GetThreadAtIndex(i));
   }
 
-  // The errorPC RegisterInfo is identical across every NVGPU thread because
-  // they all share the SASS register layout. Look it up once on the first
-  // valid register context and reuse the pointer for every subsequent
-  // thread instead of a string scan per thread. nullopt = not yet looked up;
-  // a populated nullptr = looked up but the register isn't exposed.
-  std::optional<const RegisterInfo *> err_pc_info;
-
+  CUDARegisterReader cuda_registers;
   llvm::SmallVector<ThreadSnapshot, 64> snapshots;
   snapshots.reserve(threads.size());
 
@@ -1237,31 +1277,26 @@ CollectThreadSnapshots(Process &process, bool only_threads_with_stop_reason) {
     if (pc == LLDB_INVALID_ADDRESS)
       continue;
 
-    if (!err_pc_info)
-      err_pc_info = reg_ctx_sp->GetRegisterInfoByName("errorPC");
-
     ThreadSnapshot snap;
     snap.thread_sp = thread_sp;
-    snap.coord = GetThreadCoords(*thread_sp);
-    snap.has_coord = snap.coord.logical.block_idx.has_value() &&
-                     snap.coord.logical.thread_idx.has_value();
+    // A thread without a threadIdx gets no coordinate range whatever its
+    // blockIdx, so skip that read: it costs a packet when lldb-server could
+    // not send the value, as at a module-load stop.
+    snap.thread_idx = cuda_registers.ReadThreadIdx(*reg_ctx_sp);
+    if (snap.thread_idx)
+      snap.block_idx = cuda_registers.ReadBlockIdx(*reg_ctx_sp);
     snap.pc = pc;
-    if (*err_pc_info) {
-      RegisterValue val;
-      if (reg_ctx_sp->ReadRegister(*err_pc_info, val)) {
-        lldb::addr_t err_pc =
-            val.GetAsUInt64(/*fail_value=*/LLDB_INVALID_ADDRESS);
-        // The backend reports errorPC == 0 for warps that are not at a fault.
-        // Treat that as "no errorPC" so those threads fall back to their
-        // per-thread PC instead of all collapsing onto address 0x0.
-        if (err_pc != 0)
-          snap.error_pc = err_pc;
-      }
-    }
     if (stop_info_sp) {
       snap.stop_reason = stop_info_sp->GetStopReason();
       snap.stop_value = stop_info_sp->GetValue();
     }
+    // errorPC locates the fault for the threads that raised it, the threads
+    // stopped by an exception. lldb-server sends errorPC only for those, so
+    // reading it for any other thread would cost a packet that fails. A core
+    // file gives every lane of a faulting warp the warp's errorPC; lanes that
+    // did not raise the exception are grouped at their own PC there too.
+    if (snap.stop_reason == lldb::eStopReasonException)
+      snap.error_pc = cuda_registers.ReadErrorPC(*reg_ctx_sp);
     snapshots.push_back(std::move(snap));
   }
   return snapshots;
@@ -1342,7 +1377,7 @@ BuildGroupKey(const ThreadSnapshot &snap, const ResolvedLocation &loc,
 
   key.stop_reason = snap.stop_reason;
   key.stop_value = snap.stop_value;
-  key.has_coord = snap.has_coord;
+  key.has_coord = snap.HasCoord();
 
   ConstString fn = loc.sc.GetFunctionName(Mangled::ePreferDemangled);
   llvm::StringRef fn_ref = fn.GetStringRef();
@@ -1581,27 +1616,39 @@ lldb::ThreadSP PlatformNVGPU::FindGPUThread(Process &process,
     selected_thread_sp = thread_list.GetSelectedThread();
   }
 
+  CUDARegisterReader cuda_registers;
   std::optional<nvgpu::Dim3u> inherited_block_idx;
   std::optional<nvgpu::Dim3u> inherited_thread_idx;
   if (selected_thread_sp && block_idx.IsEmpty() != thread_idx.IsEmpty()) {
-    nvgpu::ThreadCoords selected_coords =
-        GetThreadCoords(*selected_thread_sp);
-    if (block_idx.IsEmpty())
-      inherited_block_idx = selected_coords.logical.block_idx;
-    else
-      inherited_thread_idx = selected_coords.logical.thread_idx;
+    if (RegisterContextSP reg_ctx_sp =
+            selected_thread_sp->GetRegisterContext()) {
+      if (block_idx.IsEmpty())
+        inherited_block_idx = cuda_registers.ReadBlockIdx(*reg_ctx_sp);
+      else
+        inherited_thread_idx = cuda_registers.ReadThreadIdx(*reg_ctx_sp);
+    }
   }
 
+  // A group that neither the pattern nor the selected thread constrains
+  // matches any thread, so its register is not read.
+  const bool match_block = inherited_block_idx || !block_idx.IsEmpty();
+  const bool match_thread = inherited_thread_idx || !thread_idx.IsEmpty();
   for (const ThreadSP &thread_sp : threads) {
     if (!thread_sp)
       continue;
+    RegisterContextSP reg_ctx_sp = thread_sp->GetRegisterContext();
+    if (!reg_ctx_sp)
+      continue;
 
-    nvgpu::ThreadCoords coords = GetThreadCoords(*thread_sp);
-    if (CoordinateGroupMatches(coords.logical.block_idx, block_idx,
-                               inherited_block_idx) &&
-        CoordinateGroupMatches(coords.logical.thread_idx, thread_idx,
-                               inherited_thread_idx))
-      return thread_sp;
+    if (match_block &&
+        !CoordinateGroupMatches(cuda_registers.ReadBlockIdx(*reg_ctx_sp),
+                                block_idx, inherited_block_idx))
+      continue;
+    if (match_thread &&
+        !CoordinateGroupMatches(cuda_registers.ReadThreadIdx(*reg_ctx_sp),
+                                thread_idx, inherited_thread_idx))
+      continue;
+    return thread_sp;
   }
 
   return nullptr;

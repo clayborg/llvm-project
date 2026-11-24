@@ -1234,9 +1234,8 @@ protected:
         return;
       }
 
-      // Pass the requested patterns unchanged. The GPU platform
-      // applies any selected-thread coordinate inheritance from typed thread
-      // metadata.
+      // Pass the requested patterns unchanged. The GPU platform applies any
+      // inheritance of coordinates from the selected thread.
       ThreadSP new_thread_sp = platform_sp->FindGPUThread(
           *process, m_options.m_block_idx, m_options.m_thread_idx);
       if (!new_thread_sp) {
