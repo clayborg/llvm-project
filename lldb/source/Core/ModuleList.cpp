@@ -939,7 +939,11 @@ private:
 
   /// Call \p fn on each list of indexed modules that can match \p spec: the
   /// one at its offset for a slice lookup (see IsSliceLookup), otherwise all
-  /// of them.
+  /// of them in the order their offsets were first added. The modules then
+  /// come grouped by offset, not in the order they were added, so a spec
+  /// that matches several modules may not get the earliest-added one first.
+  /// An offset left without modules keeps its place until
+  /// RemoveOrphansFromMapAndList drops it.
   template <typename Map, typename Fn>
   static void ForEachCandidateList(Map &by_offset, const ModuleSpec &spec,
                                    Fn fn) {
