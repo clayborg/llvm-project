@@ -158,6 +158,16 @@ public:
   virtual Status WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                              size_t &bytes_written) = 0;
 
+  /// Plugins that can write to their address spaces override this. The others
+  /// error on a non-default one.
+  virtual Status WriteMemory(const ProcessAddress &addr, const void *buf,
+                             size_t size, size_t &bytes_written) {
+    if (!addr.IsInDefaultAddressSpace())
+      return Status::FromErrorString(
+          "writing to non-default address spaces is not supported");
+    return WriteMemory(addr.GetValue(), buf, size, bytes_written);
+  }
+
   virtual llvm::Expected<lldb::addr_t> AllocateMemory(size_t size,
                                                       uint32_t permissions) {
     return llvm::make_error<UnimplementedError>();

@@ -858,17 +858,18 @@ needed for targets that don't need address spaces.
 A server advertises `address-spaces+` in its `qSupported` response when its
 process exposes address spaces. This single feature implies both the
 `jAddressSpacesInfo` packet and the optional `address_space:<hex-id>;` suffix on
-the memory packets described below.
+the memory read packets described below. The suffix on the memory write packet
+has a feature of its own, `address-space-writes+`.
 
 ### The `address_space` suffix
 
-To read from a specific address space, the client appends an optional
-`address_space:<hex-id>;` key-value suffix to the existing memory packets rather
-than introducing a dedicated packet, where `<hex-id>` is the address space id
-reported by `jAddressSpacesInfo`, in base 16 like the other numeric values in
-these packets. An id of `0`, or the absence of the suffix, means the default
-address space and behaves exactly as before, so address-space-unaware stubs and
-reads are unaffected.
+To read from or write to a specific address space, the client appends an
+optional `address_space:<hex-id>;` key-value suffix to the existing memory
+packets rather than introducing a dedicated packet, where `<hex-id>` is the
+address space id reported by `jAddressSpacesInfo`, in base 16 like the other
+numeric values in these packets. An id of `0`, or the absence of the suffix,
+means the default address space and behaves exactly as before, so
+address-space-unaware stubs, reads and writes are unaffected.
 
 ```
 send packet: $x1000,4;address_space:1a;
@@ -884,13 +885,34 @@ send packet: $x1000,4;address_space:1a;thread:1a2b;
 read packet: $<binary encoding of the 4 bytes at 0x1000 in address space 0x1a of thread 0x1a2b>
 ```
 
+A write carries the suffix after its data:
+
+```
+send packet: $M1000,4:aabbccdd;address_space:1a;thread:1a2b;
+read packet: $OK
+```
+
+A server that accepts the suffix on `M` advertises `address-space-writes+` in
+its `qSupported` response, beside `address-spaces+`. The client sends the
+suffix on `M` only to such a server, and fails the write otherwise: a server
+that ignored the suffix would write to the default address space, which changes
+the wrong memory and reports success.
+
+A server that advertises `address-space-writes+` but can only read from its
+address spaces replies to a write to one with an error. It must also reject an
+`M` packet whose data is longer than its length field, since the suffix would
+otherwise be taken for part of the excess. When a write to an address space
+fails, the server replies with the reason (`E<xx>;<hex-encoded message>`, if
+the client enabled error strings), and the client reports it.
+
 Packets that currently accept the suffix:
 
 * `m` / `x`: read memory from a specific address space.
+* `M`: write memory to a specific address space (`address-space-writes+`).
 
 Because the suffix is an optional key-value pair on the existing packets, the
-same mechanism can be extended to other address-bearing packets (memory writes
-`M` / `X`, breakpoints `z` / `Z`, etc.) as the need arises, without introducing
+same mechanism can be extended to other address-bearing packets (binary memory
+writes `X`, breakpoints `z` / `Z`, etc.) as the need arises, without introducing
 new packets or bifurcating the address-space-aware and unaware code paths.
 
 **Priority To Implement:** Required for targets that expose more than one

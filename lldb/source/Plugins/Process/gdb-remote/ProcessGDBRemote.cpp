@@ -3324,15 +3324,41 @@ void ProcessGDBRemote::WillPublicStop() {
 }
 
 // Process Memory
+llvm::Expected<std::string>
+ProcessGDBRemote::GetAddressSpaceSuffix(const ProcessAddress &process_addr) {
+  const lldb::addr_space_t addr_space = process_addr.GetAddressSpace();
+  if (addr_space == LLDB_DEFAULT_ADDRESS_SPACE_ID)
+    return std::string();
+  if (!m_gdb_comm.GetAddressSpacesSupported())
+    return llvm::createStringError("address spaces are not supported");
+
+  llvm::Expected<AddressSpaceInfo> info = GetAddressSpaceInfo(addr_space);
+  if (!info)
+    return info.takeError();
+  std::string suffix =
+      llvm::formatv(";address_space:{0};", llvm::utohexstr(addr_space, true));
+  if (info->is_thread_specific) {
+    std::optional<lldb::tid_t> tid = process_addr.GetThreadID();
+    if (!tid)
+      return llvm::createStringError(
+          "address space \"%s\" is thread specific, but no thread was "
+          "specified",
+          info->name.c_str());
+    suffix += llvm::formatv("thread:{0};", llvm::utohexstr(*tid, true));
+  }
+  return suffix;
+}
+
 size_t ProcessGDBRemote::DoReadMemory(const ProcessAddress &process_addr,
                                       void *buf, size_t size, Status &error) {
   using xPacketState = GDBRemoteCommunicationClient::xPacketState;
 
   lldb::addr_t addr = process_addr.GetValue();
-  lldb::addr_space_t addr_space = process_addr.GetAddressSpace();
-  if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE_ID &&
-      !m_gdb_comm.GetAddressSpacesSupported()) {
-    error = Status::FromErrorString("address spaces are not supported");
+  // A non-default address space rides on an "address_space:<hex-id>;" suffix,
+  // followed by "thread:<hex-tid>;" when that space is thread specific.
+  llvm::Expected<std::string> suffix = GetAddressSpaceSuffix(process_addr);
+  if (!suffix) {
+    error = Status::FromError(suffix.takeError());
     return 0;
   }
 
@@ -3350,35 +3376,11 @@ size_t ProcessGDBRemote::DoReadMemory(const ProcessAddress &process_addr,
     size = max_memory_size;
   }
 
-  // A non-default address space rides on an "address_space:<hex-id>;" suffix,
-  // followed by "thread:<hex-tid>;" when that space is thread specific.
-  std::string suffix;
-  if (addr_space != LLDB_DEFAULT_ADDRESS_SPACE_ID) {
-    llvm::Expected<AddressSpaceInfo> info = GetAddressSpaceInfo(addr_space);
-    if (!info) {
-      error = Status::FromError(info.takeError());
-      return 0;
-    }
-    suffix =
-        llvm::formatv(";address_space:{0};", llvm::utohexstr(addr_space, true));
-    if (info->is_thread_specific) {
-      std::optional<lldb::tid_t> tid = process_addr.GetThreadID();
-      if (!tid) {
-        error = Status::FromErrorStringWithFormat(
-            "address space \"%s\" is thread specific, but no thread was "
-            "specified",
-            info->name.c_str());
-        return 0;
-      }
-      suffix += llvm::formatv("thread:{0};", llvm::utohexstr(*tid, true));
-    }
-  }
-
   char packet[128];
   int packet_len =
       ::snprintf(packet, sizeof(packet), "%c%" PRIx64 ",%" PRIx64 "%s",
                  x_state != xPacketState::Unimplemented ? 'x' : 'm',
-                 (uint64_t)addr, (uint64_t)size, suffix.c_str());
+                 (uint64_t)addr, (uint64_t)size, suffix->c_str());
   assert(packet_len + 1 < (int)sizeof(packet));
   UNUSED_IF_ASSERT_DISABLED(packet_len);
   StringExtractorGDBRemote response;
@@ -3706,9 +3708,39 @@ Status ProcessGDBRemote::FlashDone() {
 
 size_t ProcessGDBRemote::DoWriteMemory(addr_t addr, const void *buf,
                                        size_t size, Status &error) {
+  return DoWriteMemory(ProcessAddress(addr), buf, size, error);
+}
+
+size_t ProcessGDBRemote::DoWriteMemory(const ProcessAddress &process_addr,
+                                       const void *buf, size_t size,
+                                       Status &error) {
+  const addr_t addr = process_addr.GetValue();
+  // A non-default address space rides on the same suffix as in the read
+  // packets, after the data.
+  llvm::Expected<std::string> suffix = GetAddressSpaceSuffix(process_addr);
+  if (!suffix) {
+    error = Status::FromError(suffix.takeError());
+    return 0;
+  }
+  // A server that does not take the suffix on M ignores it, and writes to the
+  // default address space.
+  if (!suffix->empty() && !m_gdb_comm.GetAddressSpaceWritesSupported()) {
+    error = Status::FromErrorString(
+        "the remote does not support writing to address spaces");
+    return 0;
+  }
+
   GetMaxMemorySize();
-  // M and m packets take 2 bytes for 1 byte of memory
-  size_t max_memory_size = m_max_memory_size / 2;
+  // M and m packets take 2 bytes for 1 byte of memory, and the suffix takes
+  // its share of the packet first.
+  const uint64_t suffix_size =
+      std::min<uint64_t>(suffix->size(), m_max_memory_size);
+  size_t max_memory_size = (m_max_memory_size - suffix_size) / 2;
+  if (max_memory_size == 0) {
+    error = Status::FromErrorString(
+        "the remote's packet size is too small to write memory");
+    return 0;
+  }
   if (size > max_memory_size) {
     // Keep memory read sizes down to a sane limit. This function will be
     // called multiple times in order to complete the task by
@@ -3718,11 +3750,14 @@ size_t ProcessGDBRemote::DoWriteMemory(addr_t addr, const void *buf,
 
   StreamGDBRemote packet;
 
+  // Memory regions, and so flash memory, describe the default address space.
   MemoryRegionInfo region;
-  Status region_status = GetMemoryRegionInfo(addr, region);
-
-  bool is_flash =
-      region_status.Success() && region.GetFlash() == MemoryRegionInfo::eYes;
+  bool is_flash = false;
+  if (process_addr.IsInDefaultAddressSpace()) {
+    Status region_status = GetMemoryRegionInfo(addr, region);
+    is_flash =
+        region_status.Success() && region.GetFlash() == MemoryRegionInfo::eYes;
+  }
 
   if (is_flash) {
     if (!m_allow_flash_writes) {
@@ -3742,6 +3777,7 @@ size_t ProcessGDBRemote::DoWriteMemory(addr_t addr, const void *buf,
     packet.Printf("M%" PRIx64 ",%" PRIx64 ":", addr, (uint64_t)size);
     packet.PutBytesAsRawHex8(buf, size, endian::InlHostByteOrder(),
                              endian::InlHostByteOrder());
+    packet.PutCString(*suffix);
   }
   StringExtractorGDBRemote response;
   if (m_gdb_comm.SendPacketAndWaitForResponse(packet.GetString(), response,
@@ -3750,10 +3786,15 @@ size_t ProcessGDBRemote::DoWriteMemory(addr_t addr, const void *buf,
     if (response.IsOKResponse()) {
       error.Clear();
       return size;
-    } else if (response.IsErrorResponse())
-      error = Status::FromErrorStringWithFormat(
-          "memory write failed for 0x%" PRIx64, addr);
-    else if (response.IsUnsupportedResponse())
+    } else if (response.IsErrorResponse()) {
+      // The remote sends its reason when a write to an address space fails,
+      // such as that it can only read from its address spaces.
+      if (suffix->empty())
+        error = Status::FromErrorStringWithFormat(
+            "memory write failed for 0x%" PRIx64, addr);
+      else
+        error = response.GetStatus();
+    } else if (response.IsUnsupportedResponse())
       error = Status::FromErrorStringWithFormat(
           "GDB server does not support writing memory");
     else

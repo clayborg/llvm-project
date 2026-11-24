@@ -2706,6 +2706,42 @@ GDBRemoteCommunicationServerLLGS::Handle_interrupt(
   return PacketResult::Success;
 }
 
+/// Parse the optional suffix that gives a memory packet its address space:
+/// ";address_space:<hex-id>;", followed by "thread:<hex-tid>;" for a thread
+/// specific address space (see the "address-spaces" feature).
+///
+/// \param[in] packet
+///     The packet, read up to the end of its other fields.
+///
+/// \param[out] address_space
+///     The address space that the suffix names. Unchanged if there is no
+///     suffix.
+///
+/// \param[out] tid
+///     The thread that the suffix names. Unchanged if it names none.
+///
+/// \return
+///     An error if a value in the suffix is not a hex number.
+static llvm::Error ParseAddressSpaceSuffix(StringExtractorGDBRemote &packet,
+                                           lldb::addr_space_t &address_space,
+                                           std::optional<lldb::tid_t> &tid) {
+  if (packet.GetBytesLeft() == 0 || packet.GetChar() != ';')
+    return llvm::Error::success();
+
+  llvm::StringRef name, value;
+  while (packet.GetNameColonValue(name, value)) {
+    if (name == "address_space" && value.getAsInteger(16, address_space))
+      return llvm::createStringError("invalid address_space suffix");
+    if (name == "thread") {
+      lldb::tid_t parsed_tid = LLDB_INVALID_THREAD_ID;
+      if (value.getAsInteger(16, parsed_tid))
+        return llvm::createStringError("invalid thread suffix");
+      tid = parsed_tid;
+    }
+  }
+  return llvm::Error::success();
+}
+
 GDBRemoteCommunication::PacketResult
 GDBRemoteCommunicationServerLLGS::Handle_memory_read(
     StringExtractorGDBRemote &packet) {
@@ -2751,20 +2787,10 @@ GDBRemoteCommunicationServerLLGS::Handle_memory_read(
   // thread specific address space (see the "address-spaces" feature).
   lldb::addr_space_t address_space = LLDB_DEFAULT_ADDRESS_SPACE_ID;
   std::optional<lldb::tid_t> tid;
-  if (m_address_space_suffix_supported && packet.GetBytesLeft() > 0 &&
-      packet.GetChar() == ';') {
-    llvm::StringRef name, value;
-    while (packet.GetNameColonValue(name, value)) {
-      if (name == "address_space" && value.getAsInteger(16, address_space))
-        return SendIllFormedResponse(packet, "invalid address_space suffix");
-      if (name == "thread") {
-        lldb::tid_t parsed_tid = LLDB_INVALID_THREAD_ID;
-        if (value.getAsInteger(16, parsed_tid))
-          return SendIllFormedResponse(packet, "invalid thread suffix");
-        tid = parsed_tid;
-      }
-    }
-  }
+  if (m_address_space_suffix_supported)
+    if (llvm::Error err = ParseAddressSpaceSuffix(packet, address_space, tid))
+      return SendIllFormedResponse(packet,
+                                   llvm::toString(std::move(err)).c_str());
 
   // Allocate the response buffer.
   std::string buf(byte_count, '\0');
@@ -2935,10 +2961,42 @@ GDBRemoteCommunicationServerLLGS::Handle_M(StringExtractorGDBRemote &packet) {
                                          "length");
   }
 
+  // Optional address space suffix, as on the memory read packets. It follows
+  // the data, so where it is supported nothing else may: data longer than the
+  // packet's length would hide the suffix, and the write would go to the
+  // default address space.
+  lldb::addr_space_t address_space = LLDB_DEFAULT_ADDRESS_SPACE_ID;
+  std::optional<lldb::tid_t> tid;
+  if (m_address_space_suffix_supported) {
+    if (packet.GetBytesLeft() > 0 && packet.PeekChar() != ';')
+      return SendIllFormedResponse(
+          packet, "M content longer than the specified byte length");
+    if (llvm::Error err = ParseAddressSpaceSuffix(packet, address_space, tid))
+      return SendIllFormedResponse(packet,
+                                   llvm::toString(std::move(err)).c_str());
+  }
+
   // Write the process memory.
   size_t bytes_written = 0;
-  Status error = m_current_process->WriteMemory(write_addr, &buf[0], byte_count,
-                                                bytes_written);
+  Status error = m_current_process->WriteMemory(
+      ProcessAddress(write_addr, address_space, tid), &buf[0], byte_count,
+      bytes_written);
+  if (address_space != LLDB_DEFAULT_ADDRESS_SPACE_ID) {
+    // Only the process plugin knows why a write to one of its address spaces
+    // failed, so send its reason instead of an error code. A short write
+    // fails too, since the reply cannot say how much was written.
+    if (error.Success() && bytes_written != byte_count)
+      error = Status::FromErrorString("could not write all requested bytes");
+    if (error.Fail()) {
+      LLDB_LOG(log,
+               "pid {0} mem {1:x} address_space {2}: failed to write. Error: "
+               "{3}",
+               m_current_process->GetID(), write_addr, address_space, error);
+      return SendErrorResponse(error);
+    }
+    return SendOKResponse();
+  }
+
   if (error.Fail()) {
     LLDB_LOG(log, "pid {0} mem {1:x}: failed to write. Error: {2}",
              m_current_process->GetID(), write_addr, error);
@@ -4792,6 +4850,9 @@ std::vector<std::string> GDBRemoteCommunicationServerLLGS::HandleFeatures(
     ret.push_back("lldb-settings+");
   if (bool(plugin_features & Extension::address_spaces)) {
     ret.push_back("address-spaces+");
+    // A feature of its own, because a server built before M took the suffix
+    // advertises "address-spaces+" too, and ignores the suffix there.
+    ret.push_back("address-space-writes+");
     m_address_space_suffix_supported = true;
   }
 

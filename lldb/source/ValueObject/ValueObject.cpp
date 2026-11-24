@@ -845,8 +845,12 @@ bool ValueObject::SetData(DataExtractor &data, Status &error) {
       size_t bytes_written = 0;
       std::optional<lldb::addr_space_t> addr_space = m_value.GetAddressSpace();
       if (addr_space.has_value() && *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
-        error =
-            Status::FromErrorString("writing to address space not implemented");
+        std::optional<lldb::tid_t> tid;
+        if (Thread *thread = exe_ctx.GetThreadPtr())
+          tid = thread->GetID();
+        bytes_written =
+            process->WriteMemory(ProcessAddress(target_addr, *addr_space, tid),
+                                 data.GetDataStart(), byte_size, error);
       } else {
         bytes_written = process->WriteMemory(target_addr, data.GetDataStart(),
                                              byte_size, error);
@@ -1747,8 +1751,12 @@ bool ValueObject::SetValueFromCString(const char *value_str, Status &error) {
               m_value.GetAddressSpace();
           if (addr_space.has_value() &&
               *addr_space != LLDB_DEFAULT_ADDRESS_SPACE) {
-            error = Status::FromErrorString(
-                "writing to address space not implemented");
+            std::optional<lldb::tid_t> tid;
+            if (Thread *thread = exe_ctx.GetThreadPtr())
+              tid = thread->GetID();
+            bytes_written = process->WriteScalarToMemory(
+                ProcessAddress(target_addr, *addr_space, tid), new_scalar,
+                byte_size, error);
           } else {
             bytes_written = process->WriteScalarToMemory(
                 target_addr, new_scalar, byte_size, error);

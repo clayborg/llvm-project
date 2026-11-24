@@ -814,7 +814,7 @@ let Command = "memory read" in {
       : Option<"force", "r">,
         Groups<[1, 2, 3]>,
         Desc<"Necessary if reading over target.max-memory-read-size bytes.">;
-  def memory_space : Option<"space", "p">, Groups<[1,2,3,4]>, Arg<"Name">,
+  def memory_read_space : Option<"space", "p">, Groups<[1,2,3,4]>, Arg<"Name">,
     Desc<"The name of the address space to read from.">;
 }
 
@@ -851,6 +851,8 @@ let Command = "memory write" in {
         Group<1>,
         Arg<"Offset">,
         Desc<"Start writing bytes from an offset within the input file.">;
+  def memory_write_space : Option<"space", "p">, Group<2>, Arg<"Name">,
+    Desc<"The name of the address space to write to.">;
 }
 
 let Command = "memory region" in {

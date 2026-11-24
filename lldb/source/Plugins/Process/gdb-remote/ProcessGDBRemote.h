@@ -181,6 +181,12 @@ public:
                    llvm::MutableArrayRef<uint8_t> buf) override;
 
 private:
+  /// Get the ";address_space:<hex-id>;[thread:<hex-tid>;]" suffix that selects
+  /// the address space of \a process_addr in a memory packet. It is empty for
+  /// the default address space.
+  llvm::Expected<std::string>
+  GetAddressSpaceSuffix(const ProcessAddress &process_addr);
+
   llvm::Expected<StringExtractorGDBRemote>
   SendMultiMemReadPacket(llvm::ArrayRef<Range<lldb::addr_t, size_t>> ranges);
 
@@ -195,6 +201,9 @@ public:
 
   size_t DoWriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                        Status &error) override;
+
+  size_t DoWriteMemory(const ProcessAddress &process_addr, const void *buf,
+                       size_t size, Status &error) override;
 
   lldb::addr_t DoAllocateMemory(size_t size, uint32_t permissions,
                                 Status &error) override;

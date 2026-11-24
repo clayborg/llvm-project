@@ -1237,6 +1237,10 @@ public:
         }
       } break;
 
+      case 'p':
+        error = m_address_space.SetValueFromString(option_value);
+        break;
+
       default:
         llvm_unreachable("Unimplemented option");
       }
@@ -1246,10 +1250,14 @@ public:
     void OptionParsingStarting(ExecutionContext *execution_context) override {
       m_infile.Clear();
       m_infile_offset = 0;
+      m_address_space.Clear();
+      // Update the address space baton to the execution context process.
+      m_address_space.SetValidatorBaton(execution_context->GetProcessPtr());
     }
 
     FileSpec m_infile;
     off_t m_infile_offset;
+    OptionValueString m_address_space{MemorySpaceValidator};
   };
 
   CommandObjectMemoryWrite(CommandInterpreter &interpreter)
@@ -1297,7 +1305,12 @@ public:
     m_option_group.Append(&m_format_options,
                           OptionGroupFormat::OPTION_GROUP_SIZE,
                           LLDB_OPT_SET_1 | LLDB_OPT_SET_2);
-    m_option_group.Append(&m_memory_options, LLDB_OPT_SET_ALL, LLDB_OPT_SET_2);
+    // The infile/offset options only apply when writing file contents
+    // (set 2), while the address space option applies to both writing values
+    // (set 1) and writing file contents (set 2).
+    m_option_group.Append(&m_memory_options, LLDB_OPT_SET_1, LLDB_OPT_SET_2);
+    m_option_group.Append(&m_memory_options, LLDB_OPT_SET_2,
+                          LLDB_OPT_SET_1 | LLDB_OPT_SET_2);
     m_option_group.Finalize();
   }
 
@@ -1310,6 +1323,27 @@ protected:
     // No need to check "process" for validity as eCommandRequiresProcess
     // ensures it is valid
     Process *process = m_exe_ctx.GetProcessPtr();
+
+    // Write helper that routes through an address space when --space is set
+    auto write_memory = [&](lldb::addr_t write_addr, const void *buf,
+                            size_t size, Status &error) -> size_t {
+      if (m_memory_options.m_address_space.OptionWasSet()) {
+        llvm::Expected<AddressSpaceInfo> info = process->GetAddressSpaceInfo(
+            m_memory_options.m_address_space.GetCurrentValueAsRef());
+        if (!info) {
+          error = Status::FromError(info.takeError());
+          return 0;
+        }
+
+        // Store the thread in case the address space is thread specific.
+        std::optional<lldb::tid_t> tid;
+        if (Thread *thread = m_exe_ctx.GetThreadPtr())
+          tid = thread->GetID();
+        return process->WriteMemory(
+            ProcessAddress(write_addr, info->space_id, tid), buf, size, error);
+      }
+      return process->WriteMemory(write_addr, buf, size, error);
+    };
 
     const size_t argc = command.GetArgumentCount();
 
@@ -1363,7 +1397,7 @@ protected:
         if (length > 0) {
           Status error;
           size_t bytes_written =
-              process->WriteMemory(addr, data_sp->GetBytes(), length, error);
+              write_memory(addr, data_sp->GetBytes(), length, error);
 
           if (bytes_written == length) {
             // All bytes written
@@ -1496,7 +1530,7 @@ protected:
         if (m_format_options.GetFormat() == eFormatCString)
           ++len;
         Status error;
-        if (process->WriteMemory(addr, entry.c_str(), len, error) == len) {
+        if (write_memory(addr, entry.c_str(), len, error) == len) {
           addr += len;
         } else {
           result.AppendErrorWithFormat("Memory write to 0x%" PRIx64
@@ -1560,7 +1594,7 @@ protected:
       const char *buffer_data = buffer.GetString().data();
       const size_t buffer_size = buffer.GetString().size();
       const size_t write_size =
-          process->WriteMemory(addr, buffer_data, buffer_size, error);
+          write_memory(addr, buffer_data, buffer_size, error);
 
       if (write_size != buffer_size) {
         result.AppendErrorWithFormat("Memory write to 0x%" PRIx64

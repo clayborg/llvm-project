@@ -308,6 +308,7 @@ void GDBRemoteCommunicationClient::ResetDiscoverableSettings(bool did_exec) {
     m_avoid_g_packets = eLazyBoolCalculate;
     m_supports_multiprocess = eLazyBoolCalculate;
     m_supports_address_spaces = false;
+    m_supports_address_space_writes = false;
     m_supports_qSaveCore = eLazyBoolCalculate;
     m_supports_qXfer_auxv_read = eLazyBoolCalculate;
     m_supports_qXfer_libraries_read = eLazyBoolCalculate;
@@ -377,6 +378,7 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
   m_supports_memory_tagging = eLazyBoolNo;
   m_supports_qSaveCore = eLazyBoolNo;
   m_supports_address_spaces = false;
+  m_supports_address_space_writes = false;
   m_uses_native_signals = eLazyBoolNo;
   m_x_packet_state.reset();
   m_supports_reverse_continue = eLazyBoolNo;
@@ -436,6 +438,8 @@ void GDBRemoteCommunicationClient::GetRemoteQSupported() {
         m_supports_qSaveCore = eLazyBoolYes;
       else if (x == "address-spaces+")
         m_supports_address_spaces = true;
+      else if (x == "address-space-writes+")
+        m_supports_address_space_writes = true;
       else if (x == "native-signals+")
         m_uses_native_signals = eLazyBoolYes;
       else if (x == "binary-upload+")

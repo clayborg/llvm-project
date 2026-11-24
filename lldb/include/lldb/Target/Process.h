@@ -1800,6 +1800,10 @@ public:
   size_t WriteScalarToMemory(lldb::addr_t vm_addr, const Scalar &scalar,
                              size_t size, Status &error);
 
+  /// Write a scalar as above, to the address space of \a process_addr.
+  size_t WriteScalarToMemory(const ProcessAddress &process_addr,
+                             const Scalar &scalar, size_t size, Status &error);
+
   size_t ReadScalarIntegerFromMemory(lldb::addr_t addr, uint32_t byte_size,
                                      bool is_signed, Scalar &scalar,
                                      Status &error);
@@ -1830,6 +1834,33 @@ public:
   // TODO: change this to take an ArrayRef<uint8_t>
   size_t WriteMemory(lldb::addr_t vm_addr, const void *buf, size_t size,
                      Status &error);
+
+  /// Write memory to a process, in the address space of \a process_addr.
+  ///
+  /// A write to the default address space is the write above. A write to any
+  /// other address space does not maintain software breakpoints.
+  ///
+  /// Subclasses that support writes to non-default address spaces override
+  /// the ProcessAddress overload of DoWriteMemory.
+  ///
+  /// \param[in] process_addr
+  ///     The address to start writing memory to, with its address space
+  ///     and, for a thread specific address space, its thread.
+  ///
+  /// \param[in] buf
+  ///     A byte buffer that is at least \a size bytes long that
+  ///     contains the data to write.
+  ///
+  /// \param[in] size
+  ///     The number of bytes to write.
+  ///
+  /// \param[out] error
+  ///     An error value in case the memory write fails.
+  ///
+  /// \return
+  ///     The number of bytes that were actually written.
+  size_t WriteMemory(const ProcessAddress &process_addr, const void *buf,
+                     size_t size, Status &error);
 
   /// Actually allocate memory in the process.
   ///
@@ -2980,6 +3011,33 @@ protected:
   ///     Zero is returned in the case of an error.
   virtual size_t DoReadMemory(const ProcessAddress &process_addr, void *buf,
                               size_t size, Status &error) = 0;
+
+  /// Actually do the writing of memory to an address space of a process
+  /// other than the default one.
+  ///
+  /// Subclasses that can write to such address spaces override this function
+  /// and can write fewer bytes than requested when memory requests are too
+  /// large. This class will break up the memory requests and keep advancing
+  /// the arguments along as needed.
+  ///
+  /// \param[in] process_addr
+  ///     The address to start writing memory to, with its address space
+  ///     and, for a thread specific address space, its thread.
+  ///
+  /// \param[in] buf
+  ///     A byte buffer that is at least \a size bytes long that
+  ///     contains the data to write.
+  ///
+  /// \param[in] size
+  ///     The number of bytes to write.
+  ///
+  /// \param[out] error
+  ///     An error value in case the memory write fails.
+  ///
+  /// \return
+  ///     The number of bytes that were actually written.
+  virtual size_t DoWriteMemory(const ProcessAddress &process_addr,
+                               const void *buf, size_t size, Status &error);
 
   virtual void DoFindInMemory(lldb::addr_t start_addr, lldb::addr_t end_addr,
                               const uint8_t *buf, size_t size,

@@ -87,7 +87,7 @@ class MemoryWriteTestCase(TestBase):
         self.expect(
             "help memory write",
             substrs=[
-                "memory write [-f <format>] [-s <byte-size>] <address> <value> [<value> [...]]",
-                "memory write -i <filename> [-s <byte-size>] [-o <offset>] <address>",
+                "memory write [-f <format>] [-s <byte-size>] [-p <name>] <address> <value> [<value> [...]]",
+                "memory write -i <filename> [-s <byte-size>] [-o <offset>] [-p <name>] <address>",
             ],
         )

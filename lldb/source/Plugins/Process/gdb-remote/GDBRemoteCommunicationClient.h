@@ -222,6 +222,12 @@ public:
   /// Whether the server advertised address-space support ("address-spaces+").
   bool GetAddressSpacesSupported() const { return m_supports_address_spaces; }
 
+  /// Whether the server takes the address space suffix on memory writes
+  /// ("address-space-writes+").
+  bool GetAddressSpaceWritesSupported() const {
+    return m_supports_address_space_writes;
+  }
+
   void GetRemoteQSupported();
 
   bool GetVContSupported(char flavor);
@@ -616,6 +622,7 @@ protected:
   LazyBool m_supports_multiprocess = eLazyBoolCalculate;
   LazyBool m_supports_memory_tagging = eLazyBoolCalculate;
   bool m_supports_address_spaces = false;
+  bool m_supports_address_space_writes = false;
   LazyBool m_supports_qSaveCore = eLazyBoolCalculate;
   LazyBool m_uses_native_signals = eLazyBoolCalculate;
   std::optional<xPacketState> m_x_packet_state;

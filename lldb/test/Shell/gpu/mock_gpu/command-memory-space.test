@@ -13,6 +13,14 @@
 # RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
 # RUN:        -o "memory read --space Invalid 0x1000" 2>&1 | FileCheck %s --check-prefix=INVALID
 
+# Test memory space writes on GPU target. The mock GPU cannot write to its
+# address spaces, and lldb-server's reason for that shows that it read the
+# address space from the packet: a write to the default address space fails
+# without one.
+# RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
+# RUN:        -o "process plugin packet send 'M1000,1:aabb;address_space:1;'" \
+# RUN:        -o "memory write --space Thread 0x1000 0xaa" 2>&1 | FileCheck %s --check-prefix=WRITE
+
 # Test address space operations on CPU target fail
 # RUN: %lldb -s %s %t.dir/a.out -o "br s -p \"// CPU BREAKPOINT\"" -o run \
 # RUN:        -o "target select 0" \
@@ -29,6 +37,15 @@
 # Test invalid memory space name should fail  
 # INVALID-LABEL: memory read --space Invalid 0x1000
 # INVALID: error: invalid address space "Invalid", expected one of: Global, Thread
+
+# Test a write with more data than its length should be rejected, because the
+# excess would hide the address space
+# WRITE-LABEL: process plugin packet send 'M1000,1:aabb;address_space:1;'
+# WRITE: response: E03
+
+# Test GPU Thread memory space write should fail with lldb-server's reason
+# WRITE-LABEL: memory write --space Thread 0x1000 0xaa
+# WRITE: error: Memory write to 0x1000 failed: writing to non-default address spaces is not supported.
 
 # Test CPU process doesn't support memory space operations
 # CPU-LABEL: target select 0

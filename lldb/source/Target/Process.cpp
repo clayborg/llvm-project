@@ -1930,6 +1930,51 @@ Status Process::DisableSoftwareBreakpoint(BreakpointSite *bp_site) {
   return error;
 }
 
+size_t Process::WriteMemory(const ProcessAddress &process_addr, const void *buf,
+                            size_t size, Status &error) {
+  error.Clear();
+  if (process_addr.IsInDefaultAddressSpace())
+    return WriteMemory(process_addr.GetValue(), buf, size, error);
+
+  llvm::Expected<AddressSpaceInfo> info =
+      GetAddressSpaceInfo(process_addr.GetAddressSpace());
+  if (!info) {
+    error = Status::FromError(info.takeError());
+    return 0;
+  }
+
+  if (buf == nullptr || size == 0)
+    return 0;
+
+  // Non-default writes may alias the cached default space.
+  // LLDB has no alias model, so clear it conservatively. Bump the memory ID
+  // separately to invalidate ValueObjects that cache evaluated values.
+  m_memory_cache.Clear();
+  m_mod_id.BumpMemoryID();
+
+  size_t bytes_written = 0;
+  const uint8_t *bytes = static_cast<const uint8_t *>(buf);
+  while (bytes_written < size) {
+    const size_t curr_size = size - bytes_written;
+    ProcessAddress curr_process_addr(process_addr.GetValue() + bytes_written,
+                                     process_addr.GetAddressSpace(),
+                                     process_addr.GetThreadID());
+    const size_t curr_bytes_written = DoWriteMemory(
+        curr_process_addr, bytes + bytes_written, curr_size, error);
+    bytes_written += curr_bytes_written;
+    if (curr_bytes_written == curr_size || curr_bytes_written == 0)
+      break;
+  }
+  return bytes_written;
+}
+
+size_t Process::DoWriteMemory(const ProcessAddress &process_addr,
+                              const void *buf, size_t size, Status &error) {
+  error = Status::FromErrorString(
+      "writing to non-default address spaces is not supported");
+  return 0;
+}
+
 // Uncomment to verify memory caching works after making changes to caching
 // code
 //#define VERIFY_MEMORY_READS
@@ -2459,6 +2504,12 @@ size_t Process::WriteMemory(addr_t addr, const void *buf, size_t size,
 
 size_t Process::WriteScalarToMemory(addr_t addr, const Scalar &scalar,
                                     size_t byte_size, Status &error) {
+  return WriteScalarToMemory(ProcessAddress(addr), scalar, byte_size, error);
+}
+
+size_t Process::WriteScalarToMemory(const ProcessAddress &process_addr,
+                                    const Scalar &scalar, size_t byte_size,
+                                    Status &error) {
   if (byte_size == UINT32_MAX)
     byte_size = scalar.GetByteSize();
   if (byte_size > 0) {
@@ -2466,7 +2517,7 @@ size_t Process::WriteScalarToMemory(addr_t addr, const Scalar &scalar,
     const size_t mem_size =
         scalar.GetAsMemoryData(buf, byte_size, GetByteOrder(), error);
     if (mem_size > 0)
-      return WriteMemory(addr, buf, mem_size, error);
+      return WriteMemory(process_addr, buf, mem_size, error);
     else
       error = Status::FromErrorString("failed to get scalar as memory data");
   } else {
