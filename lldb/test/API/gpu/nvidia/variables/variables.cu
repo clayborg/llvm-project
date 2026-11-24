@@ -5,6 +5,14 @@ __device__ __noinline__ int triple(int value) {
   return tripled; // breakpoint in triple
 }
 
+struct Scaler {
+  int factor;
+  __device__ __noinline__ int scale(int value) const {
+    int scaled = value * factor;
+    return scaled; // breakpoint in scale
+  }
+};
+
 __global__ void accumulate(int *totals) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int total = triple(index);
@@ -13,6 +21,14 @@ __global__ void accumulate(int *totals) {
   for (int i = 0; i < 4; ++i)
     total += steps[i];
   totals[index] = total; // breakpoint in accumulate
+}
+
+__global__ void scale_all(int *scaled) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  // The object is in the thread's local memory, and scale reads it through
+  // `this`.
+  Scaler scaler = {2};
+  scaled[index] = scaler.scale(index);
 }
 
 __device__ __forceinline__ void keep_alive(int v) {
@@ -46,6 +62,13 @@ int main() {
   for (int i = 0; i < n; ++i)
     if (host[i] != 3 * i + 10)
       return 1;
+
+  scale_all<<<blocks, threads>>>(totals);
+  cudaDeviceSynchronize();
+  cudaMemcpy(host, totals, sizeof(host), cudaMemcpyDeviceToHost);
+  for (int i = 0; i < n; ++i)
+    if (host[i] != 2 * i)
+      return 2;
   cudaFree(totals);
 
   int *results;

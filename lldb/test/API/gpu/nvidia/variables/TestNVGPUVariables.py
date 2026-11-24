@@ -133,3 +133,59 @@ class TestNVGPUVariables(NVGPUTestCaseBase):
         )
         self.expr_roundtrip(frame, "reg_scalar", 0x7ABC)
         self.expr_roundtrip(frame, "reg_scalar", 0x1234)
+
+    def run_to_scale(self) -> lldb.SBThread:
+        """Run to the breakpoint in Scaler::scale, which scale_all calls on an
+        object in its thread's local memory, and return a thread there."""
+        breakpoint = self.run_to_gpu_line(
+            SOURCE,
+            "// breakpoint in scale",
+            exe_name=self.build_shared("a.out"),
+        )
+        thread = self.assert_gpu_stop_at_breakpoint(breakpoint)[0]
+        self.assert_frame_at(
+            thread.GetFrameAtIndex(0),
+            "Scaler::scale(int) const",
+            SOURCE,
+            "// breakpoint in scale",
+        )
+        # The object reads correctly by its name in the caller's frame.
+        self.assert_int_variable(thread.GetFrameAtIndex(1), "scaler.factor", 2)
+        return thread
+
+    @expectedFailureAll(
+        "`frame variable` reads what a const pointer such as `this` points to "
+        "in global memory, not in generic memory, so it cannot read a member "
+        "of an object in the thread's local memory"
+    )
+    def test_frame_variable_reads_members_through_this(self):
+        """In a device member function, `frame variable this->factor` reads a
+        member of the object that the function was called on."""
+        frame = self.run_to_scale().GetFrameAtIndex(0)
+        self.assert_int_variable(frame, "this->factor", 2)
+        self.continue_gpu_to_exit()
+
+    @expectedFailureAll(
+        "expressions cannot use `this` in a device member function: lldb "
+        "reports \"invalid use of 'this' outside of a non-static member "
+        'function"'
+    )
+    def test_expressions_read_members_through_this(self):
+        """In a device member function, expressions, which `p` and `expr`
+        evaluate, read the object's members through `this` and by their
+        names, as they do in a host member function. The object is in the
+        thread's local memory, so this also needs expressions to read
+        memory through a generic pointer, which they cannot do yet."""
+        thread = self.run_to_scale()
+        frame = thread.GetFrameAtIndex(0)
+        index = self.global_index(thread)
+        for expression, expected in (
+            ("this->factor", 2),
+            ("factor * value", 2 * index),
+        ):
+            self.assertEqual(
+                self.evaluate_expression(frame, expression).GetValueAsSigned(),
+                expected,
+                expression,
+            )
+        self.continue_gpu_to_exit()
