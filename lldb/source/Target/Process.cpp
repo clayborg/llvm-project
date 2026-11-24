@@ -1946,7 +1946,26 @@ size_t Process::ReadMemory(const ProcessAddress &process_addr, void *buf,
       error = Status::FromError(info.takeError());
       return 0;
     }
-    return DoReadMemory(process_addr, buf, size, error);
+
+    // TODO: Share this loop with ReadMemoryFromInferior. Only the default
+    // address space needs its FixAnyAddress and breakpoint opcode removal.
+    if (buf == nullptr || size == 0)
+      return 0;
+
+    size_t bytes_read = 0;
+    uint8_t *bytes = static_cast<uint8_t *>(buf);
+    while (bytes_read < size) {
+      const size_t curr_size = size - bytes_read;
+      ProcessAddress curr_process_addr(process_addr.GetValue() + bytes_read,
+                                       process_addr.GetAddressSpace(),
+                                       process_addr.GetThreadID());
+      const size_t curr_bytes_read =
+          DoReadMemory(curr_process_addr, bytes + bytes_read, curr_size, error);
+      bytes_read += curr_bytes_read;
+      if (curr_bytes_read == curr_size || curr_bytes_read == 0)
+        break;
+    }
+    return bytes_read;
   }
 
   lldb::addr_t addr = process_addr.GetValue();

@@ -1,6 +1,5 @@
 import lldb
 from lldbsuite.test import lldbutil
-from lldbsuite.test.decorators import expectedFailureAll
 from lldbsuite.test.lldbtest import line_number
 from lldbsuite.test.tools.gpu.nvgpu_testcase import NVGPUTestCaseBase
 
@@ -49,10 +48,6 @@ class TestNVGPUMemory(NVGPUTestCaseBase):
             ],
         )
 
-    @expectedFailureAll(
-        "a read in a named address space returns only what fits in one "
-        "memory-read packet, and reports success"
-    )
     def test_read_larger_than_one_packet(self):
         """A read of global memory that is larger than one memory-read packet
         returns all of it, as `memory read -p global` of a large buffer asks
@@ -61,6 +56,14 @@ class TestNVGPUMemory(NVGPUTestCaseBase):
         source = "memory.cu"
         _, _, thread, _ = self.run_to_cpu_line(source, "// big buffer filled")
         address = thread.frame[0].FindVariable("d_big").GetValueAsAddress()
+        # lldb-server sometimes learns of the fault only after the program has
+        # run on to its exit, which ends the GPU process too.
+        exit_breakpoint = self.cpu_target.BreakpointCreateByLocation(
+            lldb.SBFileSpec(source), line_number(source, "// breakpoint before exit")
+        )
+        self.assertGreater(
+            exit_breakpoint.GetNumLocations(), 0, "the breakpoint before the exit"
+        )
         # Memory is read at a GPU stop: the kernel's fault.
         self.continue_cpu_and_wait_for_gpu_to_stop()
 
