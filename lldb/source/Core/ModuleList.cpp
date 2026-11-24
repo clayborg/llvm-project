@@ -43,6 +43,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -780,10 +781,13 @@ public:
     FindModulesInMap(module_spec, matching_module_list);
     if (!matching_module_list.IsEmpty())
       return;
-    // A slice lookup can only match modules filed under its file name and
-    // offset, which FindModulesInMap already checked. The full list could
-    // only add a module that matches through its platform file name, and
-    // sliced modules (such as the cubins in a GPU core) have none.
+    // A slice lookup only matches modules at its own offset, and
+    // FindModulesInMap checked those filed under its file name. Skipping the
+    // full scan assumes a sliced module is filed under every name a slice
+    // lookup will use. The scan would also find a module whose platform file
+    // has the requested name while its own file has another, and, for
+    // Windows-style paths, a module whose name differs only in case; slice
+    // lookups give those up. They also skip the consistency check below.
     if (IsSliceLookup(module_spec))
       return;
     m_list.FindModules(module_spec, matching_module_list);
@@ -859,8 +863,11 @@ public:
   void ReplaceEquivalent(const ModuleSP &module_sp,
                          llvm::SmallVectorImpl<lldb::ModuleSP> *old_modules) {
     std::lock_guard<std::recursive_mutex> guard(GetMutex());
-    // A sliced module's equivalents are filed under its file name and offset,
-    // so take them from the map instead of scanning the whole list.
+    // Take a sliced module's equivalents from its map entry instead of
+    // scanning the whole list, on the same assumption as FindModules. Every
+    // module with an object name or a nonzero offset takes this path: GPU
+    // code objects in core files, universal Mach-O slices, archive members,
+    // fileset entries and offload bundles.
     if (IsSliceLookup(EquivalentModuleSpec(*module_sp))) {
       for (const ModuleSP &old_module_sp :
            TakeEquivalentModulesFromMap(module_sp)) {
@@ -872,8 +879,16 @@ public:
       AddToMap(module_sp);
       return;
     }
-    m_list.ReplaceEquivalent(module_sp, old_modules);
-    ReplaceEquivalentInMap(module_sp);
+    // The list also removes equivalents filed under another name, such as a
+    // module whose platform file matches, so take each removed module out of
+    // its own map entry; otherwise the map would keep it alive.
+    llvm::SmallVector<ModuleSP, 1> removed;
+    m_list.ReplaceEquivalent(module_sp, &removed);
+    for (const ModuleSP &old_module_sp : removed)
+      RemoveFromMap(old_module_sp);
+    AddToMap(module_sp);
+    if (old_modules)
+      old_modules->append(removed.begin(), removed.end());
   }
 
   bool RemoveIfOrphaned(const ModuleWP module_wp) {
@@ -887,22 +902,34 @@ public:
 private:
   /// The modules that share a file name, by object offset, in the order the
   /// offsets were first added. Several modules can share an offset, such as
-  /// an old and a rebuilt copy of the same file.
+  /// an old and a rebuilt copy of the same file. The offsets are indexed with
+  /// a std::map rather than MapVector's default DenseMap, which reserves two
+  /// offset values as keys and allocates 64 buckets for the first offset.
   using ModulesByOffset =
-      llvm::MapVector<uint64_t, llvm::SmallVector<ModuleSP, 1>>;
+      llvm::MapVector<uint64_t, llvm::SmallVector<ModuleSP, 1>,
+                      std::map<uint64_t, unsigned>>;
 
-  /// True if \p spec can only match modules filed under its file name and
-  /// object offset: it names a file, selects a slice of it, and has no UUID
-  /// (a UUID match ignores the name and the slice).
+  /// True if \p spec can only match modules at its own object offset: it
+  /// names a file, has an object name or a nonzero object offset, and has no
+  /// UUID (a UUID match ignores the name and the slice). Such a spec selects
+  /// a slice, and ModuleSpec::MatchesObjectFileSlice rejects a module at any
+  /// other offset for it; the index's lookups by offset depend on that rule.
+  /// A slice at offset 0 without an object name, which only the file's size
+  /// tells apart, is not treated as one, so this needs no stat of the file.
   static bool IsSliceLookup(const ModuleSpec &spec) {
     return !spec.GetFileSpec().GetFilename().IsEmpty() &&
-           spec.HasObjectFileSlice() && !spec.GetUUID().IsValid();
+           !spec.GetUUID().IsValid() &&
+           (spec.GetObjectName() || spec.GetObjectOffset() != 0);
   }
 
   /// The spec that a module equivalent to \p module matches: the same path,
   /// platform path, architecture and object slice.
   static ModuleSpec EquivalentModuleSpec(const Module &module) {
-    ModuleSpec spec(module.GetFileSpec(), module.GetArchitecture());
+    // ModuleSpec(FileSpec, ArchSpec) would stat the file for an object size
+    // that is replaced below.
+    ModuleSpec spec;
+    spec.GetFileSpec() = module.GetFileSpec();
+    spec.GetArchitecture() = module.GetArchitecture();
     spec.GetPlatformFileSpec() = module.GetPlatformFileSpec();
     spec.GetObjectName() = module.GetObjectName();
     spec.SetObjectOffset(module.GetObjectOffset());
@@ -911,7 +938,8 @@ private:
   }
 
   /// Call \p fn on each list of indexed modules that can match \p spec: the
-  /// one at its offset for a slice lookup, otherwise all of them.
+  /// one at its offset for a slice lookup (see IsSliceLookup), otherwise all
+  /// of them.
   template <typename Map, typename Fn>
   static void ForEachCandidateList(Map &by_offset, const ModuleSpec &spec,
                                    Fn fn) {
@@ -992,12 +1020,6 @@ private:
         }
       }
     }
-  }
-
-  /// Replace the indexed modules equivalent to \p module_sp with it.
-  void ReplaceEquivalentInMap(const ModuleSP &module_sp) {
-    TakeEquivalentModulesFromMap(module_sp);
-    AddToMap(module_sp);
   }
 
   /// Remove the modules equivalent to \p module_sp from the map and return
