@@ -96,9 +96,10 @@ bool ProcessNVGPUCore::CanDebug(TargetSP target_sp,
     ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
     Status error(ModuleList::GetSharedModule(core_module_spec, m_core_module_sp,
                                              nullptr, nullptr));
-    // The cubins are cached under this same core file's path, and a spec
-    // without bounds matches a slice, so the shared lookup can hand one back.
-    // Build the whole-file module directly when that happens.
+    // A spec without bounds also matches a module made from a slice of this
+    // file. LoadCubinModules keeps the core's cubins out of the shared module
+    // cache, but if the lookup still hands back a slice, build the whole-file
+    // module directly.
     if (m_core_module_sp && m_core_module_sp->GetObjectOffset() != 0)
       m_core_module_sp = std::make_shared<Module>(core_module_spec);
     if (m_core_module_sp) {
@@ -210,27 +211,34 @@ llvm::Error ProcessNVGPUCore::LoadCubinModules() {
     module_spec.SetObjectOffset(cubin_offset);
     module_spec.SetObjectSize(cubin_size);
 
+    // Make the cubin's module for this target alone, as live debugging does
+    // for the cubins it reads from the GPU, rather than get it from the shared
+    // module cache. The cache would match it by the core's path and the
+    // cubin's offset and size, and never sees the core change, so a core
+    // regenerated at the same path would get the old core's cubin. A core
+    // lists each cubin once, so unlike the live path, this need not look for
+    // the module in the target's images first.
+    auto module_sp = std::make_shared<Module>(module_spec);
+    if (!module_sp->GetObjectFile()) {
+      LLDB_LOG(log,
+               "  failed to load cubin module {0} ({1}) at offset {2:x} "
+               "({3} bytes); core file may be truncated",
+               cubin_count, cubin->GetName(), cubin_offset, cubin_size);
+      ++cubin_count;
+      continue;
+    }
+
     // Don't notify per cubin: the ModulesDidLoad call after this loop
     // announces every cubin added here at once, after all their load addresses
     // are set. Notifying here would also announce each cubin before its load
     // address is set, and each notification rescans every module loaded so far.
-    Status error;
-    ModuleSP module_sp =
-        target.GetOrCreateModule(module_spec, /*notify=*/false, &error);
-    if (!module_sp) {
-      LLDB_LOG(log,
-               "  failed to load cubin module {0} ({1}) at offset {2:x} "
-               "({3} bytes): {4}; core file may be truncated",
-               cubin_count, cubin->GetName(), cubin_offset, cubin_size, error);
-      ++cubin_count;
-      continue;
-    }
+    target.GetImages().Append(module_sp, /*notify=*/false);
 
     bool changed = false;
     module_sp->SetLoadAddress(target, 0, /*value_is_offset=*/true, changed);
     // Collect every cubin added above, even one with no loadable sections:
     // the ModulesDidLoad call after this loop is its only announcement.
-    loaded_modules.AppendIfNeeded(module_sp);
+    loaded_modules.Append(module_sp);
 
     LLDB_LOG(log, "  loaded cubin module {0} ({1}) at offset {2:x} ({3} bytes)",
              cubin_count, cubin->GetName(), cubin_offset, cubin_size);

@@ -357,6 +357,31 @@ def u32_words(words):
     return struct.pack("<" + "I" * len(words), *words)
 
 
+_SHT_NOBITS = 8
+_SHF_EXECINSTR = 0x4
+
+
+def with_inverted_code(cubin, address, size):
+    """Return a copy of a relocated cubin with the ``size`` bytes of code at
+    load ``address`` inverted. The copy keeps the cubin's size and layout but
+    holds different code."""
+    elf = bytearray(cubin)
+    (shoff,) = struct.unpack_from("<Q", elf, 0x28)  # e_shoff
+    shentsize, shnum = struct.unpack_from("<HH", elf, 0x3A)
+    for i in range(shnum):
+        _, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
+            "<IIQQQQ", elf, shoff + i * shentsize
+        )
+        if sh_type == _SHT_NOBITS or not sh_flags & _SHF_EXECINSTR:
+            continue
+        if sh_addr <= address and address + size <= sh_addr + sh_size:
+            start = sh_offset + address - sh_addr
+            code = elf[start : start + size]
+            elf[start : start + size] = bytes(byte ^ 0xFF for byte in code)
+            return bytes(elf)
+    raise ValueError(f"no code section holds {size} bytes at {address:#x}")
+
+
 def _padded(row, size):
     """Truncate or zero-fill a row to its recorded table-entry size."""
     return row[:size].ljust(size, b"\x00")
