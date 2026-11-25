@@ -10,11 +10,18 @@
 #define LLDB_CORE_ARCHITECTURE_H
 
 #include "lldb/Core/PluginInterface.h"
+#include "lldb/Core/Value.h"
 #include "lldb/Target/DynamicRegisterInfo.h"
 #include "lldb/Target/MemoryTagManager.h"
 #include "lldb/Target/RegisterContextUnwind.h"
+#include "lldb/lldb-private-enumerations.h"
+
+#include <vector>
 
 namespace lldb_private {
+
+class DataExtractor;
+class ExecutionContext;
 
 class Architecture : public PluginInterface {
 public:
@@ -137,6 +144,21 @@ public:
       lldb_private::Thread &thread, lldb_private::RegisterContextUnwind *regctx,
       std::shared_ptr<const UnwindPlan> current_unwindplan) {
     return lldb::UnwindPlanSP();
+  }
+
+  /// Handle a vendor DWARF opcode that the generic DWARFExpression evaluator
+  /// does not know about. Called from DWARFExpression::Evaluate for opcodes
+  /// in the DW_OP_lo_user..DW_OP_hi_user range -- notably the
+  /// CFI-driven unwinder path, whose call frame CFA rules can reference
+  /// vendor ops. Return true if the opcode was consumed; any inline operand
+  /// bytes must be read from \p opcodes at \p offset (and \p offset advanced)
+  /// and any result pushed onto \p stack.
+  virtual bool
+  ParseVendorDWARFOpcode(uint8_t op, const DataExtractor &opcodes,
+                         lldb::offset_t &offset, ExecutionContext *exe_ctx,
+                         RegisterContext *reg_ctx, lldb::RegisterKind reg_kind,
+                         std::vector<Value> &stack) const {
+    return false;
   }
 };
 
