@@ -11,6 +11,7 @@ add_lldb_unittest(TargetTests
   PathMappingListTest.cpp
   RegisterFlagsTest.cpp
   RemoteAwarePlatformTest.cpp
+  SectionLoadListTest.cpp
   StackFrameRecognizerTest.cpp
   SummaryStatisticsTest.cpp
   TargetGroupTest.cpp
