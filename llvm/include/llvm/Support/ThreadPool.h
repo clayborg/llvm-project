@@ -170,6 +170,8 @@ private:
       // Don't allow enqueueing after disabling the pool
       assert(EnableFlag && "Queuing a thread during ThreadPool destruction");
       Tasks.emplace_back(std::make_pair(std::move(Task), Group));
+      if (Group != nullptr)
+        ++UnfinishedGroupTasks[Group]; // Increment or set to 1 if new item
       requestedThreads = ActiveThreads + Tasks.size();
     }
     QueueCondition.notify_one();
@@ -201,8 +203,11 @@ private:
 
   /// Keep track of the number of thread actually busy
   unsigned ActiveThreads = 0;
-  /// Number of threads active for tasks in the given group (only non-zero).
-  DenseMap<ThreadPoolTaskGroup *, unsigned> ActiveGroups;
+  /// Number of unfinished tasks in each group: tasks queued or running. Only
+  /// groups with unfinished tasks have an entry. Counting queued tasks too
+  /// lets workCompletedUnlocked() check a group in constant time, without
+  /// scanning the queue.
+  DenseMap<ThreadPoolTaskGroup *, unsigned> UnfinishedGroupTasks;
 
   /// Signal for the destruction of the pool, asking thread to exit.
   bool EnableFlag = true;
