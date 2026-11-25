@@ -98,10 +98,6 @@ void StdThreadPool::processTasks(ThreadPoolTaskGroup *WaitingForGroup) {
       ++ActiveThreads;
       Task = std::move(Tasks.front().first);
       GroupOfTask = Tasks.front().second;
-      // Need to count active threads in each group separately, ActiveThreads
-      // would never be 0 if waiting for another group inside a wait.
-      if (GroupOfTask != nullptr)
-        ++ActiveGroups[GroupOfTask]; // Increment or set to 1 if new item
       Tasks.pop_front();
     }
 #ifndef NDEBUG
@@ -133,9 +129,9 @@ void StdThreadPool::processTasks(ThreadPoolTaskGroup *WaitingForGroup) {
       std::lock_guard<std::mutex> LockGuard(QueueLock);
       --ActiveThreads;
       if (GroupOfTask != nullptr) {
-        auto A = ActiveGroups.find(GroupOfTask);
+        auto A = UnfinishedGroupTasks.find(GroupOfTask);
         if (--(A->second) == 0)
-          ActiveGroups.erase(A);
+          UnfinishedGroupTasks.erase(A);
       }
       Notify = workCompletedUnlocked(GroupOfTask);
       NotifyGroup = GroupOfTask != nullptr && Notify;
@@ -218,8 +214,6 @@ void StdThreadPool::processTasksWithJobserver() {
         ++ActiveThreads;
         Task = std::move(Tasks.front().first);
         GroupOfTask = Tasks.front().second;
-        if (GroupOfTask != nullptr)
-          ++ActiveGroups[GroupOfTask];
         Tasks.pop_front();
       } // The queue lock is released.
 
@@ -231,9 +225,9 @@ void StdThreadPool::processTasksWithJobserver() {
         std::lock_guard<std::mutex> LockGuard(QueueLock);
         --ActiveThreads;
         if (GroupOfTask != nullptr) {
-          auto A = ActiveGroups.find(GroupOfTask);
+          auto A = UnfinishedGroupTasks.find(GroupOfTask);
           if (--(A->second) == 0)
-            ActiveGroups.erase(A);
+            UnfinishedGroupTasks.erase(A);
         }
         // If all tasks are complete, notify any waiting threads.
         if (workCompletedUnlocked(nullptr))
@@ -245,8 +239,7 @@ void StdThreadPool::processTasksWithJobserver() {
 bool StdThreadPool::workCompletedUnlocked(ThreadPoolTaskGroup *Group) const {
   if (Group == nullptr)
     return !ActiveThreads && Tasks.empty();
-  return ActiveGroups.count(Group) == 0 &&
-         !llvm::is_contained(llvm::make_second_range(Tasks), Group);
+  return !UnfinishedGroupTasks.contains(Group);
 }
 
 void StdThreadPool::wait() {
