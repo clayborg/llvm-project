@@ -3120,8 +3120,12 @@ Status ProcessGDBRemote::DoHalt(bool &caused_stop) {
 }
 
 Status ProcessGDBRemote::WillDetach() {
-  // A GPU plug-in no longer needs its breakpoints in the CPU process.
-  if (!m_gpu_plugin_name.empty())
+  // A GPU plug-in no longer needs its breakpoints in the CPU process. A GPU
+  // process that has already ended cleaned them up then. Its target can be
+  // reused, and finalizing the old process when the target gets a new one
+  // detaches it again, by which time the CPU process has the breakpoints of
+  // the next run.
+  if (!m_gpu_plugin_name.empty() && IsAlive())
     if (TargetSP cpu_target_sp = GetTarget().GetNativeTargetForGPU())
       if (ProcessSP cpu_process_sp = cpu_target_sp->GetProcessSP())
         static_cast<ProcessGDBRemote *>(cpu_process_sp.get())
