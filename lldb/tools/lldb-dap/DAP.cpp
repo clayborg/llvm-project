@@ -921,6 +921,7 @@ void DAP::SendTerminatedEvent() {
     // Send a "terminated" event
     llvm::json::Object event(CreateTerminatedEventObject(target));
     SendJSON(llvm::json::Value(std::move(event)));
+    terminated_event_sent = true;
   });
 }
 
@@ -929,7 +930,9 @@ llvm::Error DAP::Disconnect() { return Disconnect(!is_attach); }
 llvm::Error DAP::Disconnect(bool terminateDebuggee) {
   lldb::SBError error;
   lldb::SBProcess process = target.GetProcess();
-  auto state = process.GetState();
+  // After "terminated", this session's process is gone. Leave the target's
+  // process alone: a GPU target gets a new one when the program runs again.
+  auto state = terminated_event_sent ? lldb::eStateExited : process.GetState();
   switch (state) {
   case lldb::eStateInvalid:
   case lldb::eStateUnloaded:
