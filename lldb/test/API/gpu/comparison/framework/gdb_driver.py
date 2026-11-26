@@ -270,10 +270,16 @@ print("{self.END_MARKER}")
         return self._wait_for_prompt(timeout)
 
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file into the persistent GDB process."""
         self._start_gdb()
+
+        if auto_load_debuginfo:
+            core_path = os.path.realpath(core_path)
 
         self._core_path = core_path
         self._executable_path = executable_path
@@ -285,6 +291,9 @@ print("{self.END_MARKER}")
         # Load the core file
         self._send_command(f"core-file {core_path}")
         self._core_loaded = True
+        auto_load_output = ""
+        if auto_load_debuginfo:
+            auto_load_output = self._auto_load_debuginfo()
 
         # Get thread info to verify core loaded
         script = """
@@ -309,8 +318,29 @@ print("RESULT_JSON:" + json.dumps(result))
             success=data.get("success", False),
             error_message=data.get("error", ""),
             raw_output=data.get("raw_output", ""),
-            extra_data={"thread_count": data.get("thread_count", 0)},
+            extra_data={
+                "thread_count": data.get("thread_count", 0),
+                "auto_load_output": auto_load_output,
+            },
         )
+
+    def _auto_load_debuginfo(self) -> str:
+        fbcode_path = os.environ.get("GPU_COMPARISON_FBCODE_PATH")
+        if not fbcode_path:
+            return "GPU_COMPARISON_FBCODE_PATH is not set; skipped auto-load-debuginfo\n"
+
+        fbload_path = os.path.join(fbcode_path, "gdb", "scripts", "fbload.py")
+        output = []
+        output.append(self._send_command(f"source {fbload_path}"))
+        output.append(self._send_command("fbload auto_debuginfo"))
+        output.append(
+            self._send_command(
+                "python import os; os.environ['LD_LIBRARY_PATH'] = "
+                "os.environ.get('LLDB_SYMBOL_STORAGE_LD_LIBRARY_PATH', '')"
+            )
+        )
+        output.append(self._send_command("auto-load-debuginfo", timeout=600.0))
+        return "".join(output)
 
     def get_all_threads(self) -> DebuggerResult:
         """Get list of all threads (CPU + GPU in flat view).
@@ -399,6 +429,83 @@ print("RESULT_JSON:" + json.dumps(result))
 
         return DebuggerResult(
             success=data.get("success", False), error_message=data.get("error", "")
+        )
+
+    def get_selected_thread(self) -> DebuggerResult:
+        """Return ROCgDB's current selected thread without changing selection.
+
+        ROCgDB's flat GPU thread number does not match LLDB's GPU thread id.
+        For AMDGPU waves, the useful cross-debugger key is the wave id embedded
+        in names like: AMDGPU Lane 3:5:1:8192/0 (...).
+        """
+        script = r"""
+import gdb
+import json
+import re
+
+result = {"success": True, "error": ""}
+
+try:
+    thread = gdb.selected_thread()
+    frame = gdb.selected_frame()
+    current_thread_output = ""
+    try:
+        current_thread_output = gdb.execute("thread", to_string=True)
+    except:
+        pass
+
+    thread_name = thread.name or ""
+    selected_line = current_thread_output.strip()
+    thread_text = " ".join([thread_name, selected_line])
+    wave_match = re.search(
+        r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+        thread_text,
+    )
+    if not wave_match:
+        info_threads = gdb.execute("info threads", to_string=True)
+        for line in info_threads.splitlines():
+            if line.lstrip().startswith("*"):
+                selected_line = line.strip()
+                break
+        wave_match = re.search(
+            r"AMDGPU\s+Lane\s+(?:\d+:){3}(\d+)/(\d+)",
+            selected_line,
+        )
+
+    result.update({
+        "id": thread.global_num,
+        "name": thread_name,
+        "selected_line": selected_line,
+        "pc": frame.pc(),
+        "function": frame.name() or "<unknown>",
+        "architecture": frame.architecture().name(),
+    })
+
+    if wave_match:
+        result["amdgpu_wave_id"] = int(wave_match.group(1))
+        result["amdgpu_lane_id"] = int(wave_match.group(2))
+
+except Exception as e:
+    result["success"] = False
+    result["error"] = str(e)
+
+print("RESULT_JSON:" + json.dumps(result))
+"""
+        data = self._run_python_script(script)
+
+        return DebuggerResult(
+            success=data.get("success", False),
+            error_message=data.get("error", ""),
+            extra_data={
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "selected_line": data.get("selected_line"),
+                "pc": data.get("pc"),
+                "function": data.get("function"),
+                "architecture": data.get("architecture"),
+                "amdgpu_wave_id": data.get("amdgpu_wave_id"),
+                "amdgpu_lane_id": data.get("amdgpu_lane_id"),
+            },
         )
 
     def get_backtrace(self, thread_id: Optional[int] = None) -> DebuggerResult:
@@ -617,21 +724,109 @@ print("RESULT_JSON:" + json.dumps(result))
         )
 
     def get_modules(self) -> DebuggerResult:
-        """Get list of loaded modules."""
-        script = """
+        """Get list of loaded modules.
+
+        Modules are named like ROCLLDB names them, after the files the core's
+        NT_FILE note says were mapped. For example, these ROCgdb objfiles are
+        reported as the following module paths:
+
+          /usr/local/fbcode/platform010/lib/libz.so.1
+            -> /usr/local/fbcode/platform010/lib/libz.so.1.2.8
+               (symlink resolved)
+          memory://21268#offset=0x7ed6ec400000&size=14382792
+            -> .../rocm-7.0/lib/hipblaslt/library/Kernels.so-000-gfx942.hsaco
+               (memory code object named after the file mapped at its address)
+          memory://21268#offset=0x7f46fc44e000&size=32648
+            -> unchanged (no file is mapped at its address)
+          /tmp/symbol_storage/8f76.../orjson.cpython-312-x86_64-linux-gnu.debuginfo
+            -> not listed (separate debug info for orjson...so)
+
+        A module's name is the basename of its path, e.g. libz.so.1.2.8.
+        """
+        script = r"""
 import gdb
 import json
+import os
+import re
 
 result = {"success": True, "modules": [], "error": ""}
+
+
+def get_core_file_mappings():
+    # Return the core's file mappings as (start, end, path) tuples, parsed
+    # from "info proc mappings". For example, this output:
+    #
+    #   Mapped address spaces:
+    #
+    #   Start Addr         End Addr           Size     Offset File
+    #   0x00007ed6ec400000 0x00007ed6ed1b8000 0xdb8000 0x0    /usr/.../Kernels.so-000-gfx942.hsaco
+    #   0x00007f8995aec000 0x00007f8995aed000 0x1000   0x0    /dev/shm/sem.tIR5xC (deleted)
+    #
+    # returns:
+    #
+    #   [(0x7ed6ec400000, 0x7ed6ed1b8000, "/usr/.../Kernels.so-000-gfx942.hsaco"),
+    #    (0x7f8995aec000, 0x7f8995aed000, "/dev/shm/sem.tIR5xC (deleted)")]
+    #
+    # ROCgdb only lists the core's file mappings while a host thread is
+    # selected, and the selected thread is usually an AMDGPU wave.
+    selected_thread = gdb.selected_thread()
+    output = ""
+    for thread in sorted(gdb.selected_inferior().threads(), key=lambda t: t.num):
+        try:
+            thread.switch()
+            if "amdgcn" in gdb.selected_frame().architecture().name():
+                continue
+            output = gdb.execute("info proc mappings", to_string=True)
+            break
+        except gdb.error:
+            continue
+    if selected_thread is not None:
+        selected_thread.switch()
+
+    mappings = []
+    for line in output.splitlines():
+        # Start, end, size, offset, optional permissions, then the file.
+        match = re.match(
+            r"\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+"
+            r"(?:[-rwxsp]{4}\s+)?(/.*?)\s*$",
+            line,
+        )
+        if match:
+            mappings.append(
+                (int(match.group(1), 16), int(match.group(2), 16), match.group(3))
+            )
+    return mappings
+
 
 try:
     output = gdb.execute("info sharedlibrary", to_string=True)
     result["raw_output"] = output
-    
+
+    mappings = None
     for objfile in gdb.objfiles():
+        # Separate debug info, e.g. .../orjson...debuginfo or
+        # ".gnu_debugdata for .../libamdhip64.so".
+        if objfile.owner is not None:
+            continue
+
+        path = objfile.filename or ""
+        # memory://<pid>#offset=<address>&size=<size>
+        memory_match = re.match(r"memory://\d+#offset=(0x[0-9a-fA-F]+|\d+)&", path)
+        if memory_match:
+            if mappings is None:
+                mappings = get_core_file_mappings()
+            address = int(memory_match.group(1), 0)
+            for start, end, mapped_path in mappings:
+                if start <= address < end:
+                    path = mapped_path
+                    break
+        elif path.startswith("/"):
+            # e.g. .../lib/libz.so.1 -> .../lib/libz.so.1.2.8
+            path = os.path.realpath(path)
+
         module = {
-            "name": objfile.filename or "<unknown>",
-            "path": objfile.filename or "",
+            "name": path or "<unknown>",
+            "path": path,
         }
         result["modules"].append(module)
 

@@ -6,6 +6,8 @@ launching LLDB as a subprocess. This is more efficient and provides
 direct access to LLDB's SB API.
 """
 
+import os
+
 import lldb
 from typing import List, Optional, Dict, Any
 
@@ -128,9 +130,15 @@ class LldbDriver(DebuggerInterface):
         return self._process.GetNumThreads()
 
     def load_core(
-        self, core_path: str, executable_path: Optional[str] = None
+        self,
+        core_path: str,
+        executable_path: Optional[str] = None,
+        auto_load_debuginfo: bool = False,
     ) -> DebuggerResult:
         """Load a core file using the in-process LLDB API."""
+        if auto_load_debuginfo:
+            return self._load_core_auto_debuginfo(core_path)
+
         self._core_path = core_path
 
         try:
@@ -184,6 +192,61 @@ class LldbDriver(DebuggerInterface):
 
         except Exception as e:
             return DebuggerResult(success=False, error_message=str(e))
+
+    def _load_core_auto_debuginfo(self, core_path: str) -> DebuggerResult:
+        self._core_path = os.path.realpath(core_path)
+        output = []
+
+        fbcode_path = os.environ.get("GPU_COMPARISON_FBCODE_PATH")
+        if fbcode_path:
+            result = self.execute_command(
+                f"script import sys; sys.path.insert(0, {fbcode_path!r})"
+            )
+            output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command(
+            "script import os; os.environ['LD_LIBRARY_PATH'] = "
+            "os.environ.get('LLDB_SYMBOL_STORAGE_LD_LIBRARY_PATH', '')"
+        )
+        output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command("command script import fblldb")
+        output.append(result.raw_output or result.error_message)
+
+        result = self.execute_command(f"auto-load-debuginfo {self._core_path}")
+        output.append(result.raw_output or result.error_message)
+        if not result.success:
+            return DebuggerResult(
+                success=False,
+                error_message=result.error_message,
+                raw_output=result.raw_output,
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        self._target = self._debugger.GetSelectedTarget()
+        if not self._target or not self._target.IsValid():
+            return DebuggerResult(
+                success=False,
+                error_message="auto-load-debuginfo did not create a valid target",
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        self._process = self._target.GetProcess()
+        if not self._process or not self._process.IsValid():
+            return DebuggerResult(
+                success=False,
+                error_message="auto-load-debuginfo did not create a valid process",
+                extra_data={"auto_load_output": "\n".join(output)},
+            )
+
+        return DebuggerResult(
+            success=True,
+            extra_data={
+                "thread_count": self._process.GetNumThreads(),
+                "target_triple": self._target.GetTriple(),
+                "auto_load_output": "\n".join(output),
+            },
+        )
 
     def get_all_threads(self) -> DebuggerResult:
         """Get list of all threads from all targets (CPU + GPU).
@@ -262,7 +325,27 @@ class LldbDriver(DebuggerInterface):
             if not self._process or not self._process.IsValid():
                 return DebuggerResult(success=False, error_message="No valid process")
 
-            # Search in all targets
+            # Prefer the currently selected target/process. The comparison test
+            # selects the GPU target first, and ROCgDB's AMDGPU wave id maps to
+            # LLDB's GPU thread id. Searching CPU targets first can accidentally
+            # match an unrelated host thread with the same numeric id.
+            for i in range(self._process.GetNumThreads()):
+                thread = self._process.GetThreadAtIndex(i)
+                if thread.GetThreadID() == thread_id:
+                    self._process.SetSelectedThread(thread)
+                    return DebuggerResult(
+                        success=True,
+                        extra_data={
+                            "selected_thread": thread.GetThreadID(),
+                            "selected_index_id": thread.GetIndexID(),
+                            "selected_name": thread.GetName(),
+                            "target_triple": self._target.GetTriple()
+                            if self._target and self._target.IsValid()
+                            else None,
+                        },
+                    )
+
+            # Fallback for callers that have not selected the target first.
             for target_idx in range(self._debugger.GetNumTargets()):
                 target = self._debugger.GetTargetAtIndex(target_idx)
                 process = target.GetProcess()
@@ -280,7 +363,12 @@ class LldbDriver(DebuggerInterface):
                             self._process = process
                             return DebuggerResult(
                                 success=True,
-                                extra_data={"selected_thread": thread.GetThreadID()},
+                                extra_data={
+                                    "selected_thread": thread.GetThreadID(),
+                                    "selected_index_id": thread.GetIndexID(),
+                                    "selected_name": thread.GetName(),
+                                    "target_triple": target.GetTriple(),
+                                },
                             )
 
             return DebuggerResult(
@@ -518,6 +606,64 @@ class LldbDriver(DebuggerInterface):
 
         except Exception as e:
             return DebuggerResult(success=False, error_message=str(e))
+
+    def get_combined_modules(self) -> DebuggerResult:
+        """Get modules from all LLDB targets as one flat module list."""
+        modules = []
+        errors = []
+        targets = []
+
+        for target_name, select in (
+            ("CPU", self.select_cpu),
+            ("GPU", self.select_gpu),
+        ):
+            select_result = select()
+            if not select_result.success:
+                targets.append(
+                    {
+                        "name": target_name,
+                        "skipped": True,
+                        "error": select_result.error_message,
+                    }
+                )
+                continue
+
+            result = self.get_modules()
+            if not result.success:
+                errors.append(
+                    f"LLDB failed to list {target_name} target modules: "
+                    f"{result.error_message}"
+                )
+                targets.append(
+                    {
+                        "name": target_name,
+                        "error": result.error_message,
+                        "modules": [],
+                    }
+                )
+                continue
+
+            modules.extend(result.modules)
+            targets.append(
+                {
+                    "name": target_name,
+                    "modules": result.modules,
+                }
+            )
+
+        if errors:
+            return DebuggerResult(
+                success=False,
+                error_message="\n".join(errors),
+                modules=modules,
+                extra_data={"targets": targets},
+            )
+
+        return DebuggerResult(
+            success=True,
+            modules=modules,
+            extra_data={"targets": targets},
+        )
 
     def select_frame(self, frame_index: int) -> DebuggerResult:
         """Select a frame by index."""
